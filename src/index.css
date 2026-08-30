@@ -1,0 +1,396 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  /* =========================================================================
+     THEME SYSTEM — Clean Glass Design Tokens
+     Higher opacity surfaces, restrained shadows, crisp borders, minimal blur.
+     ========================================================================= */
+
+  /* Theme: Classic Silver (Light) */
+  .theme-silver {
+    --bg-primary: #f5f5f7;
+    --surface-primary: rgba(255, 255, 255, 0.94);
+    --surface-secondary: rgba(0, 0, 0, 0.035);
+    --surface-elevated: #ffffff;
+    --surface-translucent: rgba(255, 255, 255, 0.88);
+    --surface-hover: rgba(0, 0, 0, 0.045);
+    --surface-active: rgba(0, 0, 0, 0.08);
+
+    --border-subtle: rgba(0, 0, 0, 0.08);
+    --border-subtle-hover: rgba(0, 0, 0, 0.16);
+    --border-focus: rgba(0, 113, 227, 0.45);
+
+    --text-main: #1d1d1f;
+    --text-muted: #6e6e73;
+    
+    --accent: #0071e3;
+    --accent-hover: #0077ed;
+    --accent-text: #ffffff;
+    --accent-soft: rgba(0, 113, 227, 0.09);
+    --accent-soft-hover: rgba(0, 113, 227, 0.15);
+
+    --slider-track: rgba(0, 0, 0, 0.08);
+    --slider-fill: #0071e3;
+
+    --shadow-subtle: 0 2px 12px -2px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.03);
+    --shadow-elevated: 0 12px 32px -4px rgba(0, 0, 0, 0.08), 0 4px 12px -2px rgba(0, 0, 0, 0.04);
+    --shadow-modal: 0 24px 48px -8px rgba(0, 0, 0, 0.12), 0 8px 16px -4px rgba(0, 0, 0, 0.04);
+
+    color-scheme: light;
+  }
+
+  /* Theme: Space Gray (Dark) */
+  .theme-spacegray {
+    --bg-primary: #0e0e11;
+    --surface-primary: rgba(22, 22, 26, 0.92);
+    --surface-secondary: rgba(255, 255, 255, 0.05);
+    --surface-elevated: #1a1a1f;
+    --surface-translucent: rgba(24, 24, 29, 0.85);
+    --surface-hover: rgba(255, 255, 255, 0.07);
+    --surface-active: rgba(255, 255, 255, 0.12);
+
+    --border-subtle: rgba(255, 255, 255, 0.09);
+    --border-subtle-hover: rgba(255, 255, 255, 0.18);
+    --border-focus: rgba(52, 211, 153, 0.45);
+
+    --text-main: #f5f5f7;
+    --text-muted: #94949b;
+
+    --accent: #34d399;
+    --accent-hover: #10b981;
+    --accent-text: #042f1a;
+    --accent-soft: rgba(52, 211, 153, 0.12);
+    --accent-soft-hover: rgba(52, 211, 153, 0.18);
+
+    --slider-track: rgba(255, 255, 255, 0.14);
+    --slider-fill: #34d399;
+
+    --shadow-subtle: 0 4px 16px -2px rgba(0, 0, 0, 0.35);
+    --shadow-elevated: 0 16px 36px -4px rgba(0, 0, 0, 0.55);
+    --shadow-modal: 0 28px 56px -8px rgba(0, 0, 0, 0.75);
+
+    color-scheme: dark;
+  }
+
+  /* Theme: Deep Purple (Dark) */
+  .theme-purple {
+    --bg-primary: #0a0614;
+    --surface-primary: rgba(22, 15, 36, 0.92);
+    --surface-secondary: rgba(192, 132, 252, 0.06);
+    --surface-elevated: #1b122e;
+    --surface-translucent: rgba(24, 16, 40, 0.85);
+    --surface-hover: rgba(255, 255, 255, 0.07);
+    --surface-active: rgba(255, 255, 255, 0.12);
+
+    --border-subtle: rgba(192, 132, 252, 0.14);
+    --border-subtle-hover: rgba(192, 132, 252, 0.25);
+    --border-focus: rgba(192, 132, 252, 0.45);
+
+    --text-main: #f8f6ff;
+    --text-muted: #ab9bc7;
+
+    --accent: #c084fc;
+    --accent-hover: #a855f7;
+    --accent-text: #28084a;
+    --accent-soft: rgba(192, 132, 252, 0.13);
+    --accent-soft-hover: rgba(192, 132, 252, 0.20);
+
+    --slider-track: rgba(255, 255, 255, 0.14);
+    --slider-fill: #c084fc;
+
+    --shadow-subtle: 0 4px 16px -2px rgba(8, 4, 16, 0.45);
+    --shadow-elevated: 0 16px 36px -4px rgba(8, 4, 16, 0.65);
+    --shadow-modal: 0 28px 56px -8px rgba(8, 4, 16, 0.85);
+
+    color-scheme: dark;
+  }
+
+  /* Theme: Pacific Blue (Dark) */
+  .theme-pacific {
+    --bg-primary: #07101d;
+    --surface-primary: rgba(14, 25, 45, 0.92);
+    --surface-secondary: rgba(56, 189, 248, 0.06);
+    --surface-elevated: #11203b;
+    --surface-translucent: rgba(15, 28, 50, 0.85);
+    --surface-hover: rgba(255, 255, 255, 0.07);
+    --surface-active: rgba(255, 255, 255, 0.12);
+
+    --border-subtle: rgba(56, 189, 248, 0.14);
+    --border-subtle-hover: rgba(56, 189, 248, 0.25);
+    --border-focus: rgba(56, 189, 248, 0.45);
+
+    --text-main: #f0f8ff;
+    --text-muted: #7cb3d4;
+
+    --accent: #38bdf8;
+    --accent-hover: #0ea5e9;
+    --accent-text: #05263d;
+    --accent-soft: rgba(56, 189, 248, 0.13);
+    --accent-soft-hover: rgba(56, 189, 248, 0.20);
+
+    --slider-track: rgba(255, 255, 255, 0.14);
+    --slider-fill: #38bdf8;
+
+    --shadow-subtle: 0 4px 16px -2px rgba(4, 9, 18, 0.45);
+    --shadow-elevated: 0 16px 36px -4px rgba(4, 9, 18, 0.65);
+    --shadow-modal: 0 28px 56px -8px rgba(4, 9, 18, 0.85);
+
+    color-scheme: dark;
+  }
+
+  /* Theme: Rose Gold (Warm Light) */
+  .theme-rosegold {
+    --bg-primary: #fbf5f6;
+    --surface-primary: rgba(255, 248, 250, 0.94);
+    --surface-secondary: rgba(244, 63, 94, 0.035);
+    --surface-elevated: #ffffff;
+    --surface-translucent: rgba(255, 248, 250, 0.88);
+    --surface-hover: rgba(244, 63, 94, 0.05);
+    --surface-active: rgba(244, 63, 94, 0.10);
+
+    --border-subtle: rgba(244, 63, 94, 0.11);
+    --border-subtle-hover: rgba(244, 63, 94, 0.22);
+    --border-focus: rgba(244, 63, 94, 0.45);
+
+    --text-main: #430c1a;
+    --text-muted: #8d4757;
+
+    --accent: #f43f5e;
+    --accent-hover: #e11d48;
+    --accent-text: #ffffff;
+    --accent-soft: rgba(244, 63, 94, 0.10);
+    --accent-soft-hover: rgba(244, 63, 94, 0.16);
+
+    --slider-track: rgba(244, 63, 94, 0.10);
+    --slider-fill: #f43f5e;
+
+    --shadow-subtle: 0 2px 12px -2px rgba(136, 19, 55, 0.05), 0 1px 3px rgba(136, 19, 55, 0.03);
+    --shadow-elevated: 0 12px 32px -4px rgba(136, 19, 55, 0.08), 0 4px 12px -2px rgba(136, 19, 55, 0.04);
+    --shadow-modal: 0 24px 48px -8px rgba(136, 19, 55, 0.12), 0 8px 16px -4px rgba(136, 19, 55, 0.04);
+
+    color-scheme: light;
+  }
+
+  /* Base Body Styles */
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--bg-primary);
+    color: var(--text-main);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background-color 0.25s ease, color 0.25s ease;
+    min-height: 100vh;
+  }
+}
+
+/* =========================================================================
+   CLEAN GLASS MATERIAL SYSTEM
+   Progressive enhancement: surfaces look pristine even with backdrop-filter: none
+   ========================================================================= */
+
+/* Primary Container Card (Upload Card, Media Library Container) */
+.clean-surface {
+  background-color: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-subtle);
+}
+
+/* Elevated Floating Elements (Header, Modals, Action Sheets) */
+.clean-surface-elevated {
+  background-color: var(--surface-elevated);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-elevated);
+}
+
+/* Interactive Surface for Buttons, Badges, Dropdowns */
+.clean-interactive {
+  background-color: var(--surface-secondary);
+  border: 1px solid var(--border-subtle);
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+}
+
+.clean-interactive:hover {
+  background-color: var(--surface-hover);
+  border-color: var(--border-subtle-hover);
+}
+
+.clean-interactive:active {
+  background-color: var(--surface-active);
+  transform: scale(0.98);
+}
+
+/* Subtle Floating Menu (Theme Selector, Dropdowns) - Light localized blur accent */
+.clean-floating-menu {
+  background-color: var(--surface-elevated);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-elevated);
+}
+
+@supports (backdrop-filter: blur(8px)) or (-webkit-backdrop-filter: blur(8px)) {
+  .clean-floating-menu {
+    background-color: var(--surface-translucent);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+}
+
+/* Modal and Sheet Backdrops (Restrained, low GPU cost) */
+.clean-backdrop {
+  background-color: rgba(0, 0, 0, 0.65);
+}
+
+@supports (backdrop-filter: blur(8px)) or (-webkit-backdrop-filter: blur(8px)) {
+  .clean-backdrop {
+    background-color: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+}
+
+/* Inputs & Form Fields */
+.clean-input {
+  background-color: var(--surface-secondary);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-main);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.clean-input:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* Lightweight Tap Feedback */
+.clean-tap {
+  transition: transform 0.1s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.1s ease;
+}
+
+.clean-tap:active {
+  transform: scale(0.96);
+  opacity: 0.92;
+}
+
+/* Backward compatibility aliases mapping to Clean Glass */
+.ios-card {
+  background-color: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-subtle);
+}
+
+.ios-surface {
+  background-color: var(--surface-secondary);
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.ios-surface:hover {
+  background-color: var(--surface-hover);
+}
+
+.ios-input {
+  background-color: var(--surface-secondary);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-main);
+}
+
+.ios-input:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.ios-tap {
+  transition: transform 0.1s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.1s ease;
+}
+
+.ios-tap:active {
+  transform: scale(0.96);
+  opacity: 0.92;
+}
+
+/* =========================================================================
+   APPLE THICK SLIDER (Optimized rendering)
+   ========================================================================= */
+.apple-thick-slider-container {
+  position: relative;
+  width: 100%;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+}
+
+.apple-thick-slider-track {
+  position: absolute;
+  width: 100%;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--slider-track);
+  overflow: hidden;
+  transition: height 0.15s ease;
+}
+
+.apple-thick-slider-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--slider-fill);
+  border-radius: 9999px;
+  transition: width 0.12s linear;
+}
+
+.apple-thick-slider-container.is-dragging .apple-thick-slider-fill {
+  transition: none;
+}
+
+.apple-thick-slider-thumb {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  background: #ffffff;
+  border-radius: 50%;
+  top: 50%;
+  left: 0%;
+  transform: translate(-50%, -50%) scale(0);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s ease;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.apple-thick-slider-container:hover .apple-thick-slider-track,
+.apple-thick-slider-container.is-dragging .apple-thick-slider-track {
+  height: 8px;
+}
+
+.apple-thick-slider-container:hover .apple-thick-slider-thumb,
+.apple-thick-slider-container.is-dragging .apple-thick-slider-thumb {
+  transform: translate(-50%, -50%) scale(1.1);
+}
+
+/* Audio Visualizer Bars */
+.viz-bar {
+  transition: height 0.08s ease-in-out;
+  will-change: height;
+}
+
+/* =========================================================================
+   PREFERS REDUCED MOTION (Accessibility & Low-End Optimization)
+   ========================================================================= */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

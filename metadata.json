@@ -1,0 +1,6 @@
+{
+  "name": "AirShare Pro",
+  "description": "Platform berbagi foto, video, dan audio instan berkecepatan tinggi dengan pemutar media terintegrasi, desain Clean Glass, dan tanpa batasan kecepatan.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
