@@ -1,7 +1,8 @@
 {
-  "name": "react-example",
+  "name": "airshare-pro",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "High-performance instant media sharing and streaming platform powered by Catbox storage.",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -9,7 +10,9 @@
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "tsx src/server/__tests__/security.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

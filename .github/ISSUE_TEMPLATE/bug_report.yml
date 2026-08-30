@@ -1,0 +1,35 @@
+name: Bug Report
+description: File a bug report for an unexpected behavior or defect.
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue with AirShare Pro. Please provide accurate details below.
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Detailed steps to reproduce the issue.
+      placeholder: |
+        1. Navigate to Upload Zone
+        2. Drag and drop 'sample.mp4' (size: ~15MB)
+        3. Click Upload...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment Details
+      description: Browser version, OS, or Node.js environment.
+      placeholder: "Chrome 128 / macOS Sonoma / Node 20"
+    validations:
+      required: false

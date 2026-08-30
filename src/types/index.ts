@@ -121,6 +121,16 @@ export type ThemeName =
   | 'pacific'
   | 'rosegold';
 
+export type SortOption =
+  | 'newest'
+  | 'oldest'
+  | 'name_asc'
+  | 'name_desc'
+  | 'size_desc'
+  | 'size_asc';
+
+export type ViewMode = 'grid' | 'list';
+
 export interface ToastInfo {
   id: string;
   message: string;

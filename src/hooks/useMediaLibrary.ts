@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { MediaItem, MediaType } from '../types';
+import { MediaItem, MediaType, SortOption, ViewMode } from '../types';
 import { mediaApiClient } from '../lib/api/mediaClient';
 
 const STORAGE_KEY = 'airshare_media_history';
+const VIEW_MODE_KEY = 'airshare_view_mode';
+const PAGE_SIZE = 12;
 
 export function useMediaLibrary() {
   const [items, setItems] = useState<MediaItem[]>(() => {
@@ -21,7 +23,34 @@ export function useMediaLibrary() {
 
   const [filter, setFilter] = useState<'all' | MediaType>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [sortBy, setSortBy] = useState<SortOption>('newest');
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    if (typeof window === 'undefined') return 'list';
+    return (localStorage.getItem(VIEW_MODE_KEY) as ViewMode) || 'list';
+  });
+  const [page, setPage] = useState(1);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isLoadingServer, setIsLoadingServer] = useState(false);
+
+  // Debounce search input (300ms) to avoid expensive re-computations or network churn
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+      setPage(1); // Reset page on query change
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [searchQuery]);
+
+  // Persist view mode preference
+  const updateViewMode = useCallback((mode: ViewMode) => {
+    setViewMode(mode);
+    try {
+      localStorage.setItem(VIEW_MODE_KEY, mode);
+    } catch {
+      // ignore
+    }
+  }, []);
 
   // Sync initial state from server repository on mount
   useEffect(() => {
@@ -33,15 +62,14 @@ export function useMediaLibrary() {
         if (!isMounted) return;
 
         setItems((prev) => {
-          // Merge server list with local items (preserving local session blobUrls if match)
           const mergedMap = new Map<string, MediaItem>();
 
-          // First add local items
+          // Add local items
           prev.forEach((local) => {
             mergedMap.set(local.id, local);
           });
 
-          // Overlay or add server items
+          // Overlay server items
           serverList.forEach((server) => {
             const existing = mergedMap.get(server.id);
             if (existing) {
@@ -74,12 +102,12 @@ export function useMediaLibrary() {
     };
   }, []);
 
-  // Persist items to local storage (saving metadata & share URLs)
+  // Persist items to local storage (omitting ephemeral blob URLs)
   useEffect(() => {
     try {
       const sanitized = items.map((item) => ({
         ...item,
-        blobUrl: undefined, // Do not persist ephemeral blob URLs
+        blobUrl: undefined,
       }));
       localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
     } catch (e) {
@@ -89,10 +117,11 @@ export function useMediaLibrary() {
 
   const addItem = useCallback((item: MediaItem) => {
     setItems((prev) => [item, ...prev.filter((i) => i.id !== item.id)]);
+    setPage(1);
   }, []);
 
   const removeItem = useCallback(async (id: string) => {
-    // 1. Update UI optimistically
+    // Revoke object URL if exists
     setItems((prev) => {
       const target = prev.find((i) => i.id === id);
       if (target?.blobUrl && target.blobUrl.startsWith('blob:')) {
@@ -105,7 +134,14 @@ export function useMediaLibrary() {
       return prev.filter((i) => i.id !== id);
     });
 
-    // 2. Request backend deletion
+    // Remove from selection
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+
+    // Delete from server repository
     try {
       await mediaApiClient.deleteMedia(id);
     } catch (err) {
@@ -113,8 +149,34 @@ export function useMediaLibrary() {
     }
   }, []);
 
+  const removeMultiple = useCallback(async (ids: string[]) => {
+    const idSet = new Set(ids);
+    setItems((prev) => {
+      prev.forEach((item) => {
+        if (idSet.has(item.id) && item.blobUrl && item.blobUrl.startsWith('blob:')) {
+          try {
+            URL.revokeObjectURL(item.blobUrl);
+          } catch {
+            // ignore
+          }
+        }
+      });
+      return prev.filter((i) => !idSet.has(i.id));
+    });
+
+    setSelectedIds(new Set());
+
+    // Execute server deletions
+    for (const id of ids) {
+      try {
+        await mediaApiClient.deleteMedia(id);
+      } catch (err) {
+        console.warn(`Failed to delete media ${id}:`, err);
+      }
+    }
+  }, []);
+
   const clearAll = useCallback(async () => {
-    // 1. Clean blob URLs
     setItems((prev) => {
       prev.forEach((item) => {
         if (item.blobUrl && item.blobUrl.startsWith('blob:')) {
@@ -128,7 +190,8 @@ export function useMediaLibrary() {
       return [];
     });
 
-    // 2. Clear server repository
+    setSelectedIds(new Set());
+
     try {
       await mediaApiClient.clearAll();
     } catch (err) {
@@ -136,29 +199,104 @@ export function useMediaLibrary() {
     }
   }, []);
 
-  const filteredItems = useMemo(() => {
-    return items.filter((item) => {
+  // Multi-selection helpers
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const selectAllVisible = useCallback((visibleIds: string[]) => {
+    setSelectedIds(new Set(visibleIds));
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
+
+  // Filter & Search
+  const filteredAndSortedItems = useMemo(() => {
+    const q = debouncedSearch.toLowerCase().trim();
+
+    const filtered = items.filter((item) => {
       const matchesType = filter === 'all' || item.type === filter;
-      const q = searchQuery.toLowerCase().trim();
       const matchesSearch =
         !q ||
         item.name.toLowerCase().includes(q) ||
+        item.originalFileName.toLowerCase().includes(q) ||
         item.audioMeta?.title?.toLowerCase().includes(q) ||
         item.audioMeta?.artist?.toLowerCase().includes(q);
       return matchesType && matchesSearch;
     });
-  }, [items, filter, searchQuery]);
+
+    // Deterministic Sorting
+    return filtered.sort((a, b) => {
+      switch (sortBy) {
+        case 'newest':
+          return b.createdAt - a.createdAt;
+        case 'oldest':
+          return a.createdAt - b.createdAt;
+        case 'name_asc':
+          return a.name.localeCompare(b.name);
+        case 'name_desc':
+          return b.name.localeCompare(a.name);
+        case 'size_desc':
+          return b.size - a.size;
+        case 'size_asc':
+          return a.size - b.size;
+        default:
+          return b.createdAt - a.createdAt;
+      }
+    });
+  }, [items, filter, debouncedSearch, sortBy]);
+
+  // Paginated/Incrementally Loaded Slice for DOM Performance
+  const paginatedItems = useMemo(() => {
+    return filteredAndSortedItems.slice(0, page * PAGE_SIZE);
+  }, [filteredAndSortedItems, page]);
+
+  const hasMore = paginatedItems.length < filteredAndSortedItems.length;
+
+  const loadMore = useCallback(() => {
+    if (hasMore) {
+      setPage((prev) => prev + 1);
+    }
+  }, [hasMore]);
 
   return {
     items,
-    filteredItems,
+    filteredItems: paginatedItems,
+    totalFilteredCount: filteredAndSortedItems.length,
+    hasMore,
+    loadMore,
     addItem,
     removeItem,
+    removeMultiple,
     clearAll,
     filter,
-    setFilter,
+    setFilter: (newFilter: 'all' | MediaType) => {
+      setFilter(newFilter);
+      setPage(1);
+    },
     searchQuery,
     setSearchQuery,
+    sortBy,
+    setSortBy: (newSort: SortOption) => {
+      setSortBy(newSort);
+      setPage(1);
+    },
+    viewMode,
+    setViewMode: updateViewMode,
+    selectedIds,
+    toggleSelect,
+    selectAllVisible,
+    clearSelection,
     hasItems: items.length > 0,
     isLoadingServer,
   };

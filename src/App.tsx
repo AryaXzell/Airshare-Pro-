@@ -28,13 +28,25 @@ export default function App() {
   const {
     items,
     filteredItems,
+    totalFilteredCount,
+    hasMore,
+    loadMore,
     addItem,
     removeItem,
+    removeMultiple,
     clearAll,
     filter,
     setFilter,
     searchQuery,
     setSearchQuery,
+    sortBy,
+    setSortBy,
+    viewMode,
+    setViewMode,
+    selectedIds,
+    toggleSelect,
+    selectAllVisible,
+    clearSelection,
   } = useMediaLibrary();
 
   const [isActionSheetOpen, setIsActionSheetOpen] = useState(false);
@@ -133,12 +145,24 @@ export default function App() {
         <MediaLibrary
           items={items}
           filteredItems={filteredItems}
+          totalFilteredCount={totalFilteredCount}
+          hasMore={hasMore}
+          onLoadMore={loadMore}
           filter={filter}
           onFilterChange={setFilter}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
+          sortBy={sortBy}
+          onSortChange={setSortBy}
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
+          selectedIds={selectedIds}
+          onToggleSelect={toggleSelect}
+          onSelectAllVisible={selectAllVisible}
+          onClearSelection={clearSelection}
           onPreviewItem={(item) => setPreviewItem(item)}
           onDeleteItem={removeItem}
+          onDeleteMultiple={removeMultiple}
           onClearAll={clearAll}
           onToast={showToast}
         />
