@@ -63,9 +63,21 @@ Ensure the following variables are configured in your deployment platform:
 
 ---
 
-## 3. Serverless Considerations
+## 3. Vercel Serverless Functions Deployment
 
-- **Streaming / Payload Limits**: If deploying behind a serverless gateway (such as AWS Lambda or Vercel Serverless Functions), note that standard serverless functions typically impose a 4.5MB–6MB payload ceiling on request bodies. For unconstrained 200MB uploads, deploy AirShare Pro to a container runtime (Google Cloud Run, AWS App Runner, Railway, Render, or VPS).
+AirShare Pro includes native root `/api` Serverless Functions configured for Vercel deployment:
+
+- **Root `/api` Functions**:
+  - `/api/health.ts` : Health check and provider verification.
+  - `/api/media/upload.ts` : File upload handler (with `bodyParser: false` for direct multipart streaming).
+  - `/api/media/config.ts` : Client configuration metadata.
+  - `/api/media/index.ts` : Media listing and batch deletion.
+  - `/api/media/[id].ts` : Individual media retrieval and deletion.
+  - `/api/[...path].ts` & `/api/index.ts` : Catch-all routing fallback.
+- **Frontend SPA Routing**: `vercel.json` ensures `/api/*` routes are handled by Serverless Functions while all client-side routes fallback to `dist/index.html`.
+
+### Serverless Considerations:
+- **Payload Limits**: Note that Vercel Serverless Functions on the Hobby tier impose a 4.5MB request body limit (Pro tier: up to 50MB). For unconstrained 200MB large file uploads, container runtime hosting (Cloud Run, Docker, VPS) is recommended.
 - **In-Memory Rate Limiter**: The built-in rate limiter uses in-memory sliding windows. For multi-instance horizontal scaling, connect the `RateLimiter` interface to an external Redis instance (e.g. Upstash).
 
 ---
