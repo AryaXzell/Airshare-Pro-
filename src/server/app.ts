@@ -24,6 +24,11 @@ export function createExpressApp(): Express {
     // Disable legacy XSS auditor to prevent edge-case bypasses
     res.setHeader('X-XSS-Protection', '0');
 
+    // Strict-Transport-Security (HSTS) in production
+    if (!isDev) {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
+
     // Comprehensive Content-Security-Policy (CSP)
     const cspDirectives = [
       "default-src 'self'",
@@ -40,10 +45,23 @@ export function createExpressApp(): Express {
       "object-src 'none'",
       "base-uri 'self'",
       "form-action 'self'",
-      "frame-ancestors 'self' https://*.google.com https://*.googleusercontent.com https://ai.studio https://*.aistudio.google.com https://*.run.app",
+      "frame-ancestors 'self' https://*.google.com https://*.googleusercontent.com https://ai.studio https://*.ai.studio https://*.aistudio.google.com https://*.run.app https://*.cloudshell.dev",
     ];
 
     res.setHeader('Content-Security-Policy', cspDirectives.join('; '));
+
+    // Handle CORS preflight cleanly
+    if (req.method === 'OPTIONS') {
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'Content-Type, Authorization, X-Request-ID, Accept'
+      );
+      res.setHeader('Access-Control-Max-Age', '86400');
+      res.status(204).end();
+      return;
+    }
+
     next();
   });
 
@@ -51,7 +69,23 @@ export function createExpressApp(): Express {
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-  // Health check endpoint
+  // Middleware to catch JSON body parsing syntax errors gracefully
+  app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
+    if (err instanceof SyntaxError && 'status' in err && (err as { status: number }).status === 400 && 'body' in err) {
+      const errorResp: ApiErrorResponse = {
+        success: false,
+        error: {
+          code: 'INVALID_JSON',
+          message: 'Format data JSON pada body permintaan tidak valid.',
+        },
+      };
+      res.status(400).json(errorResp);
+      return;
+    }
+    next(err);
+  });
+
+  // Health check endpoint (GET only)
   const healthHandler = (req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.json({
@@ -63,8 +97,20 @@ export function createExpressApp(): Express {
     });
   };
 
-  app.get('/api/health', healthHandler);
-  app.get('/health', healthHandler);
+  const healthMethodNotAllowed = (req: Request, res: Response) => {
+    res.setHeader('Allow', 'GET');
+    const errorResp: ApiErrorResponse = {
+      success: false,
+      error: {
+        code: 'METHOD_NOT_ALLOWED',
+        message: `Metode ${req.method} tidak diizinkan pada endpoint health check. Gunakan GET.`,
+      },
+    };
+    res.status(405).json(errorResp);
+  };
+
+  app.route('/api/health').get(healthHandler).all(healthMethodNotAllowed);
+  app.route('/health').get(healthHandler).all(healthMethodNotAllowed);
 
   // Mount API media routes
   app.use('/api/media', mediaRouter);

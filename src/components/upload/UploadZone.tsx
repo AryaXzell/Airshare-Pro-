@@ -13,21 +13,43 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
   disabled = false,
 }) => {
   const [isDragOver, setIsDragOver] = useState(false);
+  const dragCounter = useRef(0);
   const genericInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (disabled) return;
+    dragCounter.current += 1;
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setIsDragOver(true);
+    }
+  };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     if (disabled) return;
-    setIsDragOver(true);
+    if (!isDragOver) {
+      setIsDragOver(true);
+    }
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
-    setIsDragOver(false);
+    e.stopPropagation();
+    if (disabled) return;
+    dragCounter.current -= 1;
+    if (dragCounter.current <= 0) {
+      dragCounter.current = 0;
+      setIsDragOver(false);
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current = 0;
     setIsDragOver(false);
     if (disabled) return;
 
@@ -56,13 +78,16 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
       />
 
       <div
+        onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onClick={() => {
           if (!disabled) onRequestActionSheet();
         }}
-        className={`border-2 border-dashed rounded-[1.8rem] sm:rounded-[2.2rem] p-8 sm:p-11 flex flex-col items-center justify-center cursor-pointer group transition-all duration-200 relative overflow-hidden ${
+        className={`border-2 border-dashed rounded-[1.8rem] sm:rounded-[2.2rem] p-8 sm:p-11 flex flex-col items-center justify-center cursor-pointer group transition-all duration-200 relative overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 ${
+          disabled ? 'opacity-60 cursor-not-allowed' : ''
+        } ${
           isDragOver
             ? 'scale-[1.008] border-solid'
             : 'hover:border-solid'
@@ -72,17 +97,18 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
           backgroundColor: isDragOver ? 'var(--accent-soft)' : 'var(--surface-secondary)',
         }}
         role="button"
-        tabIndex={0}
-        aria-label="Mulai berbagi media. Klik atau seret file ke sini."
+        tabIndex={disabled ? -1 : 0}
+        aria-label="Mulai berbagi media. Klik atau seret file foto, video, atau audio ke sini."
+        aria-disabled={disabled}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
+          if (!disabled && (e.key === 'Enter' || e.key === ' ')) {
             e.preventDefault();
             onRequestActionSheet();
           }
         }}
       >
         <div
-          className="p-4 sm:p-4.5 rounded-2xl mb-4 transition-transform duration-200 group-hover:scale-105 flex items-center justify-center border"
+          className="p-4 sm:p-4.5 rounded-2xl mb-4 transition-transform duration-200 group-hover:scale-105 flex items-center justify-center border pointer-events-none"
           style={{
             backgroundColor: 'var(--accent-soft)',
             borderColor: 'var(--border-subtle)',
@@ -95,16 +121,16 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
           )}
         </div>
 
-        <h3 className="font-extrabold text-base sm:text-lg text-center tracking-tight" style={{ color: 'var(--text-main)' }}>
+        <h3 className="font-extrabold text-base sm:text-lg text-center tracking-tight pointer-events-none" style={{ color: 'var(--text-main)' }}>
           {isDragOver ? 'Lepaskan berkas di sini' : 'Mulai Berbagi Media'}
         </h3>
 
-        <p className="text-xs sm:text-sm mt-1.5 text-center font-medium max-w-xs sm:max-w-sm" style={{ color: 'var(--text-muted)' }}>
-          Ketuk untuk memilih foto, video, atau audio dari perangkat Anda
+        <p className="text-xs sm:text-sm mt-1.5 text-center font-medium max-w-xs sm:max-w-sm pointer-events-none" style={{ color: 'var(--text-muted)' }}>
+          {isDragOver ? 'Berkas siap diproses dan dikirim' : 'Ketuk untuk memilih foto, video, atau audio dari perangkat Anda'}
         </p>
 
         <div
-          className="flex items-center space-x-3.5 mt-5 pt-3.5 border-t w-full max-w-xs justify-center text-[11px] font-semibold"
+          className="flex items-center space-x-3.5 mt-5 pt-3.5 border-t w-full max-w-xs justify-center text-[11px] font-semibold pointer-events-none"
           style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
         >
           <span className="flex items-center space-x-1">

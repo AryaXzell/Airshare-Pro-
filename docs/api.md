@@ -70,7 +70,8 @@ Upload an image, video, or audio file to Catbox storage.
 ```
 
 ### Errors
-- `400 Bad Request`: `NO_FILE`, `FORBIDDEN_EXTENSION`, `UNSUPPORTED_MEDIA_TYPE`, `CORRUPTED_OR_INVALID_MEDIA`, `INVALID_MULTIPART_REQUEST`
+- `400 Bad Request`: `NO_FILE`, `FORBIDDEN_EXTENSION`, `UNSUPPORTED_MEDIA_TYPE`, `CORRUPTED_OR_INVALID_MEDIA`, `INVALID_MULTIPART_REQUEST`, `INVALID_JSON`
+- `405 Method Not Allowed`: `METHOD_NOT_ALLOWED` (returns `Allow` header listing allowed HTTP verbs)
 - `413 Payload Too Large`: `FILE_TOO_LARGE`
 - `429 Too Many Requests`: `RATE_LIMITED`
 - `502 Bad Gateway`: `PROVIDER_ERROR`, `UPLOAD_TIMEOUT`

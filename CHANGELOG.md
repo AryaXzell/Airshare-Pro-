@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.0.1] - 2026-08-31
+
+### Added
+- **Vercel Serverless Function Entrypoint (`api/index.ts`)**: Serverless adapter exporting the shared Express app with `bodyParser: false` for lossless multipart streaming.
+- **Express App Factory (`src/server/app.ts`)**: Extracted stateless Express configuration and routing layer decoupled from persistent server socket listeners (`app.listen()`).
+
+### Changed
+- **Server Runner (`server.ts`)**: Refactored to act as a dedicated standalone and local development runner.
+- **Routing Configuration (`vercel.json`)**: Simplified API rewrite routing to map all `/api/*` requests directly to `api/index.ts`.
+
+---
+
 ## [1.0.0] - 2026-08-30
 
 ### Added

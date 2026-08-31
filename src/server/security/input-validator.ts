@@ -112,7 +112,7 @@ export function verifyMediaMagicBytes(buffer: Buffer, mimeType: string): boolean
 
   // OGG (4F 67 67 53 -> 'OggS')
   if (mime.includes('ogg')) {
-    return headerHex.startsWith('4f676773');
+    return headerHex.startsWith('4f676753') || headerHex.startsWith('4f676773');
   }
 
   // FLAC (66 4C 61 43 -> 'fLaC')
@@ -148,6 +148,7 @@ export function verifyMediaMagicBytes(buffer: Buffer, mimeType: string): boolean
     headerHex.startsWith('1a45dfa3') ||
     headerHex.startsWith('494433') ||
     headerHex.startsWith('664c6143') ||
+    headerHex.startsWith('4f676753') ||
     headerHex.startsWith('4f676773') ||
     (buffer.length >= 8 && buffer.subarray(4, 8).toString('ascii') === 'ftyp');
 

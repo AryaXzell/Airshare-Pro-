@@ -6,15 +6,15 @@ const THEME_STORAGE_KEY = 'airshare_theme';
 
 export function useTheme() {
   const [theme, setThemeState] = useState<ThemeName>(() => {
-    if (typeof window === 'undefined') return 'silver';
+    if (typeof window === 'undefined') return 'rosegold';
     try {
       const stored = localStorage.getItem(THEME_STORAGE_KEY) as ThemeName | null;
       if (stored && THEMES.some(t => t.id === stored)) {
         return stored;
       }
-      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'spacegray' : 'silver';
+      return 'rosegold';
     } catch {
-      return 'silver';
+      return 'rosegold';
     }
   });
 

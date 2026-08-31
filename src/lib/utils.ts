@@ -36,14 +36,37 @@ export function formatDate(timestamp: number): string {
   });
 }
 
+export const MAX_FILE_SIZE_BYTES = 200 * 1024 * 1024; // 200MB limit for Catbox
+
 export function validateMediaFile(file: File): { valid: boolean; error?: string; type?: MediaType } {
+  if (!file) {
+    return {
+      valid: false,
+      error: 'Tidak ada berkas yang dipilih.',
+    };
+  }
+
+  if (file.size === 0) {
+    return {
+      valid: false,
+      error: 'Berkas kosong (0 B) tidak dapat diunggah.',
+    };
+  }
+
+  if (file.size > MAX_FILE_SIZE_BYTES) {
+    return {
+      valid: false,
+      error: `Ukuran berkas (${formatBytes(file.size)}) melebihi batas maksimal 200 MB.`,
+    };
+  }
+
   const nameParts = file.name.split('.');
   const ext = nameParts.length > 1 ? nameParts.pop()?.toLowerCase() || '' : '';
 
   if (BANNED_EXTENSIONS.has(ext)) {
     return {
       valid: false,
-      error: `Format berkas .${ext} dilarang demi keamanan sistem.`
+      error: `Format berkas .${ext} dilarang demi keamanan sistem.`,
     };
   }
 
@@ -68,7 +91,7 @@ export function validateMediaFile(file: File): { valid: boolean; error?: string;
 
   return {
     valid: false,
-    error: 'Hanya format gambar, video, atau audio yang didukung.'
+    error: `Format berkas ${ext ? `.${ext}` : 'ini'} tidak didukung. Unggah gambar, video, atau audio.`,
   };
 }
 

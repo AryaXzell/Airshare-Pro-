@@ -68,35 +68,44 @@ sequenceDiagram
 
 ## System Architecture
 
-AirShare Pro follows an extensible, decoupled layered architecture:
+AirShare Pro features a dual-entrypoint architecture sharing a single, robust Express application and API core:
 
 ```
-Browser (React 19 Client)
-   │
-   ├── UI & Clean Glass Design System
-   ├── Audio / Video Players & Visualizer
-   ├── Client Metadata Parser (ID3 / Dimensions)
-   └── useUpload & useMediaLibrary Hooks
-   │
-   ▼
-Express Server (Node.js Runtime)
-   │
-   ├── Structured Request Logger & Request ID
-   ├── Security Headers & CSP Enforcement
-   ├── Sliding-Window IP Rate Limiter
-   ├── Multer Memory Stream Buffer
-   ├── Input & Binary Magic Bytes Validator
-   └── Media Controller & Repository
-   │
-   ▼
-Storage Provider Abstraction (StorageProvider)
-   │
-   ▼
-Catbox Provider (CatboxStorageProvider)
-   │
-   ▼
-Catbox.moe Upstream API
+                    AirShare Pro
+                         │
+              ┌──────────┴──────────┐
+              │                     │
+        Development             Production
+              │                     │
+          server.ts               Vercel
+              │                     │
+           Express                /api
+              │                     │
+         app.listen()          api/index.ts
+              │              (Vercel Function)
+              │                     │
+              └──────────┬──────────┘
+                         │
+                  Express App Core
+                 (src/server/app.ts)
+                         │
+              ┌──────────┴──────────┐
+              │                     │
+        Security & CSP        API Router
+        Rate Limiter         (/api/media)
+              │                     │
+              │              ┌──────┴──────┐
+              │              ▼             ▼
+              │       Media Controller  Media Repo
+              │              │
+              └──────────────┼─────────────┐
+                             ▼             ▼
+                     StorageProvider    Catbox API
+                   (Catbox Provider)  (Upstream)
 ```
+
+- **Local Development**: `server.ts` imports the shared Express app, attaches Vite dev middleware for Hot Module Replacement / asset serving, and binds `app.listen(3000)`.
+- **Production (Vercel Serverless)**: `api/index.ts` imports the exact same Express app and exports it as a Vercel Serverless Function without executing `app.listen()`. `vercel.json` routes `/api/(.*)` directly to this serverless entrypoint.
 
 For comprehensive architectural specifications, refer to [docs/architecture.md](docs/architecture.md).
 
@@ -187,8 +196,9 @@ For full payload contracts and status codes, see [docs/api.md](docs/api.md).
 ## Limitations & Known Operational Constraints
 
 1. **Catbox Server-Side Deletion**: Without `CATBOX_USERHASH`, files uploaded to Catbox cannot be purged from Catbox servers via API; deleting in the app removes the entry from the local catalog only.
-2. **Serverless Payload Limits**: Deploying behind standard serverless functions (e.g. AWS Lambda) may restrict request body sizes to ~6MB. For unconstrained 200MB uploads, containerized hosting (Cloud Run, Docker, VPS) is required.
-3. **Public Accessibility**: Catbox media URLs are directly accessible over the public internet to anyone holding the direct link.
+2. **Serverless Ephemeral State**: The current media metadata repository uses in-memory storage on the server alongside client-side `localStorage` caching. In stateless serverless environments (e.g. Vercel Lambdas), server-side memory does not persist across cold starts. User media lists persist reliably via the client's browser storage.
+3. **Serverless Payload Limits**: Vercel Serverless Functions on the Hobby tier impose a 4.5MB request body limit (Pro tier: 50MB). For unconstrained 200MB large media file uploads, containerized hosting (Google Cloud Run, Docker, VPS) is recommended.
+4. **Public Accessibility**: Catbox media URLs are directly accessible over the public internet to anyone holding the direct link. Media uploaded to Catbox is not encrypted at rest or password-protected.
 
 ---
 

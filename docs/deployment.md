@@ -63,22 +63,21 @@ Ensure the following variables are configured in your deployment platform:
 
 ---
 
-## 3. Vercel Serverless Functions Deployment
+## 3. Vercel Serverless Deployment Architecture
 
-AirShare Pro includes native root `/api` Serverless Functions configured for Vercel deployment:
+AirShare Pro deploys seamlessly to Vercel as a hybrid application (Vite SPA frontend + Express Serverless Function API):
 
-- **Root `/api` Functions**:
-  - `/api/health.ts` : Health check and provider verification.
-  - `/api/media/upload.ts` : File upload handler (with `bodyParser: false` for direct multipart streaming).
-  - `/api/media/config.ts` : Client configuration metadata.
-  - `/api/media/index.ts` : Media listing and batch deletion.
-  - `/api/media/[id].ts` : Individual media retrieval and deletion.
-  - `/api/[...path].ts` & `/api/index.ts` : Catch-all routing fallback.
-- **Frontend SPA Routing**: `vercel.json` ensures `/api/*` routes are handled by Serverless Functions while all client-side routes fallback to `dist/index.html`.
+- **Serverless API Adapter (`/api/index.ts`)**:
+  - Exposes the shared Express application (`src/server/app.ts`) as a single unified Vercel Serverless Function handler.
+  - Configured with `export const config = { api: { bodyParser: false } }` to pass raw multipart streams directly into Multer without body parser corruption.
+- **Routing Configuration (`vercel.json`)**:
+  - `rewrites: [{ "source": "/api/(.*)", "destination": "/api" }]` routes all API requests (`/api/health`, `/api/media/config`, `/api/media/upload`, `/api/media/:id`, etc.) directly to `api/index.ts`.
+  - Non-API routes are automatically resolved by Vercel to static files compiled in `dist/` by Vite (`npm run build`).
 
-### Serverless Considerations:
-- **Payload Limits**: Note that Vercel Serverless Functions on the Hobby tier impose a 4.5MB request body limit (Pro tier: up to 50MB). For unconstrained 200MB large file uploads, container runtime hosting (Cloud Run, Docker, VPS) is recommended.
-- **In-Memory Rate Limiter**: The built-in rate limiter uses in-memory sliding windows. For multi-instance horizontal scaling, connect the `RateLimiter` interface to an external Redis instance (e.g. Upstash).
+### Serverless Operational Considerations:
+1. **Payload Limits**: Note that Vercel Serverless Functions on the Hobby tier impose a 4.5MB request body limit (Pro tier: up to 50MB). For unconstrained 200MB large file uploads, container runtime hosting (Google Cloud Run, Docker, VPS) is recommended.
+2. **Ephemeral State**: The server repository uses in-memory state. In serverless environments, state across invocations/cold starts is held reliably by client-side browser caching (`localStorage`). For durable multi-tenant server-side history, attach an external database (e.g. Supabase, PostgreSQL, Firestore).
+3. **In-Memory Rate Limiter**: The built-in rate limiter uses in-memory sliding windows. In serverless instances, rate limiting operates per-lambda instance. For global distributed rate limiting, integrate Redis (e.g. Upstash).
 
 ---
 

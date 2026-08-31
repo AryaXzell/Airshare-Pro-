@@ -50,6 +50,21 @@ async function runSecurityTests() {
   const fakeExecutable = Buffer.from([0x4d, 0x5a, 0x90, 0x00]); // DOS MZ Header
   assert(!verifyMediaMagicBytes(fakeExecutable, 'image/jpeg'), 'Rejects disguised executable with fake JPEG header');
 
+  const webpHeader = Buffer.concat([
+    Buffer.from([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00]),
+    Buffer.from('WEBP', 'ascii'),
+  ]);
+  assert(verifyMediaMagicBytes(webpHeader, 'image/webp'), 'Verifies WebP magic bytes');
+
+  const flacHeader = Buffer.from([0x66, 0x4c, 0x61, 0x43, 0x00, 0x00]);
+  assert(verifyMediaMagicBytes(flacHeader, 'audio/flac'), 'Verifies FLAC magic bytes');
+
+  const oggHeader = Buffer.from([0x4f, 0x67, 0x67, 0x53, 0x00, 0x02]);
+  assert(verifyMediaMagicBytes(oggHeader, 'audio/ogg'), 'Verifies OGG magic bytes');
+
+  const mp3Id3Header = Buffer.from([0x49, 0x44, 0x33, 0x03, 0x00]);
+  assert(verifyMediaMagicBytes(mp3Id3Header, 'audio/mp3'), 'Verifies MP3 ID3 header magic bytes');
+
   // 4. File Validation Check
   const fakeMulterFile: Express.Multer.File = {
     fieldname: 'file',
@@ -103,6 +118,68 @@ async function runSecurityTests() {
       !err.message.includes('super_secret_userhash_token_12345'),
       'Catbox exception never leaks CATBOX_USERHASH'
     );
+  }
+
+  // 8. HTTP Endpoint Integration & Method Validation (405, 404, Headers)
+  const { createExpressApp } = await import('../app');
+  const app = createExpressApp();
+  const server = app.listen(0);
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    // Test 8.1: GET /api/health -> 200 & Security Headers
+    const healthRes = await fetch(`${baseUrl}/api/health`);
+    const healthJson = await healthRes.json();
+    assert(
+      healthRes.status === 200 &&
+      healthJson.status === 'ok' &&
+      healthRes.headers.get('x-content-type-options') === 'nosniff' &&
+      healthRes.headers.has('x-request-id'),
+      'GET /api/health returns 200 with nosniff and X-Request-ID headers'
+    );
+
+    // Test 8.2: POST /api/health -> 405 Method Not Allowed
+    const healthPostRes = await fetch(`${baseUrl}/api/health`, { method: 'POST' });
+    const healthPostJson = await healthPostRes.json();
+    assert(
+      healthPostRes.status === 405 &&
+      healthPostJson.error?.code === 'METHOD_NOT_ALLOWED' &&
+      healthPostRes.headers.get('allow') === 'GET',
+      'POST /api/health returns 405 Method Not Allowed with Allow: GET'
+    );
+
+    // Test 8.3: POST /api/media/config -> 405 Method Not Allowed
+    const configPostRes = await fetch(`${baseUrl}/api/media/config`, { method: 'POST' });
+    const configPostJson = await configPostRes.json();
+    assert(
+      configPostRes.status === 405 &&
+      configPostJson.error?.code === 'METHOD_NOT_ALLOWED' &&
+      configPostRes.headers.get('allow') === 'GET',
+      'POST /api/media/config returns 405 Method Not Allowed with Allow: GET'
+    );
+
+    // Test 8.4: GET /api/media/upload -> 405 Method Not Allowed
+    const uploadGetRes = await fetch(`${baseUrl}/api/media/upload`, { method: 'GET' });
+    const uploadGetJson = await uploadGetRes.json();
+    assert(
+      uploadGetRes.status === 405 &&
+      uploadGetJson.error?.code === 'METHOD_NOT_ALLOWED' &&
+      uploadGetRes.headers.get('allow') === 'POST',
+      'GET /api/media/upload returns 405 Method Not Allowed with Allow: POST'
+    );
+
+    // Test 8.5: Unknown route /api/unknown -> 404 NOT_FOUND
+    const notFoundRes = await fetch(`${baseUrl}/api/unknown_route_999`);
+    const notFoundJson = await notFoundRes.json();
+    assert(
+      notFoundRes.status === 404 &&
+      notFoundJson.error?.code === 'NOT_FOUND',
+      'Unknown API route returns structured 404 NOT_FOUND'
+    );
+  } finally {
+    server.close();
   }
 
   console.log(`\nAll Security Tests Completed: ${passed} passed, ${failed} failed.`);

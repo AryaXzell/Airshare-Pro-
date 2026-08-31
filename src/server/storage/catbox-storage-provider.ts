@@ -203,14 +203,20 @@ export class CatboxStorageProvider implements StorageProvider {
     formData.append('userhash', userhash);
     formData.append('files', filename);
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), Math.min(this.timeoutMs, 15000));
+
     try {
       const response = await fetch(this.apiUrl, {
         method: 'POST',
         body: formData,
+        signal: controller.signal,
         headers: {
           'User-Agent': 'AirSharePro-Security/2.1 (MediaSharingHub)',
         },
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         return {
@@ -236,6 +242,14 @@ export class CatboxStorageProvider implements StorageProvider {
         message: `Catbox delete: ${resultText}`,
       };
     } catch (err: unknown) {
+      clearTimeout(timeoutId);
+      if (err instanceof Error && err.name === 'AbortError') {
+        return {
+          success: false,
+          supported: true,
+          message: 'Penghapusan berkas di Catbox melebihi batas waktu (15s).',
+        };
+      }
       const sanitized = this.sanitizeError(err, userhash);
       return {
         success: false,

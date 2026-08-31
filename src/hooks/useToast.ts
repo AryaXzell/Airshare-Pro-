@@ -4,7 +4,7 @@ import { ToastInfo } from '../types';
 export function useToast() {
   const [toast, setToast] = useState<ToastInfo | null>(null);
 
-  const showToast = useCallback((message: string, options?: { description?: string; type?: 'success' | 'error' | 'info'; duration?: number }) => {
+  const showToast = useCallback((message: string, options?: { description?: string; type?: 'success' | 'error' | 'warning' | 'info'; duration?: number }) => {
     const id = Math.random().toString(36).substring(2, 9);
     const newToast: ToastInfo = {
       id,

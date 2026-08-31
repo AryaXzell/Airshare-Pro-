@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   X,
@@ -38,6 +38,16 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
 }) => {
   const [copied, setCopied] = useState(false);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen || !item) return null;
 
   const handleCopyUrl = async () => {
@@ -70,10 +80,10 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
   };
 
   const getTypeIcon = () => {
-    if (item.type === 'image') return <ImageIcon className="w-5 h-5 text-blue-500" />;
-    if (item.type === 'video') return <Video className="w-5 h-5 text-purple-500" />;
-    if (item.type === 'audio') return <Music className="w-5 h-5 text-emerald-500" />;
-    return <FileType className="w-5 h-5 text-gray-500" />;
+    if (item.type === 'image') return <ImageIcon className="w-5 h-5" style={{ color: 'var(--accent)' }} />;
+    if (item.type === 'video') return <Video className="w-5 h-5" style={{ color: 'var(--accent)' }} />;
+    if (item.type === 'audio') return <Music className="w-5 h-5" style={{ color: 'var(--accent)' }} />;
+    return <FileType className="w-5 h-5 opacity-60" />;
   };
 
   return (
@@ -85,7 +95,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           onClick={onClose}
-          className="fixed inset-0 bg-black/40 backdrop-blur-sm"
+          className="fixed inset-0 clean-backdrop"
         />
 
         {/* Modal Dialog */}
@@ -104,11 +114,11 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
           aria-labelledby="detail-title"
         >
           {/* Header */}
-          <div className="flex items-start justify-between pb-4 border-b border-subtle">
+          <div className="flex items-start justify-between pb-4 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
             <div className="flex items-center space-x-3 overflow-hidden min-w-0 flex-1 pr-2">
               <div
-                className="p-2.5 rounded-2xl flex items-center justify-center flex-shrink-0"
-                style={{ backgroundColor: 'var(--surface-secondary)' }}
+                className="p-2.5 rounded-2xl flex items-center justify-center flex-shrink-0 border"
+                style={{ backgroundColor: 'var(--surface-secondary)', borderColor: 'var(--border-subtle)' }}
               >
                 {getTypeIcon()}
               </div>
@@ -121,7 +131,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                 >
                   {item.name}
                 </h3>
-                <p className="text-xs font-semibold opacity-60 truncate" style={{ color: 'var(--text-muted)' }} title={`ID: ${item.id}`}>
+                <p className="text-xs font-semibold opacity-60 truncate font-mono" style={{ color: 'var(--text-muted)' }} title={`ID: ${item.id}`}>
                   ID: {item.id}
                 </p>
               </div>
@@ -129,8 +139,9 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
 
             <button
               onClick={onClose}
-              className="p-2 rounded-full clean-interactive clean-tap opacity-70 hover:opacity-100 flex-shrink-0"
+              className="p-2 rounded-full clean-interactive clean-tap opacity-70 hover:opacity-100 flex-shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
               aria-label="Tutup Detail"
+              title="Tutup Detail"
             >
               <X className="w-4 h-4" />
             </button>
@@ -224,29 +235,32 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
             className="p-3 rounded-2xl mb-5 flex items-center justify-between space-x-2 border min-w-0 overflow-hidden"
             style={{ backgroundColor: 'var(--surface-secondary)', borderColor: 'var(--border-subtle)' }}
           >
-            <p className="text-xs font-mono truncate text-blue-500 min-w-0 flex-1" title={item.shareUrl}>
+            <p className="text-xs font-mono truncate min-w-0 flex-1 font-semibold" style={{ color: 'var(--accent)' }} title={item.shareUrl}>
               {item.shareUrl}
             </p>
             <button
               onClick={handleCopyUrl}
-              className={`p-2 rounded-xl clean-interactive clean-tap flex-shrink-0 ${
-                copied ? 'text-emerald-500 bg-emerald-500/10' : 'text-blue-500'
+              className={`p-2 rounded-xl clean-interactive clean-tap flex-shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
+                copied ? 'text-emerald-600 bg-emerald-500/15' : ''
               }`}
+              style={!copied ? { color: 'var(--accent)' } : undefined}
               aria-label="Salin URL"
+              title="Salin URL"
             >
               {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
             </button>
           </div>
 
           {/* Action Buttons */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-subtle">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
             <button
               onClick={() => {
                 onClose();
                 onPreview(item);
               }}
-              className="flex items-center justify-center space-x-1.5 py-2.5 px-3 rounded-xl text-xs font-bold clean-interactive clean-tap border"
-              style={{ backgroundColor: 'var(--surface-secondary)', borderColor: 'var(--border-subtle)' }}
+              className="flex items-center justify-center space-x-1.5 py-2.5 px-3 rounded-xl text-xs font-bold clean-interactive clean-tap border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+              style={{ backgroundColor: 'var(--surface-secondary)', borderColor: 'var(--border-subtle)', color: 'var(--text-main)' }}
+              aria-label="Buka pratinjau berkas"
             >
               <Maximize2 className="w-3.5 h-3.5" />
               <span>Pratinjau</span>
@@ -256,8 +270,9 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
               href={item.shareUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center justify-center space-x-1.5 py-2.5 px-3 rounded-xl text-xs font-bold clean-interactive clean-tap border"
-              style={{ backgroundColor: 'var(--surface-secondary)', borderColor: 'var(--border-subtle)' }}
+              className="flex items-center justify-center space-x-1.5 py-2.5 px-3 rounded-xl text-xs font-bold clean-interactive clean-tap border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+              style={{ backgroundColor: 'var(--surface-secondary)', borderColor: 'var(--border-subtle)', color: 'var(--text-main)' }}
+              aria-label="Buka tautan asli di tab baru"
             >
               <ExternalLink className="w-3.5 h-3.5" />
               <span>Buka Asli</span>
@@ -265,8 +280,9 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
 
             <button
               onClick={handleShare}
-              className="flex items-center justify-center space-x-1.5 py-2.5 px-3 rounded-xl text-xs font-bold clean-interactive clean-tap border"
-              style={{ backgroundColor: 'var(--surface-secondary)', borderColor: 'var(--border-subtle)' }}
+              className="flex items-center justify-center space-x-1.5 py-2.5 px-3 rounded-xl text-xs font-bold clean-interactive clean-tap border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+              style={{ backgroundColor: 'var(--surface-secondary)', borderColor: 'var(--border-subtle)', color: 'var(--text-main)' }}
+              aria-label="Bagikan berkas"
             >
               <Share2 className="w-3.5 h-3.5" />
               <span>Bagikan</span>
@@ -277,7 +293,8 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                 onClose();
                 onDelete(item.id);
               }}
-              className="flex items-center justify-center space-x-1.5 py-2.5 px-3 rounded-xl text-xs font-bold text-rose-500 hover:bg-rose-500/10 clean-interactive clean-tap border border-rose-500/20"
+              className="flex items-center justify-center space-x-1.5 py-2.5 px-3 rounded-xl text-xs font-bold text-rose-500 hover:bg-rose-500/10 clean-interactive clean-tap border border-rose-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+              aria-label="Hapus berkas dari riwayat"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span>Hapus</span>

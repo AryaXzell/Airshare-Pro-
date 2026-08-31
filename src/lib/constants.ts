@@ -1,11 +1,11 @@
 import { ThemeName } from '../types';
 
 export const THEMES: { id: ThemeName; name: string; swatch: string; isDark: boolean }[] = [
-  { id: 'silver', name: 'Classic Silver', swatch: '#f5f5f7', isDark: false },
+  { id: 'rosegold', name: 'White + Rose Gold', swatch: '#f43f5e', isDark: false },
+  { id: 'silver', name: 'Classic Silver', swatch: '#e2e8f0', isDark: false },
   { id: 'spacegray', name: 'Space Gray', swatch: '#1c1c1e', isDark: true },
   { id: 'purple', name: 'Deep Purple', swatch: '#a855f7', isDark: true },
   { id: 'pacific', name: 'Pacific Blue', swatch: '#0ea5e9', isDark: true },
-  { id: 'rosegold', name: 'Rose Gold', swatch: '#ff3b30', isDark: false },
 ];
 
 export const BANNED_EXTENSIONS = new Set([

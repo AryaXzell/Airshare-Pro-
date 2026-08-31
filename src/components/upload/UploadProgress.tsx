@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Image, Video, Music, FileText, Zap, Clock, XCircle } from 'lucide-react';
+import { Image, Video, Music, FileText, Zap, Clock, XCircle, Loader2 } from 'lucide-react';
 import { formatBytes } from '../../lib/utils';
 
 interface UploadProgressProps {
@@ -27,6 +27,8 @@ export const UploadProgress: React.FC<UploadProgressProps> = ({
     return <FileText className="w-5 h-5" style={{ color: 'var(--accent)' }} />;
   };
 
+  const isProcessing = percentage >= 99 || statusMessage.toLowerCase().includes('memproses') || statusMessage.toLowerCase().includes('catbox');
+
   return (
     <div
       className="mt-4 space-y-3.5 rounded-2xl p-4 sm:p-5 border transition-all"
@@ -34,6 +36,8 @@ export const UploadProgress: React.FC<UploadProgressProps> = ({
         backgroundColor: 'var(--surface-secondary)',
         borderColor: 'var(--border-subtle)',
       }}
+      role="region"
+      aria-label="Progres Unggahan Berkas"
     >
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center space-x-3 overflow-hidden min-w-0">
@@ -51,40 +55,46 @@ export const UploadProgress: React.FC<UploadProgressProps> = ({
               {file.name}
             </p>
             <p className="text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>
-              {formatBytes(file.size)}
+              {formatBytes(file.size)} • {isProcessing ? 'Memproses ke Catbox...' : 'Mengirim data...'}
             </p>
           </div>
         </div>
 
         <div className="flex items-center space-x-2 flex-shrink-0">
           <span
-            className="text-xs font-extrabold px-2.5 py-1 rounded-full shadow-xs"
+            className="text-xs font-extrabold px-2.5 py-1 rounded-full shadow-xs flex items-center space-x-1"
             style={{ backgroundColor: 'var(--accent)', color: 'var(--accent-text)' }}
           >
-            {percentage}%
+            {isProcessing && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
+            <span>{percentage}%</span>
           </span>
           <button
             onClick={onCancel}
-            className="p-1 rounded-full opacity-60 hover:opacity-100 hover:text-rose-500 transition-all clean-tap"
+            className="p-1.5 rounded-full opacity-70 hover:opacity-100 hover:text-rose-500 transition-all clean-tap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
             title="Batalkan Unggahan"
             aria-label="Batalkan Unggahan"
           >
-            <XCircle className="w-4 h-4" />
+            <XCircle className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
           </button>
         </div>
       </div>
 
-      {/* Progress Bar */}
+      {/* Accessible Progress Bar */}
       <div
-        className="w-full h-2 rounded-full overflow-hidden relative"
+        className="w-full h-2.5 rounded-full overflow-hidden relative"
         style={{ backgroundColor: 'var(--slider-track)' }}
+        role="progressbar"
+        aria-valuenow={percentage}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={`Progres unggahan ${file.name}`}
       >
         <motion.div
-          className="h-full rounded-full"
+          className={`h-full rounded-full ${isProcessing ? 'animate-pulse' : ''}`}
           style={{ backgroundColor: 'var(--accent)' }}
           initial={{ width: 0 }}
           animate={{ width: `${percentage}%` }}
-          transition={{ duration: 0.12, ease: 'easeOut' }}
+          transition={{ duration: 0.15, ease: 'easeOut' }}
         />
       </div>
 
@@ -102,7 +112,7 @@ export const UploadProgress: React.FC<UploadProgressProps> = ({
         <div className="flex items-center space-x-1.5 justify-end truncate">
           <Clock className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--accent)' }} />
           <span className="truncate">
-            Sisa: <span className="font-mono font-bold" style={{ color: 'var(--text-main)' }}>{eta}</span>
+            Sisa: <span className="font-mono font-bold" style={{ color: 'var(--text-main)' }}>{isProcessing ? 'Selesai...' : eta}</span>
           </span>
         </div>
       </div>

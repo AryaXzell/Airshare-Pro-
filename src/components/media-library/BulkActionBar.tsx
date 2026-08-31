@@ -83,7 +83,8 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
           <div className="flex items-center space-x-2">
             <button
               onClick={allVisibleSelected ? onClearSelection : onSelectAllVisible}
-              className="p-1.5 rounded-xl clean-interactive clean-tap text-blue-500 flex items-center space-x-1.5 text-xs font-bold"
+              className="p-1.5 rounded-xl clean-interactive clean-tap flex items-center space-x-1.5 text-xs font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+              style={{ color: 'var(--accent)' }}
               aria-label={allVisibleSelected ? 'Batalkan pilih semua' : 'Pilih semua'}
             >
               {allVisibleSelected ? (
@@ -112,10 +113,11 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
             {/* Copy bulk URLs */}
             <button
               onClick={handleCopyUrls}
-              className={`p-2 sm:px-3 sm:py-2 rounded-xl clean-interactive clean-tap flex items-center space-x-1.5 text-xs font-bold ${
-                copied ? 'text-emerald-500 bg-emerald-500/15' : 'text-emerald-500'
+              className={`p-2 sm:px-3 sm:py-2 rounded-xl clean-interactive clean-tap flex items-center space-x-1.5 text-xs font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
+                copied ? 'text-emerald-600 bg-emerald-500/15' : 'text-emerald-600 dark:text-emerald-400'
               }`}
               title="Salin Semua URL Terpilih"
+              aria-label="Salin Semua URL Terpilih"
             >
               {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
               <span className="hidden sm:inline">Salin URL</span>
@@ -124,8 +126,10 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
             {/* Share bulk URLs */}
             <button
               onClick={handleShareUrls}
-              className="p-2 sm:px-3 sm:py-2 rounded-xl clean-interactive clean-tap flex items-center space-x-1.5 text-xs font-bold text-blue-500"
+              className="p-2 sm:px-3 sm:py-2 rounded-xl clean-interactive clean-tap flex items-center space-x-1.5 text-xs font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+              style={{ color: 'var(--accent)' }}
               title="Bagikan Tautan"
+              aria-label="Bagikan Tautan"
             >
               <Share2 className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Bagikan</span>
@@ -134,8 +138,9 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
             {/* Bulk Delete */}
             <button
               onClick={() => setShowConfirm(true)}
-              className="p-2 sm:px-3 sm:py-2 rounded-xl clean-interactive clean-tap flex items-center space-x-1.5 text-xs font-bold text-rose-500 hover:bg-rose-500/10"
+              className="p-2 sm:px-3 sm:py-2 rounded-xl clean-interactive clean-tap flex items-center space-x-1.5 text-xs font-bold text-rose-500 hover:bg-rose-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
               title="Hapus Media Terpilih"
+              aria-label="Hapus Media Terpilih"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Hapus</span>
@@ -144,8 +149,9 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
             {/* Close / clear selection */}
             <button
               onClick={onClearSelection}
-              className="p-2 rounded-xl clean-interactive clean-tap opacity-50 hover:opacity-100"
+              className="p-2 rounded-xl clean-interactive clean-tap opacity-60 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
               aria-label="Batalkan Pilihan"
+              title="Batalkan Pilihan"
             >
               <X className="w-4 h-4" />
             </button>

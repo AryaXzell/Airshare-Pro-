@@ -183,12 +183,11 @@ export const MediaCard: React.FC<MediaCardProps> = ({
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
         transition={{ duration: 0.15 }}
-        className={`clean-surface rounded-[1.8rem] p-3 flex flex-col justify-between transition-all group relative border ${
-          isSelected ? 'ring-2 ring-blue-500 bg-blue-500/5' : ''
-        }`}
+        className="clean-surface rounded-[1.8rem] p-3 flex flex-col justify-between transition-all group relative border"
         style={{
           backgroundColor: isSelected ? 'var(--surface-elevated)' : 'var(--surface-primary)',
           borderColor: isSelected ? 'var(--accent)' : 'var(--border-subtle)',
+          boxShadow: isSelected ? '0 0 0 2px var(--accent)' : undefined,
         }}
       >
         {/* Selection Checkbox & Info trigger overlay */}
@@ -198,12 +197,13 @@ export const MediaCard: React.FC<MediaCardProps> = ({
               e.stopPropagation();
               onToggleSelect(item.id);
             }}
-            className={`p-1.5 rounded-xl backdrop-blur-md transition-all ${
+            className={`p-1.5 rounded-xl transition-all clean-tap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
               isSelected
-                ? 'bg-blue-500 text-white shadow-md'
-                : 'bg-black/40 text-white/80 hover:bg-black/60 hover:text-white'
+                ? 'text-white shadow-md'
+                : 'bg-black/50 text-white/90 hover:bg-black/70 hover:text-white'
             }`}
-            aria-label={isSelected ? 'Batalkan pilihan' : 'Pilih media'}
+            style={isSelected ? { backgroundColor: 'var(--accent)' } : undefined}
+            aria-label={isSelected ? `Batalkan pilihan ${displayName}` : `Pilih ${displayName}`}
           >
             {isSelected ? <CheckSquare className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
           </button>
@@ -214,7 +214,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({
 
           <div className="pt-2.5 px-0.5 overflow-hidden">
             <p
-              className="font-extrabold text-xs truncate leading-tight group-hover:text-blue-500 transition-colors"
+              className="font-extrabold text-xs truncate leading-tight transition-colors"
               style={{ color: 'var(--text-main)' }}
               title={displayName}
             >
@@ -227,15 +227,15 @@ export const MediaCard: React.FC<MediaCardProps> = ({
         </div>
 
         {/* Card Actions Bar */}
-        <div className="flex items-center justify-between pt-2.5 mt-2 border-t border-subtle">
+        <div className="flex items-center justify-between pt-2.5 mt-2 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
           <button
             onClick={(e) => {
               e.stopPropagation();
               onInspect(item);
             }}
-            className="p-1.5 rounded-lg clean-interactive clean-tap opacity-70 hover:opacity-100"
+            className="p-1.5 rounded-lg clean-interactive clean-tap opacity-70 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
             title="Detail Metadata"
-            aria-label="Detail Metadata"
+            aria-label={`Detail metadata ${displayName}`}
           >
             <Info className="w-3.5 h-3.5" />
           </button>
@@ -243,20 +243,23 @@ export const MediaCard: React.FC<MediaCardProps> = ({
           <div className="flex items-center space-x-1">
             <button
               onClick={handleShare}
-              className="p-1.5 rounded-lg clean-interactive clean-tap text-blue-500"
+              className="p-1.5 rounded-lg clean-interactive clean-tap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+              style={{ color: 'var(--accent)' }}
               title="Bagikan"
-              aria-label="Bagikan"
+              aria-label={`Bagikan ${displayName}`}
             >
               <Share2 className="w-3.5 h-3.5" />
             </button>
 
             <button
               onClick={handleCopy}
-              className={`p-1.5 rounded-lg clean-interactive clean-tap ${
-                copied ? 'text-emerald-500 bg-emerald-500/15' : 'text-emerald-500'
-              }`}
+              className="p-1.5 rounded-lg clean-interactive clean-tap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              style={{
+                color: copied ? '#059669' : 'var(--accent)',
+                backgroundColor: copied ? 'rgba(16, 185, 129, 0.15)' : undefined,
+              }}
               title="Salin Tautan"
-              aria-label="Salin Tautan"
+              aria-label={`Salin tautan ${displayName}`}
             >
               {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
             </button>
@@ -266,9 +269,9 @@ export const MediaCard: React.FC<MediaCardProps> = ({
                 e.stopPropagation();
                 onDelete(item.id);
               }}
-              className="p-1.5 rounded-lg clean-interactive clean-tap opacity-50 hover:opacity-100 hover:text-rose-500"
+              className="p-1.5 rounded-lg clean-interactive clean-tap opacity-60 hover:opacity-100 hover:text-rose-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
               title="Hapus dari Riwayat"
-              aria-label="Hapus dari Riwayat"
+              aria-label={`Hapus ${displayName} dari riwayat`}
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
@@ -286,12 +289,11 @@ export const MediaCard: React.FC<MediaCardProps> = ({
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.95 }}
       transition={{ duration: 0.15 }}
-      className={`clean-surface rounded-[1.6rem] sm:rounded-[1.8rem] p-3 sm:p-3.5 flex items-center justify-between space-x-3 transition-all group border ${
-        isSelected ? 'ring-2 ring-blue-500 bg-blue-500/5' : ''
-      }`}
+      className="clean-surface rounded-[1.6rem] sm:rounded-[1.8rem] p-3 sm:p-3.5 flex items-center justify-between space-x-3 transition-all group border"
       style={{
         backgroundColor: isSelected ? 'var(--surface-elevated)' : 'var(--surface-primary)',
         borderColor: isSelected ? 'var(--accent)' : 'var(--border-subtle)',
+        boxShadow: isSelected ? '0 0 0 2px var(--accent)' : undefined,
       }}
     >
       {/* Select Toggle */}
@@ -300,12 +302,9 @@ export const MediaCard: React.FC<MediaCardProps> = ({
           e.stopPropagation();
           onToggleSelect(item.id);
         }}
-        className={`p-1.5 rounded-xl clean-tap transition-all flex-shrink-0 ${
-          isSelected
-            ? 'text-blue-500'
-            : 'opacity-40 hover:opacity-100 text-gray-500'
-        }`}
-        aria-label={isSelected ? 'Batalkan pilihan' : 'Pilih media'}
+        className="p-1.5 rounded-xl clean-tap transition-all flex-shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+        style={{ color: isSelected ? 'var(--accent)' : 'var(--text-muted)' }}
+        aria-label={isSelected ? `Batalkan pilihan ${displayName}` : `Pilih ${displayName}`}
       >
         {isSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
       </button>
@@ -319,7 +318,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({
 
         <div className="overflow-hidden min-w-0">
           <p
-            className="font-extrabold text-xs sm:text-sm truncate leading-tight group-hover:text-blue-500 transition-colors"
+            className="font-extrabold text-xs sm:text-sm truncate leading-tight transition-colors"
             style={{ color: 'var(--text-main)' }}
           >
             {displayName}
@@ -337,29 +336,32 @@ export const MediaCard: React.FC<MediaCardProps> = ({
             e.stopPropagation();
             onInspect(item);
           }}
-          className="p-2 sm:p-2.5 rounded-full clean-interactive clean-tap opacity-60 hover:opacity-100"
+          className="p-2 sm:p-2.5 rounded-full clean-interactive clean-tap opacity-70 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
           title="Detail Metadata"
-          aria-label="Detail Metadata"
+          aria-label={`Detail metadata ${displayName}`}
         >
           <Info className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
         </button>
 
         <button
           onClick={() => onPreview(item)}
-          className="p-2 sm:p-2.5 rounded-full clean-interactive clean-tap text-blue-500"
+          className="p-2 sm:p-2.5 rounded-full clean-interactive clean-tap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+          style={{ color: 'var(--accent)' }}
           title="Pratinjau Media"
-          aria-label="Pratinjau Media"
+          aria-label={`Pratinjau ${displayName}`}
         >
           <Expand className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
         </button>
 
         <button
           onClick={handleCopy}
-          className={`p-2 sm:p-2.5 rounded-full clean-interactive clean-tap ${
-            copied ? 'text-emerald-500 bg-emerald-500/15' : 'text-emerald-500'
-          }`}
+          className="p-2 sm:p-2.5 rounded-full clean-interactive clean-tap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+          style={{
+            color: copied ? '#059669' : 'var(--accent)',
+            backgroundColor: copied ? 'rgba(16, 185, 129, 0.15)' : undefined,
+          }}
           title="Salin Tautan"
-          aria-label="Salin Tautan"
+          aria-label={`Salin tautan ${displayName}`}
         >
           {copied ? <Check className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> : <Copy className="w-3.5 h-3.5 sm:w-4 sm:h-4" />}
         </button>
@@ -369,9 +371,9 @@ export const MediaCard: React.FC<MediaCardProps> = ({
             e.stopPropagation();
             onDelete(item.id);
           }}
-          className="p-2 sm:p-2.5 rounded-full clean-interactive clean-tap opacity-50 hover:opacity-100 hover:text-rose-500"
+          className="p-2 sm:p-2.5 rounded-full clean-interactive clean-tap opacity-60 hover:opacity-100 hover:text-rose-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
           title="Hapus dari Riwayat"
-          aria-label="Hapus dari Riwayat"
+          aria-label={`Hapus ${displayName} dari riwayat`}
         >
           <Trash2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
         </button>

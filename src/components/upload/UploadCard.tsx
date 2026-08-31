@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, RefreshCw, X } from 'lucide-react';
 import { UploadZone } from './UploadZone';
 import { UploadProgress } from './UploadProgress';
 import { UploadSuccess } from './UploadSuccess';
@@ -27,11 +27,14 @@ export const UploadCard: React.FC<UploadCardProps> = ({
     eta,
     statusMessage,
     currentFile,
+    lastFailedFile,
     result,
     error,
     startUpload,
+    retryUpload,
     cancelUpload,
     resetUpload,
+    dismissError,
   } = uploadState;
 
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -43,6 +46,10 @@ export const UploadCard: React.FC<UploadCardProps> = ({
       startUpload(e.target.files[0]);
       e.target.value = '';
     }
+  };
+
+  const handleRetry = () => {
+    retryUpload();
   };
 
   return (
@@ -84,17 +91,41 @@ export const UploadCard: React.FC<UploadCardProps> = ({
         disabled={isUploading}
       />
 
-      {/* Error Notice */}
+      {/* Error Notice with Retry & Dismiss Recovery */}
       <AnimatePresence>
         {error && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
-            className="mt-4 p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-500 flex items-center space-x-2.5 text-xs font-semibold"
+            className="mt-4 p-3.5 sm:p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-semibold"
+            role="alert"
           >
-            <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-            <span className="flex-grow">{error}</span>
+            <div className="flex items-start sm:items-center space-x-2.5 min-w-0">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 sm:mt-0" />
+              <span className="leading-snug break-words">{error}</span>
+            </div>
+
+            <div className="flex items-center space-x-2 flex-shrink-0 self-end sm:self-auto">
+              {(lastFailedFile || currentFile) && (
+                <button
+                  onClick={handleRetry}
+                  className="px-3 py-1.5 rounded-xl bg-rose-500 text-white hover:bg-rose-600 transition-colors clean-tap flex items-center space-x-1.5 text-xs font-bold shadow-xs"
+                  aria-label="Coba unggah lagi berkas yang gagal"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Coba Lagi</span>
+                </button>
+              )}
+              <button
+                onClick={dismissError}
+                className="p-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 transition-colors clean-tap text-rose-600 dark:text-rose-400"
+                aria-label="Tutup pesan kesalahan"
+                title="Tutup"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

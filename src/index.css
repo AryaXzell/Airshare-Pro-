@@ -143,35 +143,35 @@
     color-scheme: dark;
   }
 
-  /* Theme: Rose Gold (Warm Light) */
+  /* Theme: Rose Gold (White + Rose Gold Signature Identity) */
   .theme-rosegold {
-    --bg-primary: #fbf5f6;
-    --surface-primary: rgba(255, 248, 250, 0.94);
-    --surface-secondary: rgba(244, 63, 94, 0.035);
+    --bg-primary: #fdf9fa;
+    --surface-primary: rgba(255, 255, 255, 0.95);
+    --surface-secondary: rgba(244, 63, 94, 0.04);
     --surface-elevated: #ffffff;
-    --surface-translucent: rgba(255, 248, 250, 0.88);
+    --surface-translucent: rgba(255, 255, 255, 0.90);
     --surface-hover: rgba(244, 63, 94, 0.05);
     --surface-active: rgba(244, 63, 94, 0.10);
 
-    --border-subtle: rgba(244, 63, 94, 0.11);
-    --border-subtle-hover: rgba(244, 63, 94, 0.22);
-    --border-focus: rgba(244, 63, 94, 0.45);
+    --border-subtle: rgba(225, 29, 72, 0.10);
+    --border-subtle-hover: rgba(225, 29, 72, 0.22);
+    --border-focus: rgba(225, 29, 72, 0.45);
 
-    --text-main: #430c1a;
-    --text-muted: #8d4757;
+    --text-main: #2b1118;
+    --text-muted: #7d4854;
 
-    --accent: #f43f5e;
-    --accent-hover: #e11d48;
+    --accent: #e11d48;
+    --accent-hover: #be123c;
     --accent-text: #ffffff;
-    --accent-soft: rgba(244, 63, 94, 0.10);
-    --accent-soft-hover: rgba(244, 63, 94, 0.16);
+    --accent-soft: rgba(225, 29, 72, 0.09);
+    --accent-soft-hover: rgba(225, 29, 72, 0.16);
 
-    --slider-track: rgba(244, 63, 94, 0.10);
-    --slider-fill: #f43f5e;
+    --slider-track: rgba(225, 29, 72, 0.10);
+    --slider-fill: #e11d48;
 
-    --shadow-subtle: 0 2px 12px -2px rgba(136, 19, 55, 0.05), 0 1px 3px rgba(136, 19, 55, 0.03);
-    --shadow-elevated: 0 12px 32px -4px rgba(136, 19, 55, 0.08), 0 4px 12px -2px rgba(136, 19, 55, 0.04);
-    --shadow-modal: 0 24px 48px -8px rgba(136, 19, 55, 0.12), 0 8px 16px -4px rgba(136, 19, 55, 0.04);
+    --shadow-subtle: 0 2px 12px -2px rgba(190, 18, 60, 0.05), 0 1px 3px rgba(190, 18, 60, 0.03);
+    --shadow-elevated: 0 12px 32px -4px rgba(190, 18, 60, 0.08), 0 4px 12px -2px rgba(190, 18, 60, 0.04);
+    --shadow-modal: 0 24px 48px -8px rgba(190, 18, 60, 0.12), 0 8px 16px -4px rgba(190, 18, 60, 0.04);
 
     color-scheme: light;
   }

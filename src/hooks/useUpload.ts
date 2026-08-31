@@ -15,11 +15,14 @@ export interface UseUploadReturn {
   eta: string;
   statusMessage: string;
   currentFile: File | null;
+  lastFailedFile: File | null;
   result: MediaItem | null;
   error: string | null;
   startUpload: (file: File) => Promise<MediaItem | null>;
+  retryUpload: () => Promise<MediaItem | null>;
   cancelUpload: () => void;
   resetUpload: () => void;
+  dismissError: () => void;
 }
 
 export function useUpload(onSuccess?: (item: MediaItem) => void): UseUploadReturn {
@@ -29,6 +32,7 @@ export function useUpload(onSuccess?: (item: MediaItem) => void): UseUploadRetur
   const [eta, setEta] = useState('—');
   const [statusMessage, setStatusMessage] = useState('Mempersiapkan berkas...');
   const [currentFile, setCurrentFile] = useState<File | null>(null);
+  const [lastFailedFile, setLastFailedFile] = useState<File | null>(null);
   const [result, setResult] = useState<MediaItem | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -51,21 +55,34 @@ export function useUpload(onSuccess?: (item: MediaItem) => void): UseUploadRetur
     setEta('—');
     setStatusMessage('');
     setCurrentFile(null);
+    setLastFailedFile(null);
     setResult(null);
     setError(null);
   }, [cancelUpload]);
+
+  const dismissError = useCallback(() => {
+    setError(null);
+    setLastFailedFile(null);
+  }, []);
 
   const startUpload = useCallback(
     async (file: File): Promise<MediaItem | null> => {
       // Validate file before initiating network request
       const validation = validateMediaFile(file);
       if (!validation.valid) {
+        setLastFailedFile(file);
         setError(validation.error || 'Berkas tidak valid');
         return null;
       }
 
-      resetUpload();
+      // Reset state but keep track of active upload
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
       setCurrentFile(file);
+      setLastFailedFile(null);
+      setResult(null);
       setIsUploading(true);
       setError(null);
       setProgress(0);
@@ -137,6 +154,7 @@ export function useUpload(onSuccess?: (item: MediaItem) => void): UseUploadRetur
             // ignore
           }
         }
+        setLastFailedFile(file);
         if (err instanceof DOMException && err.name === 'AbortError') {
           setError('Unggahan dibatalkan.');
         } else {
@@ -150,8 +168,18 @@ export function useUpload(onSuccess?: (item: MediaItem) => void): UseUploadRetur
         return null;
       }
     },
-    [onSuccess, resetUpload]
+    [onSuccess]
   );
+
+  const retryUpload = useCallback(async (): Promise<MediaItem | null> => {
+    if (lastFailedFile) {
+      return startUpload(lastFailedFile);
+    }
+    if (currentFile) {
+      return startUpload(currentFile);
+    }
+    return null;
+  }, [currentFile, lastFailedFile, startUpload]);
 
   return {
     isUploading,
@@ -160,10 +188,13 @@ export function useUpload(onSuccess?: (item: MediaItem) => void): UseUploadRetur
     eta,
     statusMessage,
     currentFile,
+    lastFailedFile,
     result,
     error,
     startUpload,
+    retryUpload,
     cancelUpload,
     resetUpload,
+    dismissError,
   };
 }

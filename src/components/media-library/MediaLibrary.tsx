@@ -126,12 +126,13 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
                   onSelectAllVisible(visibleIds);
                 }
               }}
-              className="text-xs font-bold transition-colors clean-tap flex items-center space-x-1 px-2.5 py-1 rounded-lg clean-interactive opacity-75 hover:opacity-100"
+              className="text-xs font-bold transition-colors clean-tap flex items-center space-x-1 px-2.5 py-1 rounded-lg clean-interactive opacity-80 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
               style={{ color: 'var(--text-main)' }}
               title={allVisibleSelected ? 'Batalkan pilihan semua' : 'Pilih semua terlihat'}
+              aria-label={allVisibleSelected ? 'Batalkan pilihan semua media terlihat' : 'Pilih semua media terlihat'}
             >
               {allVisibleSelected ? (
-                <CheckSquare className="w-3.5 h-3.5 text-blue-500" />
+                <CheckSquare className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />
               ) : (
                 <Square className="w-3.5 h-3.5" />
               )}
@@ -142,7 +143,8 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
 
             <button
               onClick={() => setShowClearConfirm(true)}
-              className="text-xs font-bold text-rose-500 hover:text-rose-600 transition-colors clean-tap flex items-center space-x-1.5 px-2.5 py-1 rounded-lg clean-interactive"
+              className="text-xs font-bold text-rose-500 hover:text-rose-600 transition-colors clean-tap flex items-center space-x-1.5 px-2.5 py-1 rounded-lg clean-interactive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+              aria-label="Bersihkan semua riwayat media"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span>Bersihkan</span>
@@ -225,7 +227,8 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
               onFilterChange('all');
               onSearchChange('');
             }}
-            className="mt-3 text-xs font-bold underline text-blue-500 clean-tap"
+            className="mt-3 text-xs font-bold underline clean-tap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+            style={{ color: 'var(--accent)' }}
           >
             Reset Filter & Pencarian
           </button>

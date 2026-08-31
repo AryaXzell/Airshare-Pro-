@@ -72,24 +72,30 @@ export const MediaFilter: React.FC<MediaFilterProps> = ({
             backgroundColor: 'var(--surface-secondary)',
             borderColor: 'var(--border-subtle)',
           }}
+          role="group"
+          aria-label="Pilihan mode tampilan"
         >
           <button
             onClick={() => onViewModeChange('list')}
-            className={`p-2 rounded-xl clean-tap transition-colors ${
-              viewMode === 'list' ? 'bg-black/10 dark:bg-white/15 text-blue-500 shadow-xs' : 'opacity-50 hover:opacity-100'
+            className={`p-2 rounded-xl clean-tap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
+              viewMode === 'list' ? 'bg-black/10 dark:bg-white/15 shadow-xs font-bold' : 'opacity-60 hover:opacity-100'
             }`}
-            title="Tampilan List"
-            aria-label="Tampilan List"
+            style={viewMode === 'list' ? { color: 'var(--accent)' } : { color: 'var(--text-muted)' }}
+            title="Tampilan Daftar (List)"
+            aria-label="Tampilan Daftar"
+            aria-pressed={viewMode === 'list'}
           >
             <List className="w-4 h-4" />
           </button>
           <button
             onClick={() => onViewModeChange('grid')}
-            className={`p-2 rounded-xl clean-tap transition-colors ${
-              viewMode === 'grid' ? 'bg-black/10 dark:bg-white/15 text-blue-500 shadow-xs' : 'opacity-50 hover:opacity-100'
+            className={`p-2 rounded-xl clean-tap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
+              viewMode === 'grid' ? 'bg-black/10 dark:bg-white/15 shadow-xs font-bold' : 'opacity-60 hover:opacity-100'
             }`}
-            title="Tampilan Grid"
-            aria-label="Tampilan Grid"
+            style={viewMode === 'grid' ? { color: 'var(--accent)' } : { color: 'var(--text-muted)' }}
+            title="Tampilan Kisi (Grid)"
+            aria-label="Tampilan Kisi"
+            aria-pressed={viewMode === 'grid'}
           >
             <LayoutGrid className="w-4 h-4" />
           </button>

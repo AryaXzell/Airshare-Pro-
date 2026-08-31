@@ -84,23 +84,50 @@ const standardRateLimiter = rateLimitMiddleware({
   keyPrefix: 'media_general_ip',
 });
 
+// Helper for 405 Method Not Allowed responses
+function methodNotAllowedHandler(allowedMethods: string[]) {
+  return (req: Request, res: Response) => {
+    res.setHeader('Allow', allowedMethods.join(', '));
+    const errorResp: ApiErrorResponse = {
+      success: false,
+      error: {
+        code: 'METHOD_NOT_ALLOWED',
+        message: `Metode ${req.method} tidak diizinkan untuk endpoint ini. Gunakan: ${allowedMethods.join(', ')}.`,
+      },
+    };
+    res.status(405).json(errorResp);
+  };
+}
+
 // Media Routes
-router.get('/config', standardRateLimiter, mediaController.getConfig);
+router
+  .route('/config')
+  .get(standardRateLimiter, mediaController.getConfig)
+  .all(methodNotAllowedHandler(['GET']));
 
-router.post(
-  '/upload',
-  uploadRateLimiter,
-  (req, res, next) => {
-    upload.single('file')(req, res, (err) => {
-      handleMulterErrors(err, req, res, next);
-    });
-  },
-  mediaController.uploadMedia
-);
+router
+  .route('/upload')
+  .post(
+    uploadRateLimiter,
+    (req, res, next) => {
+      upload.single('file')(req, res, (err) => {
+        handleMulterErrors(err, req, res, next);
+      });
+    },
+    mediaController.uploadMedia
+  )
+  .all(methodNotAllowedHandler(['POST']));
 
-router.get('/', standardRateLimiter, mediaController.listMedia);
-router.get('/:id', standardRateLimiter, mediaController.getMedia);
-router.delete('/:id', standardRateLimiter, mediaController.deleteMedia);
-router.delete('/', standardRateLimiter, mediaController.clearAllMedia);
+router
+  .route('/:id')
+  .get(standardRateLimiter, mediaController.getMedia)
+  .delete(standardRateLimiter, mediaController.deleteMedia)
+  .all(methodNotAllowedHandler(['GET', 'DELETE']));
+
+router
+  .route('/')
+  .get(standardRateLimiter, mediaController.listMedia)
+  .delete(standardRateLimiter, mediaController.clearAllMedia)
+  .all(methodNotAllowedHandler(['GET', 'DELETE']));
 
 export { router as mediaRouter };

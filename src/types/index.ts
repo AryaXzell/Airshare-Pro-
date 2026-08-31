@@ -135,5 +135,5 @@ export interface ToastInfo {
   id: string;
   message: string;
   description?: string;
-  type?: 'success' | 'error' | 'info';
+  type?: 'success' | 'error' | 'warning' | 'info';
 }

@@ -70,12 +70,27 @@ graph TD
 - **Client Metadata Extraction**: `mediaMetadata.ts` extracts video aspect ratios, image dimensions, and audio ID3 metadata (artist, title, album, embedded APIC album art) prior to or during upload.
 - **Media Library Synchronization**: Multi-layer state management combining server repository data with local client caching for offline resilience and immediate UI updates.
 
-### 2.2 Server & Security Layer (Express + Node.js)
-- **Entry Point**: `server.ts` binding to port 3000 (`0.0.0.0`).
-- **Request Identification**: Every incoming request is tagged with a unique `req_<timestamp>_<random>` ID passed via `X-Request-Id` response header.
-- **Content Security Policy (CSP)**: Allows strict self-origin resources, Catbox CDN endpoints (`files.catbox.moe`), and Google Fonts CDN while forbidding dangerous object or frame embeddings.
-- **Sliding-Window Rate Limiter**: IP-based rate limiting on upload and query endpoints to defend against automated resource exhaustion.
-- **Authoritative Validation**: Validates file sizes against `MAX_UPLOAD_SIZE` (default: 200MB), strips dangerous characters/directory traversal patterns from filenames, and verifies binary magic bytes.
+### 2.2 Dual-Entrypoint Server Architecture (Express + Vercel Serverless)
+
+AirShare Pro cleanly decouples the Express application factory from the runtime runner:
+
+- **Express Application Factory (`src/server/app.ts`)**:
+  - Initializes Express instance, attaches structured request logging and `X-Request-Id` tracking.
+  - Mounts security headers (CSP, nosniff, Referrer-Policy) and sliding-window rate limiters.
+  - Registers the media API router under both `/api/media` and `/media`.
+  - Implements uniform structured JSON 404 handler and central error middleware.
+  - **Does NOT call `app.listen()`**, making it purely exportable and reusable.
+
+- **Local Development Runner (`server.ts`)**:
+  - Imports `createExpressApp()` from `src/server/app.ts`.
+  - Integrates Vite development middleware for instant HMR in development (`NODE_ENV !== 'production'`) or static asset serving in standalone production.
+  - Binds persistent listener via `app.listen(3000, '0.0.0.0')`.
+
+- **Vercel Serverless Adapter (`api/index.ts`)**:
+  - Acts as the serverless entrypoint for Vercel Functions.
+  - Imports `app` from `src/server/app.ts` and exports a lightweight handler wrapping the Express application.
+  - Configures `export const config = { api: { bodyParser: false } }` to ensure raw multipart streams pass directly to Multer without upstream buffer truncation.
+  - Routes matching `/api/(.*)` are mapped to this handler via `vercel.json`.
 
 ### 2.3 Storage Provider Abstraction
 ```typescript
