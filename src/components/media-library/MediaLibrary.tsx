@@ -27,10 +27,17 @@ interface MediaLibraryProps {
   onSelectAllVisible: (ids: string[]) => void;
   onClearSelection: () => void;
   onPreviewItem: (item: MediaItem) => void;
-  onDeleteItem: (id: string) => void;
-  onDeleteMultiple: (ids: string[]) => void;
-  onClearAll: () => void;
-  onToast: (msg: string) => void;
+  onDeleteItem: (id: string) => Promise<{ success: boolean }> | void;
+  onDeleteMultiple: (ids: string[]) => Promise<{ succeeded: number; failed: number }> | void;
+  onClearAll: () => Promise<{ succeeded: number; failed: number }> | void;
+  onToast: (
+    msg: string,
+    options?: {
+      description?: string;
+      type?: 'success' | 'error' | 'warning' | 'info';
+      duration?: number;
+    }
+  ) => void;
 }
 
 export const MediaLibrary: React.FC<MediaLibraryProps> = ({
@@ -65,24 +72,65 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
   const allVisibleSelected =
     visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
 
-  const handleConfirmClear = () => {
-    onClearAll();
+  const handleConfirmClear = async () => {
     setShowClearConfirm(false);
-    onToast('Sesi riwayat media dibersihkan.');
-  };
-
-  const handleConfirmSingleDelete = () => {
-    if (itemToDelete) {
-      onDeleteItem(itemToDelete);
-      setItemToDelete(null);
-      onToast('Berkas dihapus dari riwayat.');
+    const result = await onClearAll();
+    if (result && result.failed > 0 && result.succeeded === 0) {
+      onToast('Gagal membersihkan riwayat dari server.', {
+        type: 'error',
+        description: 'Terjadi kesalahan saat menghubungi server. Silakan coba lagi.',
+      });
+    } else {
+      onToast('Semua riwayat berkas dibersihkan dari server.', {
+        type: 'success',
+      });
     }
   };
 
-  const handleDeleteSelected = () => {
+  const handleConfirmSingleDelete = async () => {
+    if (itemToDelete) {
+      const id = itemToDelete;
+      setItemToDelete(null);
+      const result = await onDeleteItem(id);
+      if (result && !result.success) {
+        onToast('Gagal menghapus berkas dari server.', {
+          type: 'error',
+          description: 'Periksa koneksi internet Anda dan coba lagi.',
+        });
+      } else {
+        onToast('Berkas berhasil dihapus dari riwayat.', {
+          type: 'success',
+        });
+      }
+    }
+  };
+
+  const handleDeleteSelected = async () => {
     const ids = Array.from(selectedIds);
-    onDeleteMultiple(ids);
-    onToast(`${ids.length} berkas dihapus dari riwayat.`);
+    if (ids.length === 0) return;
+    const result = await onDeleteMultiple(ids);
+    if (result) {
+      if (result.failed === 0) {
+        onToast(`${result.succeeded} berkas berhasil dihapus dari riwayat.`, {
+          type: 'success',
+        });
+      } else if (result.succeeded > 0) {
+        onToast(
+          `${result.succeeded} berkas dihapus, tetapi ${result.failed} berkas gagal dihapus dari server.`,
+          {
+            type: 'warning',
+            description: 'Item yang gagal tetap berada di daftar. Coba ulangi penghapusan.',
+          }
+        );
+      } else {
+        onToast(`Gagal menghapus ${result.failed} berkas dari server.`, {
+          type: 'error',
+          description: 'Periksa koneksi internet Anda dan coba lagi.',
+        });
+      }
+    } else {
+      onToast(`${ids.length} berkas dihapus dari riwayat.`);
+    }
   };
 
   const getSelectedUrls = () => {
@@ -312,7 +360,7 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
       <ConfirmDialog
         isOpen={showClearConfirm}
         title="Bersihkan Semua Riwayat?"
-        description="Semua catatan riwayat berkas lokal akan dihapus. Berkas yang tersimpan di Catbox tetap dapat diakses via tautan aslinya."
+        description="Semua catatan riwayat berkas akan dihapus dari server aplikasi. Berkas yang tersimpan di Catbox tetap dapat diakses via tautan aslinya."
         confirmLabel="Ya, Bersihkan"
         cancelLabel="Batal"
         isDestructive={true}
@@ -324,7 +372,7 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
       <ConfirmDialog
         isOpen={itemToDelete !== null}
         title="Hapus Media dari Riwayat?"
-        description="Tautan ini akan dihapus dari riwayat perangkat lokal Anda."
+        description="Tautan ini akan dihapus dari riwayat server dan daftar media Anda."
         confirmLabel="Hapus"
         cancelLabel="Batal"
         isDestructive={true}

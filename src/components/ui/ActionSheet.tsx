@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Image, Video, Music, ChevronRight, X } from 'lucide-react';
 import { MediaType } from '../../types';
@@ -14,10 +14,55 @@ export const ActionSheet: React.FC<ActionSheetProps> = ({
   onClose,
   onSelectType,
 }) => {
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      triggerRef.current = document.activeElement as HTMLElement;
+      // Focus first interactive item inside sheet
+      const timer = setTimeout(() => {
+        const focusable = sheetRef.current?.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusable && focusable.length > 0) {
+          focusable[0].focus();
+        }
+      }, 50);
+      return () => clearTimeout(timer);
+    } else {
+      triggerRef.current?.focus();
+    }
+  }, [isOpen]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isOpen) {
+      if (!isOpen) return;
+
+      if (e.key === 'Escape') {
         onClose();
+        return;
+      }
+
+      if (e.key === 'Tab' && sheetRef.current) {
+        const focusables = Array.from(
+          sheetRef.current.querySelectorAll<HTMLElement>(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+          )
+        ).filter((el) => !el.hasAttribute('disabled'));
+
+        if (focusables.length === 0) return;
+
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -27,7 +72,12 @@ export const ActionSheet: React.FC<ActionSheetProps> = ({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="actionsheet-title"
+        >
           {/* Backdrop */}
           <motion.div
             initial={{ opacity: 0 }}
@@ -40,6 +90,7 @@ export const ActionSheet: React.FC<ActionSheetProps> = ({
 
           {/* Sheet Container */}
           <motion.div
+            ref={sheetRef}
             initial={{ y: '100%', opacity: 0.8 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: '100%', opacity: 0 }}
@@ -58,6 +109,7 @@ export const ActionSheet: React.FC<ActionSheetProps> = ({
 
             <div className="flex items-center justify-between mb-3.5">
               <p
+                id="actionsheet-title"
                 className="text-xs font-bold uppercase tracking-wider opacity-65"
                 style={{ color: 'var(--text-muted)' }}
               >

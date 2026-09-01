@@ -42,6 +42,11 @@ export const UploadCard: React.FC<UploadCardProps> = ({
   const audioInputRef = useRef<HTMLInputElement>(null);
 
   const handleSpecificFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isUploading) {
+      onToast('Proses unggahan lain sedang berjalan. Harap tunggu hingga selesai.');
+      e.target.value = '';
+      return;
+    }
     if (e.target.files && e.target.files.length > 0) {
       startUpload(e.target.files[0]);
       e.target.value = '';
@@ -66,6 +71,7 @@ export const UploadCard: React.FC<UploadCardProps> = ({
         ref={imageInputRef}
         type="file"
         accept="image/*"
+        disabled={isUploading}
         onChange={handleSpecificFileSelected}
         className="hidden"
       />
@@ -73,6 +79,7 @@ export const UploadCard: React.FC<UploadCardProps> = ({
         ref={videoInputRef}
         type="file"
         accept="video/*"
+        disabled={isUploading}
         onChange={handleSpecificFileSelected}
         className="hidden"
       />
@@ -80,6 +87,7 @@ export const UploadCard: React.FC<UploadCardProps> = ({
         ref={audioInputRef}
         type="file"
         accept="audio/*"
+        disabled={isUploading}
         onChange={handleSpecificFileSelected}
         className="hidden"
       />

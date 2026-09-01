@@ -1,13 +1,7 @@
 import { MediaType } from '../../types';
+import { BANNED_EXTENSIONS } from '../../shared/banned-extensions';
 
-// Banned executable, script, and system extensions
-export const BANNED_EXTENSIONS = new Set([
-  'exe', 'bat', 'cmd', 'sh', 'bash', 'zsh', 'ps1', 'psm1', 'vbs', 'vbe',
-  'js', 'mjs', 'cjs', 'ts', 'jsx', 'tsx', 'php', 'phtml', 'php3', 'php4', 'php5', 'phps',
-  'py', 'pyc', 'pyd', 'pyo', 'pyw', 'rb', 'pl', 'cgi', 'jar', 'war', 'ear',
-  'apk', 'aab', 'msi', 'msp', 'mst', 'com', 'gadget', 'wsf', 'wsh', 'scr',
-  'hta', 'cpl', 'msc', 'inf', 'reg', 'dll', 'so', 'dylib', 'bin', 'elf'
-]);
+export { BANNED_EXTENSIONS };
 
 export interface ValidationResult {
   valid: boolean;

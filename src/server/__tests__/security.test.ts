@@ -105,9 +105,15 @@ async function runSecurityTests() {
 
   // 7. Catbox Credential Leak Prevention
   process.env.CATBOX_USERHASH = 'super_secret_userhash_token_12345';
-  const provider = new CatboxStorageProvider({ timeoutMs: 1000, maxRetries: 0 });
+  const originalFetch = globalThis.fetch;
   try {
-    // Attempt deletion with dummy file on live Catbox
+    globalThis.fetch = async () => {
+      // Simulate Catbox server returning an error text without leaking credentials
+      return new Response('Error: File not found or invalid userhash', {
+        status: 200,
+      });
+    };
+    const provider = new CatboxStorageProvider({ timeoutMs: 1000, maxRetries: 0 });
     const delResult = await provider.delete('test_nonexistent_file_9999.png');
     assert(
       !delResult.message?.includes('super_secret_userhash_token_12345'),
@@ -118,9 +124,124 @@ async function runSecurityTests() {
       !err.message.includes('super_secret_userhash_token_12345'),
       'Catbox exception never leaks CATBOX_USERHASH'
     );
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 
-  // 8. HTTP Endpoint Integration & Method Validation (405, 404, Headers)
+  // 8. Repository Mandatory Session Scoping Validation
+  const { DevelopmentMediaRepository } = await import('../repository/development-repository');
+  const { UpstashMediaRepository } = await import('../repository/upstash-repository');
+  const { getMediaRepository } = await import('../repository/media-repository');
+
+  const devRepo = new DevelopmentMediaRepository();
+  const mockRedis: any = {
+    pipeline: () => ({
+      set: () => {},
+      zadd: () => {},
+      expire: () => {},
+      del: () => {},
+      zrem: () => {},
+      exec: async () => [1],
+    }),
+    zrange: async () => [],
+    mget: async () => [],
+    get: async () => null,
+  };
+  const upstashRepo = new UpstashMediaRepository(mockRedis);
+
+  const sampleMedia: any = {
+    id: 'test_id_1',
+    name: 'test.png',
+    originalFileName: 'test.png',
+    size: 100,
+    formattedSize: '100 B',
+    type: 'image',
+    mimeType: 'image/png',
+    shareUrl: 'https://files.catbox.moe/test.png',
+    provider: 'catbox',
+    createdAt: Date.now(),
+  };
+
+  // Test 8.1: Dev repository throws if sessionId is empty
+  let devListErr = false;
+  try {
+    await devRepo.list('' as any);
+  } catch (e: any) {
+    devListErr = e.message.includes('sessionId wajib diisi');
+  }
+  assert(devListErr, 'DevelopmentMediaRepository.list rejects empty sessionId with Error');
+
+  let devGetErr = false;
+  try {
+    await devRepo.get('test_id_1', '' as any);
+  } catch (e: any) {
+    devGetErr = e.message.includes('sessionId wajib diisi');
+  }
+  assert(devGetErr, 'DevelopmentMediaRepository.get rejects empty sessionId with Error');
+
+  let devDeleteErr = false;
+  try {
+    await devRepo.delete('test_id_1', undefined as any);
+  } catch (e: any) {
+    devDeleteErr = e.message.includes('sessionId wajib diisi');
+  }
+  assert(devDeleteErr, 'DevelopmentMediaRepository.delete rejects undefined sessionId with Error');
+
+  let devClearErr = false;
+  try {
+    await devRepo.clearAll(null as any);
+  } catch (e: any) {
+    devClearErr = e.message.includes('sessionId wajib diisi');
+  }
+  assert(devClearErr, 'DevelopmentMediaRepository.clearAll rejects null sessionId with Error');
+
+  let devCreateErr = false;
+  try {
+    await devRepo.create(sampleMedia);
+  } catch (e: any) {
+    devCreateErr = e.message.includes('sessionId wajib diisi');
+  }
+  assert(devCreateErr, 'DevelopmentMediaRepository.create rejects item without sessionId');
+
+  // Test 8.2: Upstash repository throws if sessionId is empty
+  let upstashListErr = false;
+  try {
+    await upstashRepo.list('' as any);
+  } catch (e: any) {
+    upstashListErr = e.message.includes('sessionId wajib diisi');
+  }
+  assert(upstashListErr, 'UpstashMediaRepository.list rejects empty sessionId with Error');
+
+  let upstashCreateErr = false;
+  try {
+    await upstashRepo.create(sampleMedia);
+  } catch (e: any) {
+    upstashCreateErr = e.message.includes('sessionId wajib diisi');
+  }
+  assert(upstashCreateErr, 'UpstashMediaRepository.create rejects item without sessionId');
+
+  // Test 8.3: Dynamic Repository Selection
+  delete process.env.UPSTASH_REDIS_REST_URL;
+  delete process.env.UPSTASH_REDIS_REST_TOKEN;
+  const repoWithoutRedis = getMediaRepository();
+  assert(
+    repoWithoutRedis instanceof DevelopmentMediaRepository,
+    'getMediaRepository returns DevelopmentMediaRepository when Upstash env is missing'
+  );
+
+  process.env.UPSTASH_REDIS_REST_URL = 'https://mock-redis.upstash.io';
+  process.env.UPSTASH_REDIS_REST_TOKEN = 'mock_token_123';
+  const repoWithRedis = getMediaRepository();
+  assert(
+    repoWithRedis instanceof UpstashMediaRepository,
+    'getMediaRepository dynamically switches to UpstashMediaRepository when Upstash env is provided'
+  );
+
+  // Clean up env
+  delete process.env.UPSTASH_REDIS_REST_URL;
+  delete process.env.UPSTASH_REDIS_REST_TOKEN;
+
+  // 9. HTTP Endpoint Integration & Method Validation (405, 404, Headers, Production CSP)
   const { createExpressApp } = await import('../app');
   const app = createExpressApp();
   const server = app.listen(0);
@@ -129,7 +250,7 @@ async function runSecurityTests() {
   const baseUrl = `http://127.0.0.1:${port}`;
 
   try {
-    // Test 8.1: GET /api/health -> 200 & Security Headers
+    // Test 9.1: GET /api/health -> 200 & Security Headers
     const healthRes = await fetch(`${baseUrl}/api/health`);
     const healthJson = await healthRes.json();
     assert(
@@ -140,7 +261,7 @@ async function runSecurityTests() {
       'GET /api/health returns 200 with nosniff and X-Request-ID headers'
     );
 
-    // Test 8.2: POST /api/health -> 405 Method Not Allowed
+    // Test 9.2: POST /api/health -> 405 Method Not Allowed
     const healthPostRes = await fetch(`${baseUrl}/api/health`, { method: 'POST' });
     const healthPostJson = await healthPostRes.json();
     assert(
@@ -150,7 +271,7 @@ async function runSecurityTests() {
       'POST /api/health returns 405 Method Not Allowed with Allow: GET'
     );
 
-    // Test 8.3: POST /api/media/config -> 405 Method Not Allowed
+    // Test 9.3: POST /api/media/config -> 405 Method Not Allowed
     const configPostRes = await fetch(`${baseUrl}/api/media/config`, { method: 'POST' });
     const configPostJson = await configPostRes.json();
     assert(
@@ -160,7 +281,7 @@ async function runSecurityTests() {
       'POST /api/media/config returns 405 Method Not Allowed with Allow: GET'
     );
 
-    // Test 8.4: GET /api/media/upload -> 405 Method Not Allowed
+    // Test 9.4: GET /api/media/upload -> 405 Method Not Allowed
     const uploadGetRes = await fetch(`${baseUrl}/api/media/upload`, { method: 'GET' });
     const uploadGetJson = await uploadGetRes.json();
     assert(
@@ -170,7 +291,7 @@ async function runSecurityTests() {
       'GET /api/media/upload returns 405 Method Not Allowed with Allow: POST'
     );
 
-    // Test 8.5: Unknown route /api/unknown -> 404 NOT_FOUND
+    // Test 9.5: Unknown route /api/unknown -> 404 NOT_FOUND
     const notFoundRes = await fetch(`${baseUrl}/api/unknown_route_999`);
     const notFoundJson = await notFoundRes.json();
     assert(
@@ -178,6 +299,25 @@ async function runSecurityTests() {
       notFoundJson.error?.code === 'NOT_FOUND',
       'Unknown API route returns structured 404 NOT_FOUND'
     );
+
+    // Test 9.6: Production CSP frame-ancestors is strictly 'self'
+    const prevEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    const prodApp = createExpressApp();
+    const prodServer = prodApp.listen(0);
+    const prodAddress = prodServer.address();
+    const prodPort = typeof prodAddress === 'object' && prodAddress ? prodAddress.port : 0;
+    try {
+      const prodRes = await fetch(`http://127.0.0.1:${prodPort}/api/health`);
+      const prodCsp = prodRes.headers.get('content-security-policy') || '';
+      assert(
+        prodCsp.includes("frame-ancestors 'self'") && !prodCsp.includes('googleusercontent.com'),
+        "Production CSP enforces strictly frame-ancestors 'self' without third-party Google domains"
+      );
+    } finally {
+      prodServer.close();
+      process.env.NODE_ENV = prevEnv;
+    }
   } finally {
     server.close();
   }

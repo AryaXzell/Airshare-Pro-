@@ -17,6 +17,7 @@ import { AudioVisualizer } from './AudioVisualizer';
 import { MediaItem } from '../../types';
 import { DEFAULT_AUDIO_COVER } from '../../lib/constants';
 import { copyToClipboard, formatDuration } from '../../lib/utils';
+import { downloadMediaFile } from '../../lib/download-helper';
 
 interface CustomAudioPlayerProps {
   item: MediaItem;
@@ -37,11 +38,141 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const coverImage = item.audioMeta?.coverUrl || DEFAULT_AUDIO_COVER;
   const songTitle =
     item.audioMeta?.title || item.name.replace(/\.[^/.]+$/, '');
   const songArtist = item.audioMeta?.artist || 'Artis Tidak Dikenal';
+  const songAlbum = item.audioMeta?.album || 'AirShare Pro';
+
+  // Toggle play/pause handler
+  const togglePlay = useCallback(() => {
+    if (!audioRef.current) return;
+    if (audioRef.current.paused) {
+      audioRef.current.play().catch(console.warn);
+      setIsPlaying(true);
+    } else {
+      audioRef.current.pause();
+      setIsPlaying(false);
+    }
+  }, []);
+
+  const handleRewind = useCallback(() => {
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 10);
+  }, []);
+
+  const handleForward = useCallback(() => {
+    if (!audioRef.current) return;
+    const dur = isFinite(audioRef.current.duration) ? audioRef.current.duration : duration;
+    audioRef.current.currentTime = Math.min(dur || 999999, audioRef.current.currentTime + 10);
+  }, [duration]);
+
+  // MediaSession API Integration (Lock Screen & Hardware Key Controls)
+  useEffect(() => {
+    if ('mediaSession' in navigator && typeof window.MediaMetadata !== 'undefined') {
+      try {
+        navigator.mediaSession.metadata = new window.MediaMetadata({
+          title: songTitle,
+          artist: songArtist,
+          album: songAlbum,
+          artwork: [
+            {
+              src: coverImage,
+              sizes: '512x512',
+              type: 'image/jpeg',
+            },
+          ],
+        });
+
+        navigator.mediaSession.setActionHandler('play', () => {
+          if (audioRef.current && audioRef.current.paused) {
+            audioRef.current.play().catch(console.warn);
+            setIsPlaying(true);
+          }
+        });
+
+        navigator.mediaSession.setActionHandler('pause', () => {
+          if (audioRef.current && !audioRef.current.paused) {
+            audioRef.current.pause();
+            setIsPlaying(false);
+          }
+        });
+
+        navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+          if (!audioRef.current) return;
+          const seekOffset = details.seekOffset || 10;
+          audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - seekOffset);
+        });
+
+        navigator.mediaSession.setActionHandler('seekforward', (details) => {
+          if (!audioRef.current) return;
+          const seekOffset = details.seekOffset || 10;
+          const dur = isFinite(audioRef.current.duration) ? audioRef.current.duration : 0;
+          audioRef.current.currentTime = Math.min(dur || 999999, audioRef.current.currentTime + seekOffset);
+        });
+
+        navigator.mediaSession.setActionHandler('seekto', (details) => {
+          if (audioRef.current && details.seekTime !== undefined) {
+            audioRef.current.currentTime = details.seekTime;
+            setCurrentTime(details.seekTime);
+          }
+        });
+
+        navigator.mediaSession.setActionHandler('stop', () => {
+          if (audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current.currentTime = 0;
+            setIsPlaying(false);
+          }
+        });
+      } catch (err) {
+        console.warn('MediaSession initialization error:', err);
+      }
+    }
+
+    return () => {
+      if ('mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.metadata = null;
+          navigator.mediaSession.setActionHandler('play', null);
+          navigator.mediaSession.setActionHandler('pause', null);
+          navigator.mediaSession.setActionHandler('seekbackward', null);
+          navigator.mediaSession.setActionHandler('seekforward', null);
+          navigator.mediaSession.setActionHandler('seekto', null);
+          navigator.mediaSession.setActionHandler('stop', null);
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+    };
+  }, [songTitle, songArtist, songAlbum, coverImage]);
+
+  // Sync playbackState and positionState to navigator.mediaSession
+  useEffect(() => {
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+
+      if (
+        'setPositionState' in navigator.mediaSession &&
+        duration > 0 &&
+        isFinite(duration) &&
+        isFinite(currentTime) &&
+        currentTime <= duration
+      ) {
+        try {
+          navigator.mediaSession.setPositionState({
+            duration: duration,
+            playbackRate: audioRef.current?.playbackRate || 1,
+            position: Math.max(0, currentTime),
+          });
+        } catch {
+          // Ignore positionState edge-case clamp errors
+        }
+      }
+    }
+  }, [isPlaying, currentTime, duration]);
 
   // Cleanup audio element on unmount
   useEffect(() => {
@@ -52,17 +183,6 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
         audioRef.current.load();
       }
     };
-  }, []);
-
-  const togglePlay = useCallback(() => {
-    if (!audioRef.current) return;
-    if (audioRef.current.paused) {
-      audioRef.current.play().catch(console.warn);
-      setIsPlaying(true);
-    } else {
-      audioRef.current.pause();
-      setIsPlaying(false);
-    }
   }, []);
 
   const handleTimeUpdate = () => {
@@ -81,16 +201,6 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
     const newTime = (percentage / 100) * duration;
     audioRef.current.currentTime = newTime;
     setCurrentTime(newTime);
-  };
-
-  const handleRewind = () => {
-    if (!audioRef.current) return;
-    audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 10);
-  };
-
-  const handleForward = () => {
-    if (!audioRef.current) return;
-    audioRef.current.currentTime = Math.min(duration, audioRef.current.currentTime + 10);
   };
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -123,6 +233,19 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
     }
   };
 
+  const handleDownload = async () => {
+    setIsDownloading(true);
+    try {
+      await downloadMediaFile(item.blobUrl || item.shareUrl, item.name);
+      onToast('Unduhan audio dimulai!');
+    } catch {
+      onToast('Gagal mengunduh audio. Membuka di tab baru...');
+      window.open(item.shareUrl, '_blank');
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === ' ' || e.key === 'k') {
@@ -141,7 +264,7 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay]);
+  }, [togglePlay, handleRewind, handleForward]);
 
   const sliderPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
@@ -199,6 +322,9 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
               src={coverImage}
               alt="Cover Art"
               className="w-full h-full object-cover"
+              onError={(e) => {
+                (e.target as HTMLImageElement).src = DEFAULT_AUDIO_COVER;
+              }}
             />
           </div>
 
@@ -217,6 +343,7 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
         {/* Timeline Slider */}
         <div className="w-full space-y-1.5 px-1 pt-1">
           <AppleSlider
+            ariaLabel="Posisi Waktu Audio"
             value={sliderPercent}
             onChange={handleSeek}
             onChangeEnd={handleSeek}
@@ -233,6 +360,7 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
             onClick={handleRewind}
             className="p-2 text-white/70 hover:text-white transition-colors clean-tap"
             title="Mundur 10 detik"
+            aria-label="Mundur 10 detik"
           >
             <RotateCcw className="w-5 h-5 sm:w-6 sm:h-6" />
           </button>
@@ -253,6 +381,7 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
             onClick={handleForward}
             className="p-2 text-white/70 hover:text-white transition-colors clean-tap"
             title="Maju 10 detik"
+            aria-label="Maju 10 detik"
           >
             <RotateCw className="w-5 h-5 sm:w-6 sm:h-6" />
           </button>
@@ -264,6 +393,7 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
             <button
               onClick={toggleMute}
               className="text-white/70 hover:text-white transition-colors clean-tap"
+              aria-label={isMuted || volume === 0 ? 'Bunyikan suara' : 'Bisukan suara'}
             >
               {isMuted || volume === 0 ? (
                 <VolumeX className="w-4 h-4 text-rose-400" />
@@ -278,6 +408,7 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
               step="0.05"
               value={isMuted ? 0 : volume}
               onChange={handleVolumeChange}
+              aria-label="Volume audio"
               className="w-16 h-1 rounded-full cursor-pointer accent-white"
             />
           </div>
@@ -286,21 +417,21 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
             <button
               onClick={handleCopy}
               className="flex items-center space-x-1.5 py-1.5 px-3 rounded-xl font-bold bg-white/10 hover:bg-white/20 text-white transition-all clean-tap"
+              aria-label="Salin tautan audio"
             >
               {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
               <span>{copied ? 'Disalin' : 'Salin'}</span>
             </button>
 
-            <a
-              href={item.blobUrl || item.shareUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              download={item.name}
-              className="flex items-center space-x-1.5 py-1.5 px-3 rounded-xl font-bold bg-white/10 hover:bg-white/20 text-white transition-all clean-tap"
+            <button
+              onClick={handleDownload}
+              disabled={isDownloading}
+              className="flex items-center space-x-1.5 py-1.5 px-3 rounded-xl font-bold bg-white/10 hover:bg-white/20 text-white transition-all clean-tap disabled:opacity-50"
+              aria-label="Unduh berkas audio"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>Unduh</span>
-            </a>
+              <span>{isDownloading ? 'Mengunduh...' : 'Unduh'}</span>
+            </button>
           </div>
         </div>
       </div>

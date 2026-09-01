@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { MediaItem, MediaType, UploadProgressUpdate } from '../types';
 import { mediaApiClient } from '../lib/api/mediaClient';
 import { formatEta, validateMediaFile } from '../lib/utils';
+import { UPLOAD_CANCELLED_MESSAGE } from '../lib/constants';
 import {
   extractAudioMetadata,
   extractImageMetadata,
@@ -44,7 +45,7 @@ export function useUpload(onSuccess?: (item: MediaItem) => void): UseUploadRetur
       abortControllerRef.current = null;
     }
     setIsUploading(false);
-    setStatusMessage('Unggahan dibatalkan');
+    setStatusMessage(UPLOAD_CANCELLED_MESSAGE);
   }, []);
 
   const resetUpload = useCallback(() => {
@@ -155,8 +156,11 @@ export function useUpload(onSuccess?: (item: MediaItem) => void): UseUploadRetur
           }
         }
         setLastFailedFile(file);
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          setError('Unggahan dibatalkan.');
+        if (
+          (err instanceof DOMException && err.name === 'AbortError') ||
+          (err instanceof Error && err.message === UPLOAD_CANCELLED_MESSAGE)
+        ) {
+          setError(UPLOAD_CANCELLED_MESSAGE);
         } else {
           const msg =
             err instanceof Error

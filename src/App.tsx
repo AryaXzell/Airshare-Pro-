@@ -24,7 +24,7 @@ const ActionSheet = lazy(() =>
 
 export default function App() {
   const { theme, setTheme } = useTheme();
-  const { toast, showToast, hideToast } = useToast();
+  const { toast, toasts, showToast, hideToast } = useToast();
   const {
     items,
     filteredItems,
@@ -76,6 +76,13 @@ export default function App() {
   };
 
   const handleDedicatedFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (uploadState.isUploading) {
+      showToast('Proses unggahan lain sedang berjalan. Harap tunggu hingga selesai.', {
+        type: 'warning',
+      });
+      e.target.value = '';
+      return;
+    }
     if (e.target.files && e.target.files.length > 0) {
       const file = e.target.files[0];
       uploadState.startUpload(file);
@@ -90,6 +97,7 @@ export default function App() {
         ref={imageInputRef}
         type="file"
         accept="image/*"
+        disabled={uploadState.isUploading}
         onChange={handleDedicatedFileSelected}
         className="hidden"
       />
@@ -97,6 +105,7 @@ export default function App() {
         ref={videoInputRef}
         type="file"
         accept="video/*"
+        disabled={uploadState.isUploading}
         onChange={handleDedicatedFileSelected}
         className="hidden"
       />
@@ -104,6 +113,7 @@ export default function App() {
         ref={audioInputRef}
         type="file"
         accept="audio/*"
+        disabled={uploadState.isUploading}
         onChange={handleDedicatedFileSelected}
         className="hidden"
       />
@@ -190,8 +200,8 @@ export default function App() {
         )}
       </Suspense>
 
-      {/* Modern Floating Toast Notification */}
-      <Toast toast={toast} onClose={hideToast} />
+      {/* Modern Floating Toast Notification Stack */}
+      <Toast toasts={toasts} toast={toast} onClose={hideToast} />
     </div>
   );
 }

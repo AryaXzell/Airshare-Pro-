@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   X,
@@ -37,16 +37,59 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
   onToast,
 }) => {
   const [copied, setCopied] = useState(false);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const triggerElementRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (isOpen && item) {
+      triggerElementRef.current = document.activeElement as HTMLElement | null;
+      const timer = setTimeout(() => {
+        const focusable = modalRef.current?.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusable && focusable.length > 0) {
+          focusable[0].focus();
+        }
+      }, 50);
+      return () => clearTimeout(timer);
+    } else {
+      triggerElementRef.current?.focus();
+    }
+  }, [isOpen, item]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isOpen) {
+      if (!isOpen || !item) return;
+
+      if (e.key === 'Escape') {
         onClose();
+        return;
+      }
+
+      if (e.key === 'Tab' && modalRef.current) {
+        const focusables: HTMLElement[] = Array.from(
+          modalRef.current.querySelectorAll<HTMLElement>(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+          )
+        ).filter((el: HTMLElement) => !el.hasAttribute('disabled'));
+
+        if (focusables.length === 0) return;
+
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen, item, onClose]);
 
   if (!isOpen || !item) return null;
 
@@ -100,6 +143,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
 
         {/* Modal Dialog */}
         <motion.div
+          ref={modalRef}
           initial={{ opacity: 0, scale: 0.95, y: 10 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 10 }}

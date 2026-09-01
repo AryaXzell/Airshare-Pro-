@@ -27,7 +27,7 @@ interface MediaCardProps {
   onToast: (msg: string) => void;
 }
 
-export const MediaCard: React.FC<MediaCardProps> = ({
+const MediaCardComponent: React.FC<MediaCardProps> = ({
   item,
   viewMode,
   isSelected,
@@ -381,3 +381,5 @@ export const MediaCard: React.FC<MediaCardProps> = ({
     </motion.div>
   );
 };
+
+export const MediaCard = React.memo(MediaCardComponent);

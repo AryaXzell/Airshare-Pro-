@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" fill="none">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#090d16"/>
+      <stop offset="50%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e1b4b"/>
+    </linearGradient>
+    <linearGradient id="roseGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f43f5e"/>
+      <stop offset="100%" stop-color="#e11d48"/>
+    </linearGradient>
+    <linearGradient id="blueGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <filter id="blurFilter" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="80"/>
+    </filter>
+    <filter id="glassBlur" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="16"/>
+    </filter>
+  </defs>
+
+  <!-- Background Canvas -->
+  <rect width="1200" height="630" fill="url(#bgGrad)"/>
+
+  <!-- Ambient Glow Orbs -->
+  <circle cx="200" cy="150" r="180" fill="#e11d48" opacity="0.25" filter="url(#blurFilter)"/>
+  <circle cx="1000" cy="450" r="220" fill="#2563eb" opacity="0.22" filter="url(#blurFilter)"/>
+  <circle cx="600" cy="300" r="140" fill="#8b5cf6" opacity="0.18" filter="url(#blurFilter)"/>
+
+  <!-- Grid Accent Overlay -->
+  <g opacity="0.08" stroke="#ffffff" stroke-width="1">
+    <line x1="100" y1="0" x2="100" y2="630"/>
+    <line x1="300" y1="0" x2="300" y2="630"/>
+    <line x1="500" y1="0" x2="500" y2="630"/>
+    <line x1="700" y1="0" x2="700" y2="630"/>
+    <line x1="900" y1="0" x2="900" y2="630"/>
+    <line x1="1100" y1="0" x2="1100" y2="630"/>
+    <line x1="0" y1="100" x2="1200" y2="100"/>
+    <line x1="0" y1="250" x2="1200" y2="250"/>
+    <line x1="0" y1="400" x2="1200" y2="400"/>
+    <line x1="0" y1="550" x2="1200" y2="550"/>
+  </g>
+
+  <!-- Central Clean Glass Card -->
+  <rect x="140" y="95" width="920" height="440" rx="32" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.14" stroke-width="1.5"/>
+
+  <!-- Brand Icon Badge -->
+  <rect x="200" y="155" width="80" height="80" rx="22" fill="#e11d48" fill-opacity="0.16" stroke="#e11d48" stroke-opacity="0.38" stroke-width="1.5"/>
+  <g transform="translate(216, 171)" stroke="#f43f5e" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <circle cx="36" cy="10" r="6"/>
+    <circle cx="12" cy="24" r="6"/>
+    <circle cx="36" cy="38" r="6"/>
+    <line x1="17.18" y1="27.02" x2="30.84" y2="34.98"/>
+    <line x1="30.82" y1="13.02" x2="17.18" y2="20.98"/>
+  </g>
+
+  <!-- App Title & Subtitle -->
+  <text x="310" y="200" fill="#ffffff" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="44" font-weight="800" letter-spacing="-0.03em">AirShare <tspan fill="#f43f5e">Pro</tspan></text>
+  <text x="310" y="235" fill="#94a3b8" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18" font-weight="500" letter-spacing="0.02em">INSTANT MEDIA SHARING &amp; STREAMING HUB</text>
+
+  <!-- Feature Pills -->
+  <g transform="translate(200, 275)">
+    <!-- Pill 1: Zero Throttling -->
+    <rect x="0" y="0" width="240" height="48" rx="24" fill="#ffffff" fill-opacity="0.06" stroke="#ffffff" stroke-opacity="0.12"/>
+    <text x="36" y="30" fill="#e2e8f0" font-family="system-ui, -apple-system, BlinkMacSystemFont, sans-serif" font-size="16" font-weight="600">⚡ Unthrottled Catbox</text>
+
+    <!-- Pill 2: Photo / Video / Audio -->
+    <rect x="256" y="0" width="230" height="48" rx="24" fill="#ffffff" fill-opacity="0.06" stroke="#ffffff" stroke-opacity="0.12"/>
+    <text x="290" y="30" fill="#e2e8f0" font-family="system-ui, -apple-system, BlinkMacSystemFont, sans-serif" font-size="16" font-weight="600">🎬 Rich Media Players</text>
+
+    <!-- Pill 3: Clean Glass UI -->
+    <rect x="502" y="0" width="230" height="48" rx="24" fill="#ffffff" fill-opacity="0.06" stroke="#ffffff" stroke-opacity="0.12"/>
+    <text x="540" y="30" fill="#e2e8f0" font-family="system-ui, -apple-system, BlinkMacSystemFont, sans-serif" font-size="16" font-weight="600">✨ Clean Glass UI</text>
+  </g>
+
+  <!-- Tagline Paragraph -->
+  <text x="200" y="380" fill="#cbd5e1" font-family="system-ui, -apple-system, BlinkMacSystemFont, sans-serif" font-size="20" font-weight="400">
+    Share photos, videos, and audio files instantly with zero speed throttling,
+  </text>
+  <text x="200" y="412" fill="#cbd5e1" font-family="system-ui, -apple-system, BlinkMacSystemFont, sans-serif" font-size="20" font-weight="400">
+    integrated HTML5 video &amp; dynamic audio players, and strict defense-in-depth security.
+  </text>
+
+  <!-- Bottom Accent Status -->
+  <circle cx="210" cy="480" r="5" fill="#10b981"/>
+  <text x="226" y="485" fill="#a7f3d0" font-family="system-ui, -apple-system, BlinkMacSystemFont, sans-serif" font-size="14" font-weight="600" letter-spacing="0.05em">CATBOX UPSTREAM STORAGE READY</text>
+</svg>

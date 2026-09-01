@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AlertCircle } from 'lucide-react';
 
@@ -23,15 +23,67 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   onConfirm,
   onCancel,
 }) => {
+  const triggerElementRef = useRef<HTMLElement | null>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  const confirmButtonRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isOpen) {
-        onCancel();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onCancel]);
+    if (isOpen) {
+      // Save previously focused element to restore when dialog closes
+      triggerElementRef.current = document.activeElement as HTMLElement | null;
+
+      // Auto-focus with safety: focus Cancel if destructive, Confirm otherwise
+      const timer = setTimeout(() => {
+        if (isDestructive) {
+          cancelButtonRef.current?.focus();
+        } else {
+          confirmButtonRef.current?.focus();
+        }
+      }, 50);
+
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          onCancel();
+          return;
+        }
+
+        // Focus Trap: constrain Tab / Shift+Tab navigation to the dialog buttons
+        if (e.key === 'Tab') {
+          const focusable = [cancelButtonRef.current, confirmButtonRef.current].filter(
+            Boolean
+          ) as HTMLButtonElement[];
+          if (focusable.length === 0) return;
+
+          const firstEl = focusable[0];
+          const lastEl = focusable[focusable.length - 1];
+
+          if (e.shiftKey) {
+            if (document.activeElement === firstEl || !dialogRef.current?.contains(document.activeElement)) {
+              e.preventDefault();
+              lastEl.focus();
+            }
+          } else {
+            if (document.activeElement === lastEl || !dialogRef.current?.contains(document.activeElement)) {
+              e.preventDefault();
+              firstEl.focus();
+            }
+          }
+        }
+      };
+
+      window.addEventListener('keydown', handleKeyDown);
+      return () => {
+        clearTimeout(timer);
+        window.removeEventListener('keydown', handleKeyDown);
+        // Restore focus to triggering element
+        if (triggerElementRef.current && typeof triggerElementRef.current.focus === 'function') {
+          triggerElementRef.current.focus();
+        }
+      };
+    }
+  }, [isOpen, isDestructive, onCancel]);
 
   return (
     <AnimatePresence>
@@ -46,6 +98,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
           />
 
           <motion.div
+            ref={dialogRef}
             initial={{ opacity: 0, scale: 0.94, y: 6 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.94, y: 6 }}
@@ -85,6 +138,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
 
             <div className="grid grid-cols-2 gap-2.5">
               <button
+                ref={cancelButtonRef}
                 onClick={onCancel}
                 className="py-2.5 px-4 rounded-xl font-bold text-xs clean-interactive clean-tap border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
                 style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-main)' }}
@@ -92,6 +146,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
                 {cancelLabel}
               </button>
               <button
+                ref={confirmButtonRef}
                 onClick={onConfirm}
                 className={`py-2.5 px-4 rounded-xl font-bold text-xs transition-all clean-tap shadow-xs focus-visible:outline-none focus-visible:ring-2 ${
                   isDestructive
@@ -109,3 +164,4 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
     </AnimatePresence>
   );
 };
+

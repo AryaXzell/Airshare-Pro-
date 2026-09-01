@@ -7,6 +7,7 @@ import {
   VideoMetadata,
 } from '../../types';
 import { formatBytes } from '../utils';
+import { UPLOAD_CANCELLED_MESSAGE } from '../constants';
 
 export interface UploadMetadataPayload {
   imageMeta?: ImageMetadata;
@@ -36,7 +37,7 @@ export class MediaApiClient {
       if (signal) {
         signal.addEventListener('abort', () => {
           xhr.abort();
-          reject(new Error('Unggahan dibatalkan oleh pengguna.'));
+          reject(new Error(UPLOAD_CANCELLED_MESSAGE));
         });
       }
 
@@ -243,7 +244,16 @@ export class MediaApiClient {
     }
 
     const json = await res.json();
-    return json.success ? json.data : null;
+    if (json.success && json.data) {
+      return json.data;
+    }
+
+    return {
+      maxUploadSize: 209715200,
+      formattedMaxSize: '200 MB',
+      provider: 'catbox',
+      isDeleteSupported: false,
+    };
   }
 }
 

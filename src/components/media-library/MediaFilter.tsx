@@ -47,10 +47,11 @@ export const MediaFilter: React.FC<MediaFilterProps> = ({
       <div className="flex items-center space-x-2">
         <div className="relative flex-grow">
           <input
-            type="text"
+            type="search"
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             placeholder="Cari nama berkas, judul lagu, atau artis..."
+            aria-label="Cari koleksi media berdasarkan nama atau metadata"
             className="w-full rounded-2xl py-2.5 pl-10 pr-9 text-xs sm:text-sm clean-input font-medium"
           />
           <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 opacity-40 pointer-events-none" />

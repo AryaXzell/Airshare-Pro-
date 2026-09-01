@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Eye, X } from 'lucide-react';
 import { ImagePreview } from './ImagePreview';
@@ -17,10 +17,54 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
   onClose,
   onToast,
 }) => {
+  const modalRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (item) {
+      triggerRef.current = document.activeElement as HTMLElement;
+      const timer = setTimeout(() => {
+        const focusable = modalRef.current?.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusable && focusable.length > 0) {
+          focusable[0].focus();
+        }
+      }, 50);
+      return () => clearTimeout(timer);
+    } else {
+      triggerRef.current?.focus();
+    }
+  }, [item]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && item) {
+      if (!item) return;
+
+      if (e.key === 'Escape') {
         onClose();
+        return;
+      }
+
+      if (e.key === 'Tab' && modalRef.current) {
+        const focusables = Array.from(
+          modalRef.current.querySelectorAll<HTMLElement>(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+          )
+        ).filter((el) => !el.hasAttribute('disabled'));
+
+        if (focusables.length === 0) return;
+
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -42,7 +86,12 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
   return (
     <AnimatePresence>
       {item && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Pratinjau media ${item.name}`}
+        >
           {/* Backdrop */}
           <motion.div
             initial={{ opacity: 0 }}
@@ -54,6 +103,7 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
 
           {/* Modal Card */}
           <motion.div
+            ref={modalRef}
             initial={{ opacity: 0, scale: 0.95, y: 8 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 8 }}

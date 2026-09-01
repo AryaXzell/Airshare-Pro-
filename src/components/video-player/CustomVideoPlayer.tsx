@@ -33,17 +33,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTapRef = useRef<{ time: number; side: 'left' | 'right' }>({ time: 0, side: 'left' });
 
-  // Cleanup video buffers and timers on unmount
-  useEffect(() => {
-    return () => {
-      if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current);
-      if (videoRef.current) {
-        videoRef.current.pause();
-        videoRef.current.removeAttribute('src');
-        videoRef.current.load();
-      }
-    };
-  }, []);
+  const videoTitle = item.name.replace(/\.[^/.]+$/, '');
 
   // Auto-hide controls
   const showControlsTemporarily = useCallback(() => {
@@ -68,6 +58,120 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     }
     showControlsTemporarily();
   }, [showControlsTemporarily]);
+
+  const handleRewind = useCallback(() => {
+    if (!videoRef.current) return;
+    videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - 15);
+    showControlsTemporarily();
+  }, [showControlsTemporarily]);
+
+  const handleForward = useCallback(() => {
+    if (!videoRef.current) return;
+    const dur = isFinite(videoRef.current.duration) ? videoRef.current.duration : duration;
+    videoRef.current.currentTime = Math.min(dur || 999999, videoRef.current.currentTime + 15);
+    showControlsTemporarily();
+  }, [duration, showControlsTemporarily]);
+
+  // MediaSession API Integration
+  useEffect(() => {
+    if ('mediaSession' in navigator && typeof window.MediaMetadata !== 'undefined') {
+      try {
+        navigator.mediaSession.metadata = new window.MediaMetadata({
+          title: videoTitle,
+          artist: 'AirShare Pro Video',
+          album: 'AirShare Pro',
+        });
+
+        navigator.mediaSession.setActionHandler('play', () => {
+          if (videoRef.current && videoRef.current.paused) {
+            videoRef.current.play().catch(console.warn);
+            setIsPlaying(true);
+          }
+        });
+
+        navigator.mediaSession.setActionHandler('pause', () => {
+          if (videoRef.current && !videoRef.current.paused) {
+            videoRef.current.pause();
+            setIsPlaying(false);
+          }
+        });
+
+        navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+          if (!videoRef.current) return;
+          const seekOffset = details.seekOffset || 15;
+          videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - seekOffset);
+        });
+
+        navigator.mediaSession.setActionHandler('seekforward', (details) => {
+          if (!videoRef.current) return;
+          const seekOffset = details.seekOffset || 15;
+          const dur = isFinite(videoRef.current.duration) ? videoRef.current.duration : 0;
+          videoRef.current.currentTime = Math.min(dur || 999999, videoRef.current.currentTime + seekOffset);
+        });
+
+        navigator.mediaSession.setActionHandler('seekto', (details) => {
+          if (videoRef.current && details.seekTime !== undefined) {
+            videoRef.current.currentTime = details.seekTime;
+            setCurrentTime(details.seekTime);
+          }
+        });
+      } catch (err) {
+        console.warn('Video MediaSession initialization error:', err);
+      }
+    }
+
+    return () => {
+      if ('mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.metadata = null;
+          navigator.mediaSession.setActionHandler('play', null);
+          navigator.mediaSession.setActionHandler('pause', null);
+          navigator.mediaSession.setActionHandler('seekbackward', null);
+          navigator.mediaSession.setActionHandler('seekforward', null);
+          navigator.mediaSession.setActionHandler('seekto', null);
+        } catch {
+          // Ignore
+        }
+      }
+    };
+  }, [videoTitle]);
+
+  // Sync playbackState and positionState
+  useEffect(() => {
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+
+      if (
+        'setPositionState' in navigator.mediaSession &&
+        duration > 0 &&
+        isFinite(duration) &&
+        isFinite(currentTime) &&
+        currentTime <= duration
+      ) {
+        try {
+          navigator.mediaSession.setPositionState({
+            duration: duration,
+            playbackRate: videoRef.current?.playbackRate || 1,
+            position: Math.max(0, currentTime),
+          });
+        } catch {
+          // Ignore
+        }
+      }
+    }
+  }, [isPlaying, currentTime, duration]);
+
+  // Cleanup video buffers and timers on unmount
+  useEffect(() => {
+    return () => {
+      if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current);
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.removeAttribute('src');
+        videoRef.current.load();
+      }
+    };
+  }, []);
 
   // Handle double tap seek
   const handleTap = (side: 'left' | 'right') => {
@@ -121,18 +225,6 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     showControlsTemporarily();
   };
 
-  const handleRewind = () => {
-    if (!videoRef.current) return;
-    videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - 15);
-    showControlsTemporarily();
-  };
-
-  const handleForward = () => {
-    if (!videoRef.current) return;
-    videoRef.current.currentTime = Math.min(duration, videoRef.current.currentTime + 15);
-    showControlsTemporarily();
-  };
-
   const handlePip = async () => {
     if (!videoRef.current) return;
     try {
@@ -162,7 +254,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay]);
+  }, [togglePlay, handleRewind, handleForward]);
 
   const sliderPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
   const remainingSeconds = Math.max(0, duration - currentTime);
@@ -255,6 +347,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
               onClick={onClose}
               className="text-xs font-bold px-3.5 py-2 rounded-full flex items-center space-x-1.5 text-white clean-tap border border-white/15"
               style={{ background: 'rgba(255, 255, 255, 0.15)' }}
+              aria-label="Tutup pemutar video"
             >
               <ChevronLeft className="w-4 h-4" />
               <span>Selesai</span>
@@ -265,6 +358,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
                 onClick={handlePip}
                 className="p-2 rounded-full bg-white/15 hover:bg-white/25 text-white transition-colors clean-tap border border-white/10"
                 title="Picture-in-Picture"
+                aria-label="Mode Picture-in-Picture"
               >
                 <PictureInPicture2 className="w-4 h-4" />
               </button>
@@ -280,6 +374,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
               }}
               className="p-2.5 sm:p-3 rounded-full bg-white/15 hover:bg-white/25 text-white transition-colors clean-tap border border-white/10"
               title="Mundur 15 detik"
+              aria-label="Mundur 15 detik"
             >
               <RotateCcw className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
@@ -306,6 +401,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
               }}
               className="p-2.5 sm:p-3 rounded-full bg-white/15 hover:bg-white/25 text-white transition-colors clean-tap border border-white/10"
               title="Maju 15 detik"
+              aria-label="Maju 15 detik"
             >
               <RotateCw className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
@@ -315,6 +411,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
           <div className="w-full space-y-2">
             <div className="w-full">
               <AppleSlider
+                ariaLabel="Posisi Waktu Video"
                 value={sliderPercent}
                 onChange={handleSeek}
                 onChangeEnd={handleSeek}

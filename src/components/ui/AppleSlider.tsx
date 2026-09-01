@@ -6,6 +6,7 @@ interface AppleSliderProps {
   onChangeEnd?: (value: number) => void;
   className?: string;
   disabled?: boolean;
+  ariaLabel?: string;
 }
 
 export const AppleSlider: React.FC<AppleSliderProps> = ({
@@ -14,6 +15,7 @@ export const AppleSlider: React.FC<AppleSliderProps> = ({
   onChangeEnd,
   className = '',
   disabled = false,
+  ariaLabel = 'Penggeser Waktu',
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -75,6 +77,7 @@ export const AppleSlider: React.FC<AppleSliderProps> = ({
         disabled ? 'opacity-50 cursor-not-allowed' : ''
       } ${className}`}
       role="slider"
+      aria-label={ariaLabel}
       aria-valuenow={Math.round(clampedValue)}
       aria-valuemin={0}
       aria-valuemax={100}

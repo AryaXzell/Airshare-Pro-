@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
+import { getClientIp } from './client-ip';
 
 export interface RequestLogEntry {
   requestId: string;
@@ -37,10 +38,7 @@ export function requestLoggerMiddleware(req: Request, res: Response, next: NextF
 
   res.on('finish', () => {
     const durationMs = Date.now() - start;
-    const clientIp =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-      req.socket.remoteAddress ||
-      'unknown';
+    const clientIp = getClientIp(req);
 
     // Mask IPv4 / IPv6 for privacy compliance (keep prefix)
     const maskedIp = clientIp.includes('.')

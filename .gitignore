@@ -3,6 +3,12 @@ node_modules/
 .pnp
 .pnp.js
 
+# Alternate Package Manager Lockfiles (Enforce npm & package-lock.json only)
+bun.lock
+bun.lockb
+yarn.lock
+pnpm-lock.yaml
+
 # Build Outputs & Bundles
 dist/
 build/

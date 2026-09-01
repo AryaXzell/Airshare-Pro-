@@ -10,6 +10,17 @@ function readSyncsafeInteger(view: DataView, offset: number): number {
   );
 }
 
+// Safe binary Uint8Array to base64 conversion without stack overflow
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, chunk as unknown as number[]);
+  }
+  return btoa(binary);
+}
+
 // Decode text frames based on ID3 encoding byte
 function decodeFrameText(bytes: Uint8Array, encodingByte: number): string {
   try {
@@ -44,8 +55,8 @@ function decodeFrameText(bytes: Uint8Array, encodingByte: number): string {
 // Parse ID3v2 tags from File ArrayBuffer
 async function parseId3Tags(file: File): Promise<Partial<AudioMetadata>> {
   try {
-    // Read first 256KB to find ID3 header and frames
-    const sliceSize = Math.min(file.size, 256 * 1024);
+    // Read up to 2MB to find ID3 header, frames, and embedded cover art
+    const sliceSize = Math.min(file.size, 2 * 1024 * 1024);
     const buffer = await file.slice(0, sliceSize).arrayBuffer();
     const view = new DataView(buffer);
     const uint8 = new Uint8Array(buffer);
@@ -136,13 +147,11 @@ async function parseId3Tags(file: File): Promise<Partial<AudioMetadata>> {
 
             if (pOffset < frameData.length) {
               const imgBytes = frameData.slice(pOffset);
-              let binary = '';
-              const len = imgBytes.byteLength;
-              for (let i = 0; i < len; i++) {
-                binary += String.fromCharCode(imgBytes[i]);
+              // Max reasonable payload: 2MB
+              if (imgBytes.length > 0 && imgBytes.length <= 2 * 1024 * 1024) {
+                const base64 = uint8ArrayToBase64(imgBytes);
+                result.coverUrl = `data:${mimeType || 'image/jpeg'};base64,${base64}`;
               }
-              const base64 = btoa(binary);
-              result.coverUrl = `data:${mimeType || 'image/jpeg'};base64,${base64}`;
             }
           } catch (e) {
             console.warn('Could not extract APIC frame:', e);

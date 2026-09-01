@@ -1,4 +1,7 @@
 import { ThemeName } from '../types';
+import { BANNED_EXTENSIONS } from '../shared/banned-extensions';
+
+export { BANNED_EXTENSIONS };
 
 export const THEMES: { id: ThemeName; name: string; swatch: string; isDark: boolean }[] = [
   { id: 'rosegold', name: 'White + Rose Gold', swatch: '#f43f5e', isDark: false },
@@ -8,10 +11,6 @@ export const THEMES: { id: ThemeName; name: string; swatch: string; isDark: bool
   { id: 'pacific', name: 'Pacific Blue', swatch: '#0ea5e9', isDark: true },
 ];
 
-export const BANNED_EXTENSIONS = new Set([
-  'exe', 'bat', 'sh', 'js', 'html', 'htm', 'php', 'py', 'pl', 'rb',
-  'msi', 'cmd', 'vbs', 'com', 'scr', 'cpl', 'gadget', 'jar', 'wsf',
-  'ps1', 'dll', 'apk', 'bin', 'iso'
-]);
-
 export const DEFAULT_AUDIO_COVER = 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=600&auto=format';
+
+export const UPLOAD_CANCELLED_MESSAGE = 'Unggahan dibatalkan oleh pengguna.';

@@ -1,11 +1,22 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
+import cookieParser from 'cookie-parser';
 import { mediaRouter } from './api/routes';
 import { requestLoggerMiddleware } from './security/request-logger';
+import { sessionMiddleware } from './security/session';
 import { ApiErrorResponse } from '../types';
 
 export function createExpressApp(): Express {
   const app = express();
   const isDev = process.env.NODE_ENV !== 'production';
+
+  // Enable Trust Proxy for reverse proxy / Vercel deployment IP resolution
+  app.set('trust proxy', 1);
+
+  // Cookie parser middleware for session cookie extraction
+  app.use(cookieParser());
+
+  // Anonymous session scoping middleware
+  app.use(sessionMiddleware);
 
   // Request ID and Structured Logging Middleware
   app.use(requestLoggerMiddleware);
@@ -45,7 +56,9 @@ export function createExpressApp(): Express {
       "object-src 'none'",
       "base-uri 'self'",
       "form-action 'self'",
-      "frame-ancestors 'self' https://*.google.com https://*.googleusercontent.com https://ai.studio https://*.ai.studio https://*.aistudio.google.com https://*.run.app https://*.cloudshell.dev",
+      isDev
+        ? "frame-ancestors 'self' https://*.google.com https://*.googleusercontent.com https://ai.studio https://*.ai.studio https://*.aistudio.google.com https://*.run.app https://*.cloudshell.dev"
+        : "frame-ancestors 'self'",
     ];
 
     res.setHeader('Content-Security-Policy', cspDirectives.join('; '));

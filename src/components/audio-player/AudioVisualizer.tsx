@@ -26,21 +26,17 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ isPlaying }) =
     return () => clearInterval(interval);
   }, [isPlaying]);
 
-  const barColors = [
-    'bg-blue-500',
-    'bg-blue-400',
-    'bg-indigo-500',
-    'bg-sky-400',
-    'bg-violet-400',
-  ];
-
   return (
-    <div className="flex items-end gap-[3.5px] h-5 py-0.5">
+    <div className="flex items-end gap-[3.5px] h-5 py-0.5" aria-hidden="true">
       {barHeights.map((h, i) => (
         <div
           key={i}
-          className={`w-[3px] rounded-full viz-bar ${barColors[i]}`}
-          style={{ height: `${h}px` }}
+          className="w-[3px] rounded-full viz-bar transition-[height] duration-100 ease-out"
+          style={{
+            height: `${h}px`,
+            backgroundColor: 'var(--accent, #3b82f6)',
+            opacity: 0.75 + (i % 3) * 0.1,
+          }}
         />
       ))}
     </div>

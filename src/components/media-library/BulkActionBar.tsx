@@ -162,7 +162,7 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
       <ConfirmDialog
         isOpen={showConfirm}
         title={`Hapus ${selectedCount} Media Terpilih?`}
-        description="Berkas yang dipilih akan dihapus dari riwayat lokal perangkat Anda."
+        description="Berkas yang dipilih akan dihapus dari daftar riwayat server aplikasi."
         confirmLabel={`Hapus ${selectedCount} Berkas`}
         cancelLabel="Batal"
         isDestructive={true}

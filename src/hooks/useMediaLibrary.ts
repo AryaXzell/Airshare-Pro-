@@ -120,84 +120,116 @@ export function useMediaLibrary() {
     setPage(1);
   }, []);
 
-  const removeItem = useCallback(async (id: string) => {
-    // Revoke object URL if exists
-    setItems((prev) => {
-      const target = prev.find((i) => i.id === id);
-      if (target?.blobUrl && target.blobUrl.startsWith('blob:')) {
-        try {
-          URL.revokeObjectURL(target.blobUrl);
-        } catch {
-          // ignore
-        }
-      }
-      return prev.filter((i) => i.id !== id);
-    });
-
-    // Remove from selection
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
-
+  const removeItem = useCallback(async (id: string): Promise<{ success: boolean }> => {
     // Delete from server repository
+    let success = false;
     try {
       await mediaApiClient.deleteMedia(id);
+      success = true;
     } catch (err) {
       console.warn(`Failed to delete media ${id} on server:`, err);
     }
-  }, []);
 
-  const removeMultiple = useCallback(async (ids: string[]) => {
-    const idSet = new Set(ids);
-    setItems((prev) => {
-      prev.forEach((item) => {
-        if (idSet.has(item.id) && item.blobUrl && item.blobUrl.startsWith('blob:')) {
+    // Revoke object URL and clean state if deletion succeeded or locally removed
+    if (success) {
+      setItems((prev) => {
+        const target = prev.find((i) => i.id === id);
+        if (target?.blobUrl && target.blobUrl.startsWith('blob:')) {
           try {
-            URL.revokeObjectURL(item.blobUrl);
+            URL.revokeObjectURL(target.blobUrl);
           } catch {
             // ignore
           }
         }
+        return prev.filter((i) => i.id !== id);
       });
-      return prev.filter((i) => !idSet.has(i.id));
-    });
 
-    setSelectedIds(new Set());
-
-    // Execute server deletions
-    for (const id of ids) {
-      try {
-        await mediaApiClient.deleteMedia(id);
-      } catch (err) {
-        console.warn(`Failed to delete media ${id}:`, err);
-      }
+      // Remove from selection
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
+
+    return { success };
   }, []);
 
-  const clearAll = useCallback(async () => {
-    setItems((prev) => {
-      prev.forEach((item) => {
-        if (item.blobUrl && item.blobUrl.startsWith('blob:')) {
-          try {
-            URL.revokeObjectURL(item.blobUrl);
-          } catch {
-            // ignore
-          }
-        }
-      });
-      return [];
-    });
+  const removeMultiple = useCallback(
+    async (ids: string[]): Promise<{ succeeded: number; failed: number }> => {
+      let succeeded = 0;
+      let failed = 0;
+      const successfulIds: string[] = [];
 
-    setSelectedIds(new Set());
+      // Execute server deletions and track per-item outcome
+      for (const id of ids) {
+        try {
+          await mediaApiClient.deleteMedia(id);
+          succeeded++;
+          successfulIds.push(id);
+        } catch (err) {
+          failed++;
+          console.warn(`Failed to delete media ${id}:`, err);
+        }
+      }
+
+      if (successfulIds.length > 0) {
+        const idSet = new Set(successfulIds);
+        setItems((prev) => {
+          prev.forEach((item) => {
+            if (idSet.has(item.id) && item.blobUrl && item.blobUrl.startsWith('blob:')) {
+              try {
+                URL.revokeObjectURL(item.blobUrl);
+              } catch {
+                // ignore
+              }
+            }
+          });
+          return prev.filter((i) => !idSet.has(i.id));
+        });
+
+        // Unselect only the successfully deleted items
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          successfulIds.forEach((id) => next.delete(id));
+          return next;
+        });
+      }
+
+      return { succeeded, failed };
+    },
+    []
+  );
+
+  const clearAll = useCallback(async (): Promise<{ succeeded: number; failed: number }> => {
+    let succeeded = 0;
+    let failed = 0;
 
     try {
       await mediaApiClient.clearAll();
+      succeeded = items.length;
+
+      setItems((prev) => {
+        prev.forEach((item) => {
+          if (item.blobUrl && item.blobUrl.startsWith('blob:')) {
+            try {
+              URL.revokeObjectURL(item.blobUrl);
+            } catch {
+              // ignore
+            }
+          }
+        });
+        return [];
+      });
+
+      setSelectedIds(new Set());
     } catch (err) {
+      failed = items.length || 1;
       console.warn('Failed to clear all media on server:', err);
     }
-  }, []);
+
+    return { succeeded, failed };
+  }, [items.length]);
 
   // Multi-selection helpers
   const toggleSelect = useCallback((id: string) => {

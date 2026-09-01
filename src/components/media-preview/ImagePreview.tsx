@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ZoomIn, ZoomOut, RotateCcw, Copy, Download, Check, Info } from 'lucide-react';
 import { MediaItem } from '../../types';
 import { copyToClipboard } from '../../lib/utils';
+import { downloadMediaFile } from '../../lib/download-helper';
 
 interface ImagePreviewProps {
   item: MediaItem;
@@ -12,6 +13,7 @@ export const ImagePreview: React.FC<ImagePreviewProps> = ({ item, onToast }) => 
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
   const [copied, setCopied] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(
     item.imageMeta?.width && item.imageMeta?.height
       ? { width: item.imageMeta.width, height: item.imageMeta.height }
@@ -42,6 +44,19 @@ export const ImagePreview: React.FC<ImagePreviewProps> = ({ item, onToast }) => 
       setCopied(true);
       onToast('Tautan gambar berhasil disalin!');
       setTimeout(() => setCopied(false), 2200);
+    }
+  };
+
+  const handleDownload = async () => {
+    setIsDownloading(true);
+    try {
+      await downloadMediaFile(item.blobUrl || item.shareUrl, item.name);
+      onToast('Unduhan gambar dimulai!');
+    } catch {
+      onToast('Gagal mengunduh gambar. Membuka di tab baru...');
+      window.open(item.shareUrl, '_blank');
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -159,16 +174,15 @@ export const ImagePreview: React.FC<ImagePreviewProps> = ({ item, onToast }) => 
             <span>{copied ? 'Tautan Disalin!' : 'Salin Tautan'}</span>
           </button>
 
-          <a
-            href={item.blobUrl || item.shareUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            download={item.name}
-            className="flex items-center justify-center space-x-1.5 py-2.5 px-4 rounded-xl font-bold text-xs bg-white/10 hover:bg-white/20 text-white transition-all clean-tap"
+          <button
+            onClick={handleDownload}
+            disabled={isDownloading}
+            className="flex items-center justify-center space-x-1.5 py-2.5 px-4 rounded-xl font-bold text-xs bg-white/10 hover:bg-white/20 text-white transition-all clean-tap disabled:opacity-50"
+            aria-label="Unduh berkas gambar"
           >
             <Download className="w-4 h-4" />
-            <span>Unduh Berkas</span>
-          </a>
+            <span>{isDownloading ? 'Mengunduh...' : 'Unduh Berkas'}</span>
+          </button>
         </div>
       </div>
     </div>

@@ -31,6 +31,7 @@ export interface MediaItem {
   shareUrl: string; // Real production URL from storage provider (e.g. Catbox)
   provider: 'catbox' | 'local' | 's3';
   createdAt: number;
+  sessionId?: string; // Anonymous session scoping ID
   audioMeta?: AudioMetadata;
   videoMeta?: VideoMetadata;
   imageMeta?: ImageMetadata;
@@ -91,10 +92,10 @@ export interface StorageProvider {
 
 export interface MediaRepository {
   create(media: MediaObject): Promise<MediaObject>;
-  list(limit?: number): Promise<MediaObject[]>;
-  get(id: string): Promise<MediaObject | null>;
-  delete(id: string): Promise<boolean>;
-  clearAll(): Promise<void>;
+  list(sessionId: string, limit?: number): Promise<MediaObject[]>;
+  get(id: string, sessionId: string): Promise<MediaObject | null>;
+  delete(id: string, sessionId: string): Promise<boolean>;
+  clearAll(sessionId: string): Promise<void>;
 }
 
 export interface ApiSuccessResponse<T> {

@@ -16,7 +16,7 @@
 - **Real-Time Upload Progress**: Transparent progress tracking with calculated transfer speeds, estimated time remaining, and cancellable transfers via `AbortController`.
 - **Integrated Rich Players**:
   - **HTML5 Video Player**: Custom scrubber, volume sliders, picture-in-picture, fullscreen toggle, and keyboard shortcuts.
-  - **Dynamic Audio Player**: Real-time frequency bar visualizer powered by Web Audio API (`AnalyserNode`), automatic ID3 metadata extraction (artist, title, album, embedded artwork), and custom playback controls.
+  - **Dynamic Audio Player**: Animated waveform visualizer for visual feedback during playback, automatic ID3 metadata extraction (artist, title, album, embedded artwork), and custom playback controls.
   - **Image Lightbox**: Smooth zooming, aspect ratio retention, rotation controls, and fullscreen view.
 - **Media Library & Management**:
   - **Grid & List Views**: Responsive grid for visual media and dense list view for metadata inspection.
@@ -202,6 +202,17 @@ For full payload contracts and status codes, see [docs/api.md](docs/api.md).
 
 ---
 
+## AI Integration Roadmap (`@google/genai`)
+
+The project includes `@google/genai` in `package.json` and declares `MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API` in `metadata.json` in preparation for server-side AI media capabilities:
+- **Intelligent Auto-Tagging**: Automated categorization of uploaded photography, video, and audio files.
+- **Contextual Media Descriptions**: AI-generated descriptive summaries and audio transcription.
+- **Security & Content Safety**: Heuristic validation and classification on server-side media proxy streams.
+
+All Gemini API calls will run exclusively on the server layer using `process.env.GEMINI_API_KEY`, keeping client bundles light and credentials secure. For technical details, see [docs/roadmap.md](docs/roadmap.md).
+
+---
+
 ## Project Status
 
 - :white_check_mark: **Real Catbox Storage Integration**: Fully operational.
@@ -209,6 +220,7 @@ For full payload contracts and status codes, see [docs/api.md](docs/api.md).
 - :white_check_mark: **Rich Audio/Video Players & Visualizer**: Fully operational.
 - :white_check_mark: **Security & Rate Limiting Hardening**: Fully operational.
 - :white_check_mark: **CI/CD & Repository Infrastructure**: Fully operational.
+- :hourglass_flowing_sand: **AI Enhancements (`@google/genai`)**: Prepared in dependency & architecture roadmap.
 
 ---
 
@@ -218,6 +230,7 @@ For full payload contracts and status codes, see [docs/api.md](docs/api.md).
 - [API Reference](docs/api.md)
 - [Development Workflow](docs/development.md)
 - [Deployment Guide](docs/deployment.md)
+- [Feature & AI Roadmap](docs/roadmap.md)
 
 ---
 

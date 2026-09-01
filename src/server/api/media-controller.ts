@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { CatboxStorageProvider } from '../storage/catbox-storage-provider';
-import { developmentMediaRepository } from '../repository/development-repository';
+import { getMediaRepository } from '../repository/media-repository';
 import {
   validateUploadedFile,
   isValidMediaId,
@@ -15,7 +15,6 @@ import {
 } from '../../types';
 
 const storageProvider = new CatboxStorageProvider();
-const mediaRepository = developmentMediaRepository;
 
 // Max upload size in bytes (defaults to 200MB, Catbox limit)
 const MAX_UPLOAD_SIZE = parseInt(
@@ -61,6 +60,7 @@ export const mediaController = {
    * Receives uploaded file stream, validates strictly, uploads to Catbox, and persists metadata.
    */
   async uploadMedia(req: Request, res: Response): Promise<void> {
+    const mediaRepository = getMediaRepository();
     try {
       const file = req.file;
 
@@ -83,6 +83,7 @@ export const mediaController = {
       const sanitizedName = validation.sanitizedFilename;
       const mediaType = validation.detectedMediaType;
       const mimeType = file.mimetype || 'application/octet-stream';
+      const sessionId = req.sessionId;
 
       // Optional client metadata parsing with safe field picking
       let imageMeta: ImageMetadata | undefined;
@@ -115,8 +116,36 @@ export const mediaController = {
                 artist: typeof parsed.audioMeta.artist === 'string' ? parsed.audioMeta.artist.slice(0, 150) : undefined,
                 album: typeof parsed.audioMeta.album === 'string' ? parsed.audioMeta.album.slice(0, 150) : undefined,
                 duration: typeof parsed.audioMeta.duration === 'number' ? parsed.audioMeta.duration : undefined,
-                coverUrl: typeof parsed.audioMeta.coverUrl === 'string' ? parsed.audioMeta.coverUrl.slice(0, 2000) : undefined,
+                coverUrl: undefined, // Handled specifically below to prevent base64 truncation
               };
+
+              // Decode and upload embedded ID3 cover art safely as separate file if provided
+              const rawCover = parsed.audioMeta.coverUrl;
+              if (typeof rawCover === 'string' && rawCover.startsWith('data:image/')) {
+                try {
+                  const match = rawCover.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
+                  if (match) {
+                    const coverMime = match[1];
+                    const base64Data = match[2];
+                    const coverBuffer = Buffer.from(base64Data, 'base64');
+                    // Check reasonable size constraint (<= 2MB)
+                    if (coverBuffer.length > 0 && coverBuffer.length <= 2 * 1024 * 1024) {
+                      const baseName = sanitizedName.replace(/\.[^.]+$/, '');
+                      const coverFilename = `${baseName}-cover.jpg`;
+                      const coverUpload = await storageProvider.upload(
+                        coverBuffer,
+                        coverFilename,
+                        coverMime
+                      );
+                      audioMeta.coverUrl = coverUpload.url;
+                    }
+                  }
+                } catch (coverErr) {
+                  console.warn('Failed to upload audio cover art to storage provider:', coverErr);
+                }
+              } else if (typeof rawCover === 'string' && (rawCover.startsWith('http://') || rawCover.startsWith('https://'))) {
+                audioMeta.coverUrl = rawCover;
+              }
             }
           }
         } catch {
@@ -131,7 +160,7 @@ export const mediaController = {
         mimeType
       );
 
-      // Construct normalized MediaObject
+      // Construct normalized MediaObject with anonymous session scoping
       const mediaObject: MediaObject = {
         id: uploadResult.id,
         name: sanitizedName,
@@ -143,6 +172,7 @@ export const mediaController = {
         shareUrl: uploadResult.url,
         provider: 'catbox',
         createdAt: Date.now(),
+        sessionId,
         imageMeta,
         videoMeta,
         audioMeta,
@@ -177,14 +207,15 @@ export const mediaController = {
 
   /**
    * GET /api/media
-   * Retrieves list of stored media items
+   * Retrieves list of stored media items scoped to current caller session
    */
   async listMedia(req: Request, res: Response): Promise<void> {
+    const mediaRepository = getMediaRepository();
     try {
       const rawLimit = parseInt(req.query.limit as string, 10);
       const limit = isNaN(rawLimit) ? 100 : Math.min(Math.max(1, rawLimit), 200);
 
-      const items = await mediaRepository.list(limit);
+      const items = await mediaRepository.list(req.sessionId, limit);
       const response: ApiSuccessResponse<MediaObject[]> = {
         success: true,
         data: items,
@@ -206,9 +237,10 @@ export const mediaController = {
 
   /**
    * GET /api/media/:id
-   * Retrieves single media item by ID
+   * Retrieves single media item by ID, scoped to caller session
    */
   async getMedia(req: Request, res: Response): Promise<void> {
+    const mediaRepository = getMediaRepository();
     try {
       const { id } = req.params;
       if (!isValidMediaId(id)) {
@@ -223,7 +255,7 @@ export const mediaController = {
         return;
       }
 
-      const item = await mediaRepository.get(id);
+      const item = await mediaRepository.get(id, req.sessionId);
       if (!item) {
         const err: ApiErrorResponse = {
           success: false,
@@ -257,9 +289,10 @@ export const mediaController = {
 
   /**
    * DELETE /api/media/:id
-   * Deletes item from repository and requests Catbox deletion if userhash is configured
+   * Deletes item from repository (session-scoped) and requests Catbox deletion if userhash is configured
    */
   async deleteMedia(req: Request, res: Response): Promise<void> {
+    const mediaRepository = getMediaRepository();
     try {
       const { id } = req.params;
       if (!isValidMediaId(id)) {
@@ -274,7 +307,7 @@ export const mediaController = {
         return;
       }
 
-      const item = await mediaRepository.get(id);
+      const item = await mediaRepository.get(id, req.sessionId);
 
       if (!item) {
         const err: ApiErrorResponse = {
@@ -289,7 +322,7 @@ export const mediaController = {
       }
 
       // Delete from repository
-      await mediaRepository.delete(id);
+      await mediaRepository.delete(id, req.sessionId);
 
       // Attempt deletion on storage provider if URL is known
       let providerResult: {
@@ -332,11 +365,12 @@ export const mediaController = {
 
   /**
    * DELETE /api/media
-   * Clears repository history
+   * Clears repository history for current session
    */
   async clearAllMedia(req: Request, res: Response): Promise<void> {
+    const mediaRepository = getMediaRepository();
     try {
-      await mediaRepository.clearAll();
+      await mediaRepository.clearAll(req.sessionId);
       const response: ApiSuccessResponse<{ cleared: boolean }> = {
         success: true,
         data: { cleared: true },
