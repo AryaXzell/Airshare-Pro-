@@ -116,6 +116,8 @@ export const mediaController = {
                 artist: typeof parsed.audioMeta.artist === 'string' ? parsed.audioMeta.artist.slice(0, 150) : undefined,
                 album: typeof parsed.audioMeta.album === 'string' ? parsed.audioMeta.album.slice(0, 150) : undefined,
                 duration: typeof parsed.audioMeta.duration === 'number' ? parsed.audioMeta.duration : undefined,
+                coverWidth: typeof parsed.audioMeta.coverWidth === 'number' && parsed.audioMeta.coverWidth > 0 ? parsed.audioMeta.coverWidth : undefined,
+                coverHeight: typeof parsed.audioMeta.coverHeight === 'number' && parsed.audioMeta.coverHeight > 0 ? parsed.audioMeta.coverHeight : undefined,
                 coverUrl: undefined, // Handled specifically below to prevent base64 truncation
               };
 

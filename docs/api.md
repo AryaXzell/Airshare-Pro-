@@ -162,7 +162,7 @@ Delete a media item from the repository and trigger upstream Catbox deletion if 
   }
 }
 ```
-*Note: If `CATBOX_USERHASH` is not configured, `supported` is `false` and the file is removed from local application history.*
+*Note: If `CATBOX_USERHASH` is not configured, `supported` is `false` and the file entry is removed from the caller's session-scoped repository, but the underlying file remains on Catbox.*
 
 ---
 

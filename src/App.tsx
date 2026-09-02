@@ -1,10 +1,11 @@
-import React, { Suspense, lazy, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { Header } from './components/header/Header';
 import { UploadCard } from './components/upload/UploadCard';
 import { MediaLibrary } from './components/media-library/MediaLibrary';
 import { Toast } from './components/ui/Toast';
 import { useTheme } from './hooks/useTheme';
 import { useToast } from './hooks/useToast';
+import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useMediaLibrary } from './hooks/useMediaLibrary';
 import { useUpload } from './hooks/useUpload';
 import { MediaItem, MediaType } from './types';
@@ -25,6 +26,7 @@ const ActionSheet = lazy(() =>
 export default function App() {
   const { theme, setTheme } = useTheme();
   const { toast, toasts, showToast, hideToast } = useToast();
+  const { isOnline } = useOnlineStatus();
   const {
     items,
     filteredItems,
@@ -47,10 +49,43 @@ export default function App() {
     toggleSelect,
     selectAllVisible,
     clearSelection,
+    refreshFromServer,
   } = useMediaLibrary();
 
   const [isActionSheetOpen, setIsActionSheetOpen] = useState(false);
   const [previewItem, setPreviewItem] = useState<MediaItem | null>(null);
+
+  // Connection status & persistent toast tracking
+  const prevOnlineRef = useRef<boolean>(isOnline);
+  const offlineToastIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    // When device goes offline
+    if (!isOnline) {
+      if (!offlineToastIdRef.current) {
+        const id = showToast('Anda sedang offline — beberapa fitur tidak tersedia', {
+          type: 'warning',
+          duration: 0, // Persistent until reconnected or dismissed
+        });
+        offlineToastIdRef.current = id;
+      }
+    } else {
+      // When device comes back online after being offline
+      if (offlineToastIdRef.current) {
+        hideToast(offlineToastIdRef.current);
+        offlineToastIdRef.current = null;
+      }
+      if (!prevOnlineRef.current) {
+        showToast('Koneksi kembali tersambung', {
+          type: 'success',
+          duration: 3500,
+        });
+        // Auto-refetch fresh data from server upon reconnection (online-first)
+        refreshFromServer();
+      }
+    }
+    prevOnlineRef.current = isOnline;
+  }, [isOnline, showToast, hideToast, refreshFromServer]);
 
   // Hidden inputs for dedicated action sheet triggers
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -67,6 +102,12 @@ export default function App() {
 
   const handleActionSheetSelect = (type: MediaType | 'any') => {
     setIsActionSheetOpen(false);
+    if (!isOnline) {
+      showToast('Anda sedang offline. Hubungkan perangkat ke internet untuk mengunggah.', {
+        type: 'warning',
+      });
+      return;
+    }
     // Trigger the appropriate file input
     setTimeout(() => {
       if (type === 'image') imageInputRef.current?.click();
@@ -76,6 +117,13 @@ export default function App() {
   };
 
   const handleDedicatedFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!isOnline) {
+      showToast('Anda sedang offline. Hubungkan perangkat ke internet untuk mengunggah.', {
+        type: 'warning',
+      });
+      e.target.value = '';
+      return;
+    }
     if (uploadState.isUploading) {
       showToast('Proses unggahan lain sedang berjalan. Harap tunggu hingga selesai.', {
         type: 'warning',
@@ -97,7 +145,7 @@ export default function App() {
         ref={imageInputRef}
         type="file"
         accept="image/*"
-        disabled={uploadState.isUploading}
+        disabled={uploadState.isUploading || !isOnline}
         onChange={handleDedicatedFileSelected}
         className="hidden"
       />
@@ -105,7 +153,7 @@ export default function App() {
         ref={videoInputRef}
         type="file"
         accept="video/*"
-        disabled={uploadState.isUploading}
+        disabled={uploadState.isUploading || !isOnline}
         onChange={handleDedicatedFileSelected}
         className="hidden"
       />
@@ -113,7 +161,7 @@ export default function App() {
         ref={audioInputRef}
         type="file"
         accept="audio/*"
-        disabled={uploadState.isUploading}
+        disabled={uploadState.isUploading || !isOnline}
         onChange={handleDedicatedFileSelected}
         className="hidden"
       />
@@ -123,6 +171,7 @@ export default function App() {
         currentTheme={theme}
         onSelectTheme={setTheme}
         mediaCount={items.length}
+        onToast={showToast}
       />
 
       {/* Main App Content Container */}
@@ -149,6 +198,7 @@ export default function App() {
           onRequestActionSheet={() => setIsActionSheetOpen(true)}
           onPreviewItem={(item) => setPreviewItem(item)}
           onToast={showToast}
+          isOnline={isOnline}
         />
 
         {/* Media History / Library */}
@@ -205,3 +255,4 @@ export default function App() {
     </div>
   );
 }
+

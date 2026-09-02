@@ -1,25 +1,29 @@
 import React, { useRef, useState } from 'react';
-import { PlusCircle, UploadCloud, Image, Video, Music } from 'lucide-react';
+import { PlusCircle, UploadCloud, Image, Video, Music, WifiOff } from 'lucide-react';
 
 interface UploadZoneProps {
   onFileSelected: (file: File) => void;
   onRequestActionSheet: () => void;
   disabled?: boolean;
+  isOnline?: boolean;
 }
 
 export const UploadZone: React.FC<UploadZoneProps> = ({
   onFileSelected,
   onRequestActionSheet,
   disabled = false,
+  isOnline = true,
 }) => {
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounter = useRef(0);
   const genericInputRef = useRef<HTMLInputElement>(null);
 
+  const effectiveDisabled = disabled || !isOnline;
+
   const handleDragEnter = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (disabled) return;
+    if (effectiveDisabled) return;
     dragCounter.current += 1;
     if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
       setIsDragOver(true);
@@ -29,7 +33,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (disabled) return;
+    if (effectiveDisabled) return;
     if (!isDragOver) {
       setIsDragOver(true);
     }
@@ -38,7 +42,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (disabled) return;
+    if (effectiveDisabled) return;
     dragCounter.current -= 1;
     if (dragCounter.current <= 0) {
       dragCounter.current = 0;
@@ -51,7 +55,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
     e.stopPropagation();
     dragCounter.current = 0;
     setIsDragOver(false);
-    if (disabled) return;
+    if (effectiveDisabled) return;
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const file = e.dataTransfer.files[0];
@@ -73,6 +77,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
         ref={genericInputRef}
         type="file"
         accept="image/*,video/*,audio/*"
+        disabled={effectiveDisabled}
         onChange={handleGenericFileChange}
         className="hidden"
       />
@@ -83,10 +88,10 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onClick={() => {
-          if (!disabled) onRequestActionSheet();
+          if (!effectiveDisabled) onRequestActionSheet();
         }}
         className={`border-2 border-dashed rounded-[1.8rem] sm:rounded-[2.2rem] p-8 sm:p-11 flex flex-col items-center justify-center cursor-pointer group transition-all duration-200 relative overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 ${
-          disabled ? 'opacity-60 cursor-not-allowed' : ''
+          effectiveDisabled ? 'opacity-70 cursor-not-allowed' : ''
         } ${
           isDragOver
             ? 'scale-[1.008] border-solid'
@@ -97,11 +102,20 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
           backgroundColor: isDragOver ? 'var(--accent-soft)' : 'var(--surface-secondary)',
         }}
         role="button"
-        tabIndex={disabled ? -1 : 0}
-        aria-label="Mulai berbagi media. Klik atau seret file foto, video, atau audio ke sini."
-        aria-disabled={disabled}
+        tabIndex={effectiveDisabled ? -1 : 0}
+        aria-label={
+          !isOnline
+            ? 'Anda sedang offline. Hubungkan perangkat ke internet untuk mengunggah berkas.'
+            : 'Mulai berbagi media. Klik atau seret file foto, video, atau audio ke sini.'
+        }
+        aria-disabled={effectiveDisabled}
+        title={
+          !isOnline
+            ? 'Anda sedang offline — unggahan membutuhkan koneksi internet'
+            : undefined
+        }
         onKeyDown={(e) => {
-          if (!disabled && (e.key === 'Enter' || e.key === ' ')) {
+          if (!effectiveDisabled && (e.key === 'Enter' || e.key === ' ')) {
             e.preventDefault();
             onRequestActionSheet();
           }
@@ -110,11 +124,13 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
         <div
           className="p-4 sm:p-4.5 rounded-2xl mb-4 transition-transform duration-200 group-hover:scale-105 flex items-center justify-center border pointer-events-none"
           style={{
-            backgroundColor: 'var(--accent-soft)',
+            backgroundColor: !isOnline ? 'var(--surface-primary)' : 'var(--accent-soft)',
             borderColor: 'var(--border-subtle)',
           }}
         >
-          {isDragOver ? (
+          {!isOnline ? (
+            <WifiOff className="w-7 h-7 sm:w-8 sm:h-8 text-amber-500 opacity-80" />
+          ) : isDragOver ? (
             <UploadCloud className="w-7 h-7 sm:w-8 sm:h-8" style={{ color: 'var(--accent)' }} />
           ) : (
             <PlusCircle className="w-7 h-7 sm:w-8 sm:h-8 stroke-[2.2]" style={{ color: 'var(--accent)' }} />
@@ -122,11 +138,19 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
         </div>
 
         <h3 className="font-extrabold text-base sm:text-lg text-center tracking-tight pointer-events-none" style={{ color: 'var(--text-main)' }}>
-          {isDragOver ? 'Lepaskan berkas di sini' : 'Mulai Berbagi Media'}
+          {!isOnline
+            ? 'Mode Offline Aktif'
+            : isDragOver
+            ? 'Lepaskan berkas di sini'
+            : 'Mulai Berbagi Media'}
         </h3>
 
         <p className="text-xs sm:text-sm mt-1.5 text-center font-medium max-w-xs sm:max-w-sm pointer-events-none" style={{ color: 'var(--text-muted)' }}>
-          {isDragOver ? 'Berkas siap diproses dan dikirim' : 'Ketuk untuk memilih foto, video, atau audio dari perangkat Anda'}
+          {!isOnline
+            ? 'Fitur unggah dinonaktifkan sementara. Hubungkan perangkat ke internet untuk melanjutkan.'
+            : isDragOver
+            ? 'Berkas siap diproses dan dikirim'
+            : 'Ketuk untuk memilih foto, video, atau audio dari perangkat Anda'}
         </p>
 
         <div
@@ -152,3 +176,4 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
     </div>
   );
 };
+

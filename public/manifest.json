@@ -1,0 +1,39 @@
+{
+  "id": "/",
+  "name": "AirShare Pro — Media Sharing & Streaming Hub",
+  "short_name": "AirShare Pro",
+  "description": "Platform berbagi foto, video, dan audio instan berkecepatan tinggi dengan pemutar media terintegrasi, desain Clean Glass, dan tanpa batasan kecepatan.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#fdf9fa",
+  "theme_color": "#fdf9fa",
+  "categories": ["utilities", "productivity", "multimedia"],
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

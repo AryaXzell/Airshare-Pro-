@@ -12,6 +12,7 @@ interface UploadCardProps {
   onRequestActionSheet: () => void;
   onPreviewItem: (item: MediaItem) => void;
   onToast: (msg: string) => void;
+  isOnline?: boolean;
 }
 
 export const UploadCard: React.FC<UploadCardProps> = ({
@@ -19,6 +20,7 @@ export const UploadCard: React.FC<UploadCardProps> = ({
   onRequestActionSheet,
   onPreviewItem,
   onToast,
+  isOnline = true,
 }) => {
   const {
     isUploading,
@@ -41,7 +43,14 @@ export const UploadCard: React.FC<UploadCardProps> = ({
   const videoInputRef = useRef<HTMLInputElement>(null);
   const audioInputRef = useRef<HTMLInputElement>(null);
 
+  const effectiveDisabled = isUploading || !isOnline;
+
   const handleSpecificFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!isOnline) {
+      onToast('Anda sedang offline. Hubungkan perangkat ke internet untuk mengunggah.');
+      e.target.value = '';
+      return;
+    }
     if (isUploading) {
       onToast('Proses unggahan lain sedang berjalan. Harap tunggu hingga selesai.');
       e.target.value = '';
@@ -71,7 +80,7 @@ export const UploadCard: React.FC<UploadCardProps> = ({
         ref={imageInputRef}
         type="file"
         accept="image/*"
-        disabled={isUploading}
+        disabled={effectiveDisabled}
         onChange={handleSpecificFileSelected}
         className="hidden"
       />
@@ -79,7 +88,7 @@ export const UploadCard: React.FC<UploadCardProps> = ({
         ref={videoInputRef}
         type="file"
         accept="video/*"
-        disabled={isUploading}
+        disabled={effectiveDisabled}
         onChange={handleSpecificFileSelected}
         className="hidden"
       />
@@ -87,7 +96,7 @@ export const UploadCard: React.FC<UploadCardProps> = ({
         ref={audioInputRef}
         type="file"
         accept="audio/*"
-        disabled={isUploading}
+        disabled={effectiveDisabled}
         onChange={handleSpecificFileSelected}
         className="hidden"
       />
@@ -97,6 +106,7 @@ export const UploadCard: React.FC<UploadCardProps> = ({
         onFileSelected={(file) => startUpload(file)}
         onRequestActionSheet={onRequestActionSheet}
         disabled={isUploading}
+        isOnline={isOnline}
       />
 
       {/* Error Notice with Retry & Dismiss Recovery */}

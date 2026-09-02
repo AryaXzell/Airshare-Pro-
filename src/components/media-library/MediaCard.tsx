@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { MediaItem, ViewMode } from '../../types';
 import { copyToClipboard, formatDate } from '../../lib/utils';
+import { shareSingleMedia, ToastFunction } from '../../lib/share-helper';
 
 interface MediaCardProps {
   item: MediaItem;
@@ -24,7 +25,7 @@ interface MediaCardProps {
   onPreview: (item: MediaItem) => void;
   onInspect: (item: MediaItem) => void;
   onDelete: (id: string) => void;
-  onToast: (msg: string) => void;
+  onToast: ToastFunction;
 }
 
 const MediaCardComponent: React.FC<MediaCardProps> = ({
@@ -47,27 +48,13 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
       onToast('Tautan berhasil disalin!');
       setTimeout(() => setCopied(false), 2200);
     } else {
-      onToast('Gagal menyalin tautan.');
+      onToast('Gagal menyalin tautan.', { type: 'error' });
     }
   };
 
   const handleShare = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: item.name,
-          text: `Berkas ${item.name} di AirShare Pro`,
-          url: item.shareUrl,
-        });
-      } catch (err: unknown) {
-        if ((err as Error).name !== 'AbortError') {
-          handleCopy(e);
-        }
-      }
-    } else {
-      handleCopy(e);
-    }
+    await shareSingleMedia(item, onToast);
   };
 
   const renderThumbnail = (isLargeGrid = false) => {
@@ -178,12 +165,11 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
   if (viewMode === 'grid') {
     return (
       <motion.div
-        layout
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
         transition={{ duration: 0.15 }}
-        className="clean-surface rounded-[1.8rem] p-3 flex flex-col justify-between transition-all group relative border"
+        className="media-card-grid clean-surface rounded-[1.8rem] p-3 flex flex-col justify-between transition-all group relative border"
         style={{
           backgroundColor: isSelected ? 'var(--surface-elevated)' : 'var(--surface-primary)',
           borderColor: isSelected ? 'var(--accent)' : 'var(--border-subtle)',
@@ -284,12 +270,11 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
   // ================= LIST VIEW =================
   return (
     <motion.div
-      layout
       initial={{ opacity: 0, scale: 0.97 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.95 }}
       transition={{ duration: 0.15 }}
-      className="clean-surface rounded-[1.6rem] sm:rounded-[1.8rem] p-3 sm:p-3.5 flex items-center justify-between space-x-3 transition-all group border"
+      className="media-card-list clean-surface rounded-[1.6rem] sm:rounded-[1.8rem] p-3 sm:p-3.5 flex items-center justify-between space-x-3 transition-all group border"
       style={{
         backgroundColor: isSelected ? 'var(--surface-elevated)' : 'var(--surface-primary)',
         borderColor: isSelected ? 'var(--accent)' : 'var(--border-subtle)',

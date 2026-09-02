@@ -286,8 +286,7 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
       {/* Media Collection (Grid or List Layout) */}
       {filteredItems.length > 0 && (
         <div className="space-y-4">
-          <motion.div
-            layout
+          <div
             className={
               viewMode === 'grid'
                 ? 'grid grid-cols-2 gap-3 sm:grid-cols-3'
@@ -309,7 +308,7 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
                 />
               ))}
             </AnimatePresence>
-          </motion.div>
+          </div>
 
           {/* Load More Pagination Button */}
           {hasMore && (
@@ -332,16 +331,21 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
       )}
 
       {/* Bulk Action Bar on Selection */}
-      <BulkActionBar
-        selectedCount={selectedIds.size}
-        totalVisibleCount={visibleIds.length}
-        allVisibleSelected={allVisibleSelected}
-        onSelectAllVisible={() => onSelectAllVisible(visibleIds)}
-        onClearSelection={onClearSelection}
-        onDeleteSelected={handleDeleteSelected}
-        getSelectedUrls={getSelectedUrls}
-        onToast={onToast}
-      />
+      <AnimatePresence>
+        {selectedIds.size > 0 && (
+          <BulkActionBar
+            key="bulk-action-bar"
+            selectedCount={selectedIds.size}
+            totalVisibleCount={visibleIds.length}
+            allVisibleSelected={allVisibleSelected}
+            onSelectAllVisible={() => onSelectAllVisible(visibleIds)}
+            onClearSelection={onClearSelection}
+            onDeleteSelected={handleDeleteSelected}
+            getSelectedUrls={getSelectedUrls}
+            onToast={onToast}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Media Detail Metadata Modal */}
       <MediaDetailModal

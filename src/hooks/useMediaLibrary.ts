@@ -52,10 +52,51 @@ export function useMediaLibrary() {
     }
   }, []);
 
+  // Refresh data from server on reconnect or manual trigger
+  const refreshFromServer = useCallback(async () => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return;
+    }
+    try {
+      setIsLoadingServer(true);
+      const serverList = await mediaApiClient.fetchList();
+      setItems((prev) => {
+        const mergedMap = new Map<string, MediaItem>();
+        prev.forEach((local) => {
+          mergedMap.set(local.id, local);
+        });
+        serverList.forEach((server) => {
+          const existing = mergedMap.get(server.id);
+          if (existing) {
+            mergedMap.set(server.id, {
+              ...server,
+              blobUrl: existing.blobUrl || server.shareUrl,
+            });
+          } else {
+            mergedMap.set(server.id, {
+              ...server,
+              blobUrl: server.shareUrl,
+            });
+          }
+        });
+        const result = Array.from(mergedMap.values());
+        result.sort((a, b) => b.createdAt - a.createdAt);
+        return result;
+      });
+    } catch (err) {
+      console.warn('Could not refresh media library with server:', err);
+    } finally {
+      setIsLoadingServer(false);
+    }
+  }, []);
+
   // Sync initial state from server repository on mount
   useEffect(() => {
     let isMounted = true;
     async function syncFromServer() {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        return;
+      }
       try {
         setIsLoadingServer(true);
         const serverList = await mediaApiClient.fetchList();
@@ -331,5 +372,6 @@ export function useMediaLibrary() {
     clearSelection,
     hasItems: items.length > 0,
     isLoadingServer,
+    refreshFromServer,
   };
 }

@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useEffect, useRef, useState } from 'react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { AlertCircle } from 'lucide-react';
 
 interface ConfirmDialogProps {
@@ -27,9 +27,12 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const shouldReduceMotion = useReducedMotion();
+  const [isAnimating, setIsAnimating] = useState(true);
 
   useEffect(() => {
     if (isOpen) {
+      setIsAnimating(true);
       // Save previously focused element to restore when dialog closes
       triggerElementRef.current = document.activeElement as HTMLElement | null;
 
@@ -89,24 +92,31 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
     <AnimatePresence>
       {isOpen && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+          {/* Static Blur Layer (Option A: instant blur mount without animated opacity to eliminate GPU jank) */}
+          <div className="fixed inset-0 clean-backdrop-blur pointer-events-none" />
+
+          {/* Animated Dark Overlay */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
+            transition={{ duration: shouldReduceMotion ? 0 : 0.15, ease: 'easeOut' }}
             onClick={onCancel}
-            className="fixed inset-0 clean-backdrop"
+            className="fixed inset-0 clean-backdrop-overlay cursor-pointer"
           />
 
           <motion.div
             ref={dialogRef}
-            initial={{ opacity: 0, scale: 0.94, y: 6 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.94, y: 6 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
+            initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.94, y: 6 }}
+            animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
+            exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.94, y: 6 }}
+            transition={{ duration: shouldReduceMotion ? 0 : 0.15, ease: 'easeOut' }}
+            onAnimationComplete={() => setIsAnimating(false)}
             className="relative w-full max-w-sm rounded-[2rem] p-6 clean-surface-elevated z-10 border text-center"
             style={{
               backgroundColor: 'var(--surface-elevated)',
               borderColor: 'var(--border-subtle)',
+              willChange: isAnimating && !shouldReduceMotion ? 'transform, opacity' : 'auto',
             }}
             role="alertdialog"
             aria-modal="true"

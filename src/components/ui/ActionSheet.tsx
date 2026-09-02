@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useEffect, useRef, useState } from 'react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { Image, Video, Music, ChevronRight, X } from 'lucide-react';
 import { MediaType } from '../../types';
 
@@ -16,9 +16,12 @@ export const ActionSheet: React.FC<ActionSheetProps> = ({
 }) => {
   const sheetRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
+  const shouldReduceMotion = useReducedMotion();
+  const [isAnimating, setIsAnimating] = useState(true);
 
   useEffect(() => {
     if (isOpen) {
+      setIsAnimating(true);
       triggerRef.current = document.activeElement as HTMLElement;
       // Focus first interactive item inside sheet
       const timer = setTimeout(() => {
@@ -78,27 +81,32 @@ export const ActionSheet: React.FC<ActionSheetProps> = ({
           aria-modal="true"
           aria-labelledby="actionsheet-title"
         >
-          {/* Backdrop */}
+          {/* Static Blur Layer (Option A: instant blur mount without animated opacity to eliminate GPU jank) */}
+          <div className="fixed inset-0 clean-backdrop-blur pointer-events-none" />
+
+          {/* Animated Dark Overlay */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.15 }}
+            transition={{ duration: shouldReduceMotion ? 0 : 0.15, ease: 'easeOut' }}
             onClick={onClose}
-            className="fixed inset-0 clean-backdrop"
+            className="fixed inset-0 clean-backdrop-overlay cursor-pointer"
           />
 
           {/* Sheet Container */}
           <motion.div
             ref={sheetRef}
-            initial={{ y: '100%', opacity: 0.8 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: '100%', opacity: 0 }}
-            transition={{ duration: 0.2, ease: 'easeOut' }}
+            initial={shouldReduceMotion ? { opacity: 0 } : { y: '100%', opacity: 0.8 }}
+            animate={shouldReduceMotion ? { opacity: 1 } : { y: 0, opacity: 1 }}
+            exit={shouldReduceMotion ? { opacity: 0 } : { y: '100%', opacity: 0 }}
+            transition={{ duration: shouldReduceMotion ? 0 : 0.2, ease: 'easeOut' }}
+            onAnimationComplete={() => setIsAnimating(false)}
             className="relative w-full max-w-md rounded-t-[2.2rem] sm:rounded-[2.2rem] p-5 sm:p-6 pb-8 z-10 border clean-surface-elevated overflow-hidden"
             style={{
               backgroundColor: 'var(--surface-elevated)',
               borderColor: 'var(--border-subtle)',
+              willChange: isAnimating && !shouldReduceMotion ? 'transform, opacity' : 'auto',
             }}
           >
             {/* Grab handle for mobile */}

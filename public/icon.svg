@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="roseGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f43f5e"/>
+      <stop offset="100%" stop-color="#e11d48"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="110" fill="#0f172a"/>
+  <!-- Nodes & Connectors -->
+  <g stroke="url(#roseGradient)" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <line x1="146" y1="256" x2="326" y2="166"/>
+    <line x1="146" y1="256" x2="326" y2="346"/>
+  </g>
+  <circle cx="326" cy="166" r="42" fill="url(#roseGradient)"/>
+  <circle cx="146" cy="256" r="42" fill="url(#roseGradient)"/>
+  <circle cx="326" cy="346" r="42" fill="url(#roseGradient)"/>
+</svg>

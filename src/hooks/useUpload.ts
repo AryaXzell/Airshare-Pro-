@@ -76,6 +76,13 @@ export function useUpload(onSuccess?: (item: MediaItem) => void): UseUploadRetur
         return null;
       }
 
+      // Check online status before initializing network request
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setLastFailedFile(file);
+        setError('Tidak dapat mengunggah — Anda sedang offline. Hubungkan perangkat ke internet untuk mengunggah.');
+        return null;
+      }
+
       // Reset state but keep track of active upload
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();

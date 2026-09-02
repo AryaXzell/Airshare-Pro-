@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useEffect, useRef, useState } from 'react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { Eye, X } from 'lucide-react';
 import { ImagePreview } from './ImagePreview';
 import { CustomVideoPlayer } from '../video-player/CustomVideoPlayer';
@@ -19,9 +19,12 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
 }) => {
   const modalRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
+  const shouldReduceMotion = useReducedMotion();
+  const [isAnimating, setIsAnimating] = useState(true);
 
   useEffect(() => {
     if (item) {
+      setIsAnimating(true);
       triggerRef.current = document.activeElement as HTMLElement;
       const timer = setTimeout(() => {
         const focusable = modalRef.current?.querySelectorAll<HTMLElement>(
@@ -92,23 +95,31 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
           aria-modal="true"
           aria-label={`Pratinjau media ${item.name}`}
         >
-          {/* Backdrop */}
+          {/* Static Blur Layer (Option A: instant blur mount without animated opacity to eliminate GPU jank) */}
+          <div className="fixed inset-0 clean-backdrop-blur pointer-events-none" />
+
+          {/* Animated Dark Overlay */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
+            transition={{ duration: shouldReduceMotion ? 0 : 0.15, ease: 'easeOut' }}
             onClick={onClose}
-            className="fixed inset-0 clean-backdrop"
+            className="fixed inset-0 clean-backdrop-overlay cursor-pointer"
           />
 
           {/* Modal Card */}
           <motion.div
             ref={modalRef}
-            initial={{ opacity: 0, scale: 0.95, y: 8 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 8 }}
-            transition={{ duration: 0.18, ease: 'easeOut' }}
+            initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.95, y: 8 }}
+            animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
+            exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.95, y: 8 }}
+            transition={{ duration: shouldReduceMotion ? 0 : 0.18, ease: 'easeOut' }}
+            onAnimationComplete={() => setIsAnimating(false)}
             className="relative z-10 w-full flex items-center justify-center my-auto"
+            style={{
+              willChange: isAnimating && !shouldReduceMotion ? 'transform, opacity' : 'auto',
+            }}
           >
             {item.type === 'video' ? (
               <CustomVideoPlayer item={item} onClose={onClose} onToast={onToast} />

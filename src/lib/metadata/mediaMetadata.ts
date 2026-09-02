@@ -183,11 +183,37 @@ export async function extractAudioMetadata(file: File): Promise<AudioMetadata> {
 
   const id3 = await parseId3Tags(file);
 
+  let coverWidth: number | undefined;
+  let coverHeight: number | undefined;
+
+  if (id3.coverUrl && typeof window !== 'undefined' && typeof Image !== 'undefined') {
+    try {
+      const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          resolve({ width: img.naturalWidth, height: img.naturalHeight });
+        };
+        img.onerror = () => {
+          reject(new Error('Failed to load cover image dimensions'));
+        };
+        img.src = id3.coverUrl!;
+      });
+      if (dimensions.width > 0 && dimensions.height > 0) {
+        coverWidth = dimensions.width;
+        coverHeight = dimensions.height;
+      }
+    } catch {
+      // Gracefully continue without cover dimensions
+    }
+  }
+
   return {
     title: id3.title || title,
     artist: id3.artist || artist || 'Artis Tidak Dikenal',
     album: id3.album,
     coverUrl: id3.coverUrl,
+    coverWidth,
+    coverHeight,
   };
 }
 

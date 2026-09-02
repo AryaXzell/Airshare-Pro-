@@ -189,7 +189,7 @@ export class CatboxStorageProvider implements StorageProvider {
         success: false,
         supported: false,
         message:
-          'Penghapusan dari server Catbox membutuhkan CATBOX_USERHASH. Berkas dihapus dari riwayat lokal.',
+          'Penghapusan dari server Catbox membutuhkan CATBOX_USERHASH. Berkas dihapus dari riwayat pada sesi Anda, namun berkas aslinya tetap ada di Catbox.',
       };
     }
 

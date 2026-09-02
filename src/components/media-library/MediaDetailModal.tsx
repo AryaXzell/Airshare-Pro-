@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import {
   X,
   Copy,
@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { MediaItem } from '../../types';
 import { copyToClipboard, formatDate } from '../../lib/utils';
+import { shareSingleMedia, ToastFunction } from '../../lib/share-helper';
 
 interface MediaDetailModalProps {
   item: MediaItem | null;
@@ -25,7 +26,7 @@ interface MediaDetailModalProps {
   onClose: () => void;
   onPreview: (item: MediaItem) => void;
   onDelete: (id: string) => void;
-  onToast: (msg: string) => void;
+  onToast: ToastFunction;
 }
 
 export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
@@ -39,9 +40,12 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
   const [copied, setCopied] = useState(false);
   const modalRef = useRef<HTMLDivElement>(null);
   const triggerElementRef = useRef<HTMLElement | null>(null);
+  const shouldReduceMotion = useReducedMotion();
+  const [isAnimating, setIsAnimating] = useState(true);
 
   useEffect(() => {
     if (isOpen && item) {
+      setIsAnimating(true);
       triggerElementRef.current = document.activeElement as HTMLElement | null;
       const timer = setTimeout(() => {
         const focusable = modalRef.current?.querySelectorAll<HTMLElement>(
@@ -100,26 +104,12 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
       onToast('Tautan berhasil disalin!');
       setTimeout(() => setCopied(false), 2000);
     } else {
-      onToast('Gagal menyalin tautan.');
+      onToast('Gagal menyalin tautan.', { type: 'error' });
     }
   };
 
   const handleShare = async () => {
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: item.name,
-          text: `Lihat berkas ${item.name} di AirShare Pro`,
-          url: item.shareUrl,
-        });
-      } catch (err: unknown) {
-        if ((err as Error).name !== 'AbortError') {
-          handleCopyUrl();
-        }
-      }
-    } else {
-      handleCopyUrl();
-    }
+    await shareSingleMedia(item, onToast);
   };
 
   const getTypeIcon = () => {
@@ -132,26 +122,32 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
   return (
     <AnimatePresence>
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        {/* Backdrop */}
+        {/* Static Blur Layer (Option A: instant blur mount without animated opacity to eliminate GPU jank) */}
+        <div className="fixed inset-0 clean-backdrop-blur pointer-events-none" />
+
+        {/* Animated Dark Overlay */}
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
+          transition={{ duration: shouldReduceMotion ? 0 : 0.15, ease: 'easeOut' }}
           onClick={onClose}
-          className="fixed inset-0 clean-backdrop"
+          className="fixed inset-0 clean-backdrop-overlay cursor-pointer"
         />
 
         {/* Modal Dialog */}
         <motion.div
           ref={modalRef}
-          initial={{ opacity: 0, scale: 0.95, y: 10 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95, y: 10 }}
-          transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+          initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.95, y: 10 }}
+          animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
+          exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.95, y: 10 }}
+          transition={{ duration: shouldReduceMotion ? 0 : 0.18, ease: 'easeOut' }}
+          onAnimationComplete={() => setIsAnimating(false)}
           className="relative w-full max-w-lg rounded-[2rem] p-6 shadow-2xl z-10 overflow-hidden clean-surface border"
           style={{
             backgroundColor: 'var(--surface-primary)',
             borderColor: 'var(--border-subtle)',
+            willChange: isAnimating && !shouldReduceMotion ? 'transform, opacity' : 'auto',
           }}
           role="dialog"
           aria-modal="true"

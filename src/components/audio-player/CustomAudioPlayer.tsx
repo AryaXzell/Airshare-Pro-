@@ -73,17 +73,53 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
   useEffect(() => {
     if ('mediaSession' in navigator && typeof window.MediaMetadata !== 'undefined') {
       try {
+        const coverWidth = item.audioMeta?.coverWidth;
+        const coverHeight = item.audioMeta?.coverHeight;
+        const isCustomCover = Boolean(item.audioMeta?.coverUrl);
+        const hasExplicitDimensions =
+          isCustomCover &&
+          typeof coverWidth === 'number' &&
+          typeof coverHeight === 'number' &&
+          coverWidth > 0 &&
+          coverHeight > 0;
+
+        const artworkMime = coverImage.endsWith('.svg')
+          ? 'image/svg+xml'
+          : coverImage.endsWith('.png')
+          ? 'image/png'
+          : 'image/jpeg';
+
+        const artwork = hasExplicitDimensions
+          ? [
+              {
+                src: coverImage,
+                sizes: `${coverWidth}x${coverHeight}`,
+                type: artworkMime,
+              },
+            ]
+          : [
+              {
+                src: coverImage,
+                sizes: '96x96',
+                type: artworkMime,
+              },
+              {
+                src: coverImage,
+                sizes: '192x192',
+                type: artworkMime,
+              },
+              {
+                src: coverImage,
+                sizes: '512x512',
+                type: artworkMime,
+              },
+            ];
+
         navigator.mediaSession.metadata = new window.MediaMetadata({
           title: songTitle,
           artist: songArtist,
           album: songAlbum,
-          artwork: [
-            {
-              src: coverImage,
-              sizes: '512x512',
-              type: 'image/jpeg',
-            },
-          ],
+          artwork,
         });
 
         navigator.mediaSession.setActionHandler('play', () => {

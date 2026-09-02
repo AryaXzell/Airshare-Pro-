@@ -22,9 +22,11 @@ export function useToast() {
       setToasts((current) => [...current, newToast]);
 
       const duration = options?.duration ?? 3200;
-      setTimeout(() => {
-        setToasts((current) => current.filter((t) => t.id !== id));
-      }, duration);
+      if (duration > 0 && duration !== Infinity) {
+        setTimeout(() => {
+          setToasts((current) => current.filter((t) => t.id !== id));
+        }, duration);
+      }
 
       return id;
     },

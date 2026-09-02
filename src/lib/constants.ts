@@ -11,6 +11,6 @@ export const THEMES: { id: ThemeName; name: string; swatch: string; isDark: bool
   { id: 'pacific', name: 'Pacific Blue', swatch: '#0ea5e9', isDark: true },
 ];
 
-export const DEFAULT_AUDIO_COVER = 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=600&auto=format';
+export const DEFAULT_AUDIO_COVER = '/default-audio-cover.svg';
 
 export const UPLOAD_CANCELLED_MESSAGE = 'Unggahan dibatalkan oleh pengguna.';

@@ -240,6 +240,18 @@
 }
 
 /* Modal and Sheet Backdrops (Restrained, low GPU cost) */
+/* Static blur layer: instantly rendered on mount without opacity transitions to avoid heavy per-frame GPU blur recalculations */
+.clean-backdrop-blur {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  background-color: transparent;
+}
+
+/* Animated dark color overlay: smooth opacity fade on solid background only */
+.clean-backdrop-overlay {
+  background-color: rgba(0, 0, 0, 0.55);
+}
+
 .clean-backdrop {
   background-color: rgba(0, 0, 0, 0.65);
 }
@@ -250,6 +262,17 @@
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
   }
+}
+
+/* Media Card Performance Optimization for Large Collections */
+.media-card-grid {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
+}
+
+.media-card-list {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 76px;
 }
 
 /* Inputs & Form Fields */

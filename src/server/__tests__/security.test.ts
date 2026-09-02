@@ -128,6 +128,17 @@ async function runSecurityTests() {
     globalThis.fetch = originalFetch;
   }
 
+  // Test 7.2: Catbox delete without userhash uses updated session copy without "riwayat lokal"
+  delete process.env.CATBOX_USERHASH;
+  const noUserhashProvider = new CatboxStorageProvider({ timeoutMs: 1000, maxRetries: 0 });
+  const noUserhashResult = await noUserhashProvider.delete('test_file.png');
+  assert(
+    !noUserhashResult.supported &&
+    Boolean(noUserhashResult.message?.includes('riwayat pada sesi Anda')) &&
+    !noUserhashResult.message?.includes('riwayat lokal'),
+    'Catbox delete without CATBOX_USERHASH returns updated session-scoped copy'
+  );
+
   // 8. Repository Mandatory Session Scoping Validation
   const { DevelopmentMediaRepository } = await import('../repository/development-repository');
   const { UpstashMediaRepository } = await import('../repository/upstash-repository');

@@ -1,18 +1,21 @@
 import React from 'react';
 import { Share2 } from 'lucide-react';
 import { ThemeSelector } from './ThemeSelector';
+import { PWAInstallButton } from './PWAInstallButton';
 import { ThemeName } from '../../types';
 
 interface HeaderProps {
   currentTheme: ThemeName;
   onSelectTheme: (theme: ThemeName) => void;
   mediaCount: number;
+  onToast?: (msg: string) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   currentTheme,
   onSelectTheme,
   mediaCount,
+  onToast,
 }) => {
   return (
     <div className="w-full flex justify-center pt-4 px-4 sticky top-0 z-40 pointer-events-none">
@@ -62,9 +65,11 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           )}
 
+          <PWAInstallButton onToast={onToast} />
           <ThemeSelector currentTheme={currentTheme} onSelectTheme={onSelectTheme} />
         </div>
       </header>
     </div>
   );
 };
+

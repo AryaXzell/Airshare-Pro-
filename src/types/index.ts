@@ -5,6 +5,8 @@ export interface AudioMetadata {
   artist?: string;
   album?: string;
   coverUrl?: string;
+  coverWidth?: number;
+  coverHeight?: number;
   duration?: number;
 }
 
