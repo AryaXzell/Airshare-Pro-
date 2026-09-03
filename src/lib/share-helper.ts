@@ -1,4 +1,4 @@
-import { copyToClipboard } from './utils';
+import { copyToClipboard, getPublicShareUrl } from './utils';
 
 export type ToastFunction = (
   msg: string,
@@ -28,15 +28,17 @@ function isAbortError(err: unknown): boolean {
  * falls back to clipboard copying with an explicit informative message.
  */
 export async function shareSingleMedia(
-  item: { name: string; shareUrl: string },
+  item: { id: string; name: string; shareUrl: string; publicShareUrl?: string },
   onToast: ToastFunction
 ): Promise<void> {
+  const targetUrl = getPublicShareUrl(item);
+
   if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
     try {
       await navigator.share({
         title: item.name,
         text: `Berkas ${item.name} di AirShare Pro`,
-        url: item.shareUrl,
+        url: targetUrl,
       });
       return; // Native share sheet displayed; visual feedback provided by OS
     } catch (err: unknown) {
@@ -47,7 +49,7 @@ export async function shareSingleMedia(
   }
 
   // Fallback: Copy URL to clipboard and explicitly inform the user
-  const ok = await copyToClipboard(item.shareUrl);
+  const ok = await copyToClipboard(targetUrl);
   if (ok) {
     onToast(
       'Berbagi langsung tidak didukung perangkat ini — tautan disalin ke clipboard sebagai gantinya.',

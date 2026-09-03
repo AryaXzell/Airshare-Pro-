@@ -14,7 +14,7 @@ import {
   Share2,
 } from 'lucide-react';
 import { MediaItem, ViewMode } from '../../types';
-import { copyToClipboard, formatDate } from '../../lib/utils';
+import { copyToClipboard, formatDate, getPublicShareUrl } from '../../lib/utils';
 import { shareSingleMedia, ToastFunction } from '../../lib/share-helper';
 
 interface MediaCardProps {
@@ -42,7 +42,8 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
 
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const ok = await copyToClipboard(item.shareUrl);
+    const targetUrl = getPublicShareUrl(item);
+    const ok = await copyToClipboard(targetUrl);
     if (ok) {
       setCopied(true);
       onToast('Tautan berhasil disalin!');

@@ -19,6 +19,7 @@ Because of its proprietary nature:
 For authorized maintainers working on this codebase:
 
 - **Audit Before Modifying**: Inspect existing architecture and dependencies prior to introducing changes.
+- **Dependency & Lockfile Sync**: Always ensure `package-lock.json` is perfectly synchronized with `package.json` by running `npm install` and verifying with `npm ci` locally prior to push.
 - **Type Safety**: Maintain strict TypeScript compliance (`npm run typecheck`). Avoid `@ts-ignore` or arbitrary `any` types.
 - **Testing**: Ensure all security and regression assertions pass (`npm run test`).
 - **No Hardcoded Secrets**: Never commit `.env` files, API keys, or provider userhashes.

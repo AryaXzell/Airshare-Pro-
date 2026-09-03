@@ -44,6 +44,15 @@ export class DevelopmentMediaRepository implements MediaRepository {
     return { ...item };
   }
 
+  public async getByIdPublic(id: string): Promise<MediaObject | null> {
+    if (!id || typeof id !== 'string' || !id.trim()) {
+      return null;
+    }
+    const item = this.items.get(id.trim());
+    if (!item) return null;
+    return { ...item };
+  }
+
   public async delete(id: string, sessionId: string): Promise<boolean> {
     assertValidSessionId(sessionId, 'delete');
     const item = this.items.get(id);

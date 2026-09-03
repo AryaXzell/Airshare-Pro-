@@ -150,7 +150,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
             ? 'Fitur unggah dinonaktifkan sementara. Hubungkan perangkat ke internet untuk melanjutkan.'
             : isDragOver
             ? 'Berkas siap diproses dan dikirim'
-            : 'Ketuk untuk memilih foto, video, atau audio dari perangkat Anda'}
+            : 'Ketuk, seret, atau tempel (Ctrl+V) media dari perangkat Anda'}
         </p>
 
         <div

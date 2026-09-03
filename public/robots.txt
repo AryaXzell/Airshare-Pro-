@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /s/
+
+Sitemap: https://airshare-pro.vercel.app/sitemap.xml

@@ -82,7 +82,19 @@ RATE_LIMIT_MAX_UPLOADS_PER_MIN=20
 
 ---
 
-## 6. Testing & Quality Assurance
+## 6. Dependency Management & Lockfile Policy
+
+- Always manage dependencies through standard npm commands (`npm install <pkg>` or `npm install -D <pkg>`).
+- If `package.json` is modified manually (adding/removing dependencies), you **MUST** immediately run `npm install` locally to regenerate and synchronize `package-lock.json`.
+- Before committing and pushing to remote, always verify with `npm ci` locally to ensure the lockfile passes strict CI validation:
+  ```bash
+  # Test clean CI installation locally
+  npm ci
+  ```
+
+---
+
+## 7. Testing & Quality Assurance
 
 Run the automated test suite before opening any pull request:
 

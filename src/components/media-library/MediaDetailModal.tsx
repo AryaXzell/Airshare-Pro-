@@ -17,7 +17,7 @@ import {
   Image as ImageIcon,
 } from 'lucide-react';
 import { MediaItem } from '../../types';
-import { copyToClipboard, formatDate } from '../../lib/utils';
+import { copyToClipboard, formatDate, getPublicShareUrl } from '../../lib/utils';
 import { shareSingleMedia, ToastFunction } from '../../lib/share-helper';
 
 interface MediaDetailModalProps {
@@ -97,8 +97,10 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
 
   if (!isOpen || !item) return null;
 
+  const publicUrl = getPublicShareUrl(item);
+
   const handleCopyUrl = async () => {
-    const ok = await copyToClipboard(item.shareUrl);
+    const ok = await copyToClipboard(publicUrl);
     if (ok) {
       setCopied(true);
       onToast('Tautan berhasil disalin!');
@@ -275,8 +277,8 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
             className="p-3 rounded-2xl mb-5 flex items-center justify-between space-x-2 border min-w-0 overflow-hidden"
             style={{ backgroundColor: 'var(--surface-secondary)', borderColor: 'var(--border-subtle)' }}
           >
-            <p className="text-xs font-mono truncate min-w-0 flex-1 font-semibold" style={{ color: 'var(--accent)' }} title={item.shareUrl}>
-              {item.shareUrl}
+            <p className="text-xs font-mono truncate min-w-0 flex-1 font-semibold" style={{ color: 'var(--accent)' }} title={publicUrl}>
+              {publicUrl}
             </p>
             <button
               onClick={handleCopyUrl}

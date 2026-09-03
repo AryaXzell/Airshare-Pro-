@@ -1,6 +1,7 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cookieParser from 'cookie-parser';
 import { mediaRouter } from './api/routes';
+import { shareController } from './api/share-controller';
 import { requestLoggerMiddleware } from './security/request-logger';
 import { sessionMiddleware } from './security/session';
 import { ApiErrorResponse } from '../types';
@@ -124,6 +125,11 @@ export function createExpressApp(): Express {
 
   app.route('/api/health').get(healthHandler).all(healthMethodNotAllowed);
   app.route('/health').get(healthHandler).all(healthMethodNotAllowed);
+
+  // Mount Public Share Landing Page (/s/:id) with Open Graph preview
+  app.get('/s/:id', (req: Request, res: Response) => {
+    return shareController.renderShareLanding(req, res);
+  });
 
   // Mount API media routes
   app.use('/api/media', mediaRouter);

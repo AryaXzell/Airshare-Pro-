@@ -8,6 +8,7 @@ import { useToast } from './hooks/useToast';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useMediaLibrary } from './hooks/useMediaLibrary';
 import { useUpload } from './hooks/useUpload';
+import { usePasteUpload } from './hooks/usePasteUpload';
 import { MediaItem, MediaType } from './types';
 
 // Lazy-load non-critical interactive overlays to reduce initial bundle size & execution time
@@ -98,6 +99,15 @@ export default function App() {
       description: newItem.name,
       type: 'success',
     });
+  });
+
+  // Enable clipboard paste-to-upload (Ctrl+V / Cmd+V anywhere on the page)
+  usePasteUpload({
+    isEnabled: isOnline && !uploadState.isUploading,
+    onFilePasted: (file) => {
+      uploadState.startUpload(file);
+    },
+    onToast: showToast,
   });
 
   const handleActionSheetSelect = (type: MediaType | 'any') => {

@@ -311,7 +311,15 @@ async function runSecurityTests() {
       'Unknown API route returns structured 404 NOT_FOUND'
     );
 
-    // Test 9.6: Production CSP frame-ancestors is strictly 'self'
+    // Test 9.6: Share landing page /s/:id handles non-existent item gracefully
+    const shareRes = await fetch(`${baseUrl}/s/nonexistent_test_item_123`);
+    const shareHtml = await shareRes.text();
+    assert(
+      shareRes.status === 404 && shareHtml.includes('Berkas Tidak Ditemukan'),
+      'GET /s/:id returns 404 HTML landing page when item is not found'
+    );
+
+    // Test 9.7: Production CSP frame-ancestors is strictly 'self'
     const prevEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
     const prodApp = createExpressApp();

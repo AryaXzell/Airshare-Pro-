@@ -7,6 +7,7 @@ import { BulkActionBar } from './BulkActionBar';
 import { MediaDetailModal } from './MediaDetailModal';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { MediaItem, MediaType, SortOption, ViewMode } from '../../types';
+import { getPublicShareUrl } from '../../lib/utils';
 
 interface MediaLibraryProps {
   items: MediaItem[];
@@ -136,7 +137,7 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
   const getSelectedUrls = () => {
     return items
       .filter((item) => selectedIds.has(item.id))
-      .map((item) => item.shareUrl);
+      .map((item) => getPublicShareUrl(item));
   };
 
   return (

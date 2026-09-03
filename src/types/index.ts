@@ -31,6 +31,7 @@ export interface MediaItem {
   mimeType: string;
   blobUrl?: string; // Client-side temporary preview URL
   shareUrl: string; // Real production URL from storage provider (e.g. Catbox)
+  publicShareUrl?: string; // Public landing URL with Open Graph preview (/s/:id)
   provider: 'catbox' | 'local' | 's3';
   createdAt: number;
   sessionId?: string; // Anonymous session scoping ID
@@ -96,6 +97,7 @@ export interface MediaRepository {
   create(media: MediaObject): Promise<MediaObject>;
   list(sessionId: string, limit?: number): Promise<MediaObject[]>;
   get(id: string, sessionId: string): Promise<MediaObject | null>;
+  getByIdPublic(id: string): Promise<MediaObject | null>;
   delete(id: string, sessionId: string): Promise<boolean>;
   clearAll(sessionId: string): Promise<void>;
 }

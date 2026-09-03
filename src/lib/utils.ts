@@ -132,3 +132,14 @@ export function generateSlug(length = 7): string {
   }
   return result;
 }
+
+export function getPublicShareUrl(item: { id: string; shareUrl: string; publicShareUrl?: string }): string {
+  if (item.publicShareUrl && item.publicShareUrl.trim()) {
+    return item.publicShareUrl;
+  }
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}/s/${item.id}`;
+  }
+  return item.shareUrl;
+}
+
