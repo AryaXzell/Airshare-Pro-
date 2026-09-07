@@ -22,7 +22,6 @@ export function useTheme() {
     setThemeState(newTheme);
     try {
       localStorage.setItem(THEME_STORAGE_KEY, newTheme);
-      document.cookie = `${THEME_STORAGE_KEY}=${newTheme};path=/;max-age=31536000;SameSite=Strict`;
     } catch (e) {
       console.warn('Could not save theme preference:', e);
     }

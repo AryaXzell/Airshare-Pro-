@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
-import { Image, Video, Music, ChevronRight, X } from 'lucide-react';
+import { Image, Video, Music, FileText, ChevronRight, X } from 'lucide-react';
 import { MediaType } from '../../types';
 
 interface ActionSheetProps {
@@ -199,6 +199,30 @@ export const ActionSheet: React.FC<ActionSheetProps> = ({
                     </span>
                     <span className="text-xs opacity-60" style={{ color: 'var(--text-muted)' }}>
                       MP3, WAV, FLAC, AAC, M4A
+                    </span>
+                  </div>
+                </div>
+                <ChevronRight className="w-4 h-4 opacity-35" />
+              </button>
+
+              <button
+                onClick={() => {
+                  onSelectType('file');
+                  onClose();
+                }}
+                className="w-full flex items-center justify-between p-3.5 rounded-2xl border transition-all clean-interactive clean-tap text-left"
+                style={{ borderColor: 'var(--border-subtle)' }}
+              >
+                <div className="flex items-center space-x-3">
+                  <div className="p-2 rounded-xl bg-amber-500/15 text-amber-500">
+                    <FileText className="w-4.5 h-4.5" />
+                  </div>
+                  <div>
+                    <span className="font-bold text-sm block" style={{ color: 'var(--text-main)' }}>
+                      Dokumen & Arsip
+                    </span>
+                    <span className="text-xs opacity-60" style={{ color: 'var(--text-muted)' }}>
+                      ZIP, RAR, 7Z, PDF, DOCX, XLSX
                     </span>
                   </div>
                 </div>

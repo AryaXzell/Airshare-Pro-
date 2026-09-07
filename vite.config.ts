@@ -20,7 +20,6 @@ export default defineConfig(() => {
           'pwa-512x512.png',
           'pwa-maskable-512x512.png',
           'og-image.svg',
-          'manifest.json',
         ],
         manifest: {
           id: '/',
@@ -34,6 +33,7 @@ export default defineConfig(() => {
           orientation: 'portrait-primary',
           background_color: '#fdf9fa',
           theme_color: '#fdf9fa',
+          categories: ['utilities', 'productivity', 'multimedia'],
           icons: [
             {
               src: '/pwa-192x192.png',
@@ -63,6 +63,7 @@ export default defineConfig(() => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,json}'],
+          navigateFallbackDenylist: [/^\/s\//, /^\/api\//],
           runtimeCaching: [
             // 1. Strict Online-First: Never cache API endpoints with stale data
             {

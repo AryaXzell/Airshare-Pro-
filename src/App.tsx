@@ -92,61 +92,92 @@ export default function App() {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const audioInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const uploadState = useUpload((newItem) => {
-    addItem(newItem);
-    showToast('Media berhasil diunggah dan disimpan!', {
-      description: newItem.name,
-      type: 'success',
-    });
-  });
+  const handleUploadSuccess = React.useCallback(
+    (newItem: MediaItem) => {
+      addItem(newItem);
+      showToast('Media berhasil diunggah dan disimpan!', {
+        description: newItem.name,
+        type: 'success',
+      });
+    },
+    [addItem, showToast]
+  );
+
+  const uploadState = useUpload(handleUploadSuccess, showToast);
+  const { startUpload, isUploading: isStateUploading } = uploadState;
+
+  // Stable callback for paste upload with source: 'paste'
+  const handlePastedFile = React.useCallback(
+    (file: File) => {
+      startUpload(file, { source: 'paste' });
+    },
+    [startUpload]
+  );
 
   // Enable clipboard paste-to-upload (Ctrl+V / Cmd+V anywhere on the page)
   usePasteUpload({
-    isEnabled: isOnline && !uploadState.isUploading,
-    onFilePasted: (file) => {
-      uploadState.startUpload(file);
-    },
-    onToast: showToast,
+    isEnabled: isOnline && !isStateUploading,
+    onFilePasted: handlePastedFile,
   });
 
-  const handleActionSheetSelect = (type: MediaType | 'any') => {
-    setIsActionSheetOpen(false);
-    if (!isOnline) {
-      showToast('Anda sedang offline. Hubungkan perangkat ke internet untuk mengunggah.', {
-        type: 'warning',
-      });
-      return;
-    }
-    // Trigger the appropriate file input
-    setTimeout(() => {
-      if (type === 'image') imageInputRef.current?.click();
-      else if (type === 'video') videoInputRef.current?.click();
-      else if (type === 'audio') audioInputRef.current?.click();
-    }, 150);
-  };
+  const handleRequestActionSheet = React.useCallback(() => {
+    setIsActionSheetOpen(true);
+  }, []);
 
-  const handleDedicatedFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!isOnline) {
-      showToast('Anda sedang offline. Hubungkan perangkat ke internet untuk mengunggah.', {
-        type: 'warning',
-      });
-      e.target.value = '';
-      return;
-    }
-    if (uploadState.isUploading) {
-      showToast('Proses unggahan lain sedang berjalan. Harap tunggu hingga selesai.', {
-        type: 'warning',
-      });
-      e.target.value = '';
-      return;
-    }
-    if (e.target.files && e.target.files.length > 0) {
-      const file = e.target.files[0];
-      uploadState.startUpload(file);
-      e.target.value = '';
-    }
-  };
+  const handleCloseActionSheet = React.useCallback(() => {
+    setIsActionSheetOpen(false);
+  }, []);
+
+  const handleClosePreview = React.useCallback(() => {
+    setPreviewItem(null);
+  }, []);
+
+  const handleActionSheetSelect = React.useCallback(
+    (type: MediaType | 'any') => {
+      setIsActionSheetOpen(false);
+      if (!isOnline) {
+        showToast('Anda sedang offline. Hubungkan perangkat ke internet untuk mengunggah.', {
+          type: 'warning',
+        });
+        return;
+      }
+      // Trigger the appropriate file input
+      setTimeout(() => {
+        if (type === 'image') imageInputRef.current?.click();
+        else if (type === 'video') videoInputRef.current?.click();
+        else if (type === 'audio') audioInputRef.current?.click();
+        else if (type === 'file') fileInputRef.current?.click();
+      }, 150);
+    },
+    [isOnline, showToast]
+  );
+
+  const handleDedicatedFileSelected = React.useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!isOnline) {
+        showToast('Anda sedang offline. Hubungkan perangkat ke internet untuk mengunggah.', {
+          type: 'warning',
+        });
+        e.target.value = '';
+        return;
+      }
+      if (isStateUploading) {
+        showToast('Proses unggahan lain sedang berjalan. Harap tunggu hingga selesai.', {
+          type: 'warning',
+        });
+        e.target.value = '';
+        return;
+      }
+      if (e.target.files && e.target.files.length > 0) {
+        const file = e.target.files[0];
+        startUpload(file);
+        e.target.value = '';
+      }
+    },
+    [isOnline, isStateUploading, showToast, startUpload]
+  );
 
   return (
     <div className="min-h-screen flex flex-col transition-colors duration-300">
@@ -171,6 +202,14 @@ export default function App() {
         ref={audioInputRef}
         type="file"
         accept="audio/*"
+        disabled={uploadState.isUploading || !isOnline}
+        onChange={handleDedicatedFileSelected}
+        className="hidden"
+      />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".zip,.rar,.7z,.tar,.gz,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json,application/zip,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.*"
         disabled={uploadState.isUploading || !isOnline}
         onChange={handleDedicatedFileSelected}
         className="hidden"
@@ -205,8 +244,8 @@ export default function App() {
         {/* Upload Card */}
         <UploadCard
           uploadState={uploadState}
-          onRequestActionSheet={() => setIsActionSheetOpen(true)}
-          onPreviewItem={(item) => setPreviewItem(item)}
+          onRequestActionSheet={handleRequestActionSheet}
+          onPreviewItem={setPreviewItem}
           onToast={showToast}
           isOnline={isOnline}
         />
@@ -230,7 +269,7 @@ export default function App() {
           onToggleSelect={toggleSelect}
           onSelectAllVisible={selectAllVisible}
           onClearSelection={clearSelection}
-          onPreviewItem={(item) => setPreviewItem(item)}
+          onPreviewItem={setPreviewItem}
           onDeleteItem={removeItem}
           onDeleteMultiple={removeMultiple}
           onClearAll={clearAll}
@@ -243,7 +282,7 @@ export default function App() {
         {isActionSheetOpen && (
           <ActionSheet
             isOpen={isActionSheetOpen}
-            onClose={() => setIsActionSheetOpen(false)}
+            onClose={handleCloseActionSheet}
             onSelectType={handleActionSheetSelect}
           />
         )}
@@ -254,7 +293,7 @@ export default function App() {
         {previewItem && (
           <MediaPreviewModal
             item={previewItem}
-            onClose={() => setPreviewItem(null)}
+            onClose={handleClosePreview}
             onToast={showToast}
           />
         )}

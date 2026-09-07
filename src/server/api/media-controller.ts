@@ -1,10 +1,20 @@
 import { Request, Response } from 'express';
 import { CatboxStorageProvider } from '../storage/catbox-storage-provider';
 import { getMediaRepository } from '../repository/media-repository';
+import { analyticsRepository } from '../repository/analytics-repository';
 import {
   validateUploadedFile,
   isValidMediaId,
 } from '../security/input-validator';
+import {
+  isMaintenanceModeActive,
+  getMaxUploadSize,
+  getUploadRateLimit,
+} from '../security/system-config';
+import { getClientIp } from '../security/client-ip';
+import { lookupCountryFromIp, resolveCountryFromRequest } from '../security/geo-lookup';
+import { isTextPreviewableFile, getTextLanguageHint } from '../../shared/text-language-map';
+import { recordUploadAndCheckSpike } from '../telegram/telegram-notifier';
 import {
   ApiErrorResponse,
   ApiSuccessResponse,
@@ -15,12 +25,6 @@ import {
 } from '../../types';
 
 const storageProvider = new CatboxStorageProvider();
-
-// Max upload size in bytes (defaults to 200MB, Catbox limit)
-const MAX_UPLOAD_SIZE = parseInt(
-  process.env.MAX_UPLOAD_SIZE || '209715200',
-  10
-);
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -36,6 +40,9 @@ export const mediaController = {
    * Provides non-sensitive upload configuration to client
    */
   async getConfig(req: Request, res: Response): Promise<void> {
+    const currentMaxSize = await getMaxUploadSize();
+    const currentRateLimit = await getUploadRateLimit();
+
     const response: ApiSuccessResponse<{
       maxUploadSize: number;
       formattedMaxSize: string;
@@ -45,11 +52,11 @@ export const mediaController = {
     }> = {
       success: true,
       data: {
-        maxUploadSize: MAX_UPLOAD_SIZE,
-        formattedMaxSize: formatBytes(MAX_UPLOAD_SIZE),
+        maxUploadSize: currentMaxSize,
+        formattedMaxSize: formatBytes(currentMaxSize),
         provider: storageProvider.name,
         isDeleteSupported: storageProvider.isDeleteSupported(),
-        rateLimitUploadsPerMinute: parseInt(process.env.RATE_LIMIT_MAX_UPLOADS_PER_MIN || '20', 10),
+        rateLimitUploadsPerMinute: currentRateLimit.limit,
       },
     };
     res.json(response);
@@ -60,12 +67,26 @@ export const mediaController = {
    * Receives uploaded file stream, validates strictly, uploads to Catbox, and persists metadata.
    */
   async uploadMedia(req: Request, res: Response): Promise<void> {
+    // Check Kill Switch / Maintenance Mode FIRST
+    if (await isMaintenanceModeActive()) {
+      const err: ApiErrorResponse = {
+        success: false,
+        error: {
+          code: 'MAINTENANCE_MODE',
+          message: 'Layanan sedang dalam pemeliharaan. Silakan coba beberapa saat lagi.',
+        },
+      };
+      res.status(503).json(err);
+      return;
+    }
+
     const mediaRepository = getMediaRepository();
     try {
       const file = req.file;
+      const currentMaxSize = await getMaxUploadSize();
 
       // Authoritative server-side file and payload validation
-      const validation = validateUploadedFile(file, MAX_UPLOAD_SIZE);
+      const validation = validateUploadedFile(file, currentMaxSize);
       if (!validation.valid || !file || !validation.sanitizedFilename || !validation.detectedMediaType) {
         const status = validation.errorCode === 'FILE_TOO_LARGE' ? 413 : 400;
         const err: ApiErrorResponse = {
@@ -97,20 +118,20 @@ export const mediaController = {
             : req.body.metadata;
 
           if (parsed && typeof parsed === 'object') {
-            if (parsed.imageMeta) {
+            if (mediaType === 'image' && parsed.imageMeta) {
               imageMeta = {
                 width: typeof parsed.imageMeta.width === 'number' ? parsed.imageMeta.width : undefined,
                 height: typeof parsed.imageMeta.height === 'number' ? parsed.imageMeta.height : undefined,
               };
             }
-            if (parsed.videoMeta) {
+            if (mediaType === 'video' && parsed.videoMeta) {
               videoMeta = {
                 duration: typeof parsed.videoMeta.duration === 'number' ? parsed.videoMeta.duration : undefined,
                 width: typeof parsed.videoMeta.width === 'number' ? parsed.videoMeta.width : undefined,
                 height: typeof parsed.videoMeta.height === 'number' ? parsed.videoMeta.height : undefined,
               };
             }
-            if (parsed.audioMeta) {
+            if (mediaType === 'audio' && parsed.audioMeta) {
               audioMeta = {
                 title: typeof parsed.audioMeta.title === 'string' ? parsed.audioMeta.title.slice(0, 150) : undefined,
                 artist: typeof parsed.audioMeta.artist === 'string' ? parsed.audioMeta.artist.slice(0, 150) : undefined,
@@ -155,12 +176,20 @@ export const mediaController = {
         }
       }
 
+      // Resolve client country anonymously via IP geolocation & proxy headers (fail-open)
+      const clientIp = getClientIp(req);
+      const geo = await resolveCountryFromRequest(req, clientIp);
+
       // Real upload to Catbox Storage Provider
       const uploadResult = await storageProvider.upload(
         file.buffer,
         sanitizedName,
         mimeType
       );
+
+      // Determine if file is eligible for inline text/code syntax preview
+      const isText = mediaType === 'file' && isTextPreviewableFile(sanitizedName, mimeType, file.size);
+      const textLanguageHint = isText ? getTextLanguageHint(sanitizedName) : undefined;
 
       // Construct normalized MediaObject with anonymous session scoping
       const mediaObject: MediaObject = {
@@ -175,13 +204,27 @@ export const mediaController = {
         provider: 'catbox',
         createdAt: Date.now(),
         sessionId,
-        imageMeta,
-        videoMeta,
-        audioMeta,
+        uploaderCountryCode: geo?.countryCode,
+        uploaderCountryName: geo?.countryName,
+        imageMeta: mediaType === 'image' ? imageMeta : undefined,
+        videoMeta: mediaType === 'video' ? videoMeta : undefined,
+        audioMeta: mediaType === 'audio' ? audioMeta : undefined,
+        isTextPreviewable: isText,
+        textLanguageHint,
       };
 
       // Persist metadata into repository
       await mediaRepository.create(mediaObject);
+
+      // Record upload analytics fail-safely in background
+      analyticsRepository.recordUpload(mediaObject).catch((statErr) => {
+        console.warn('[ANALYTICS_WARN] Gagal mencatat upload analitik:', statErr);
+      });
+
+      // Track session uploads and alert on traffic spike (>15 uploads in 5 mins)
+      recordUploadAndCheckSpike(sessionId).catch((spikeErr) => {
+        console.warn('[SPIKE_ALERT_WARN] Gagal mengecek lonjakan sesi:', spikeErr);
+      });
 
       const response: ApiSuccessResponse<MediaObject> = {
         success: true,
@@ -326,6 +369,11 @@ export const mediaController = {
       // Delete from repository
       await mediaRepository.delete(id, req.sessionId);
 
+      // Record analytics deletion fail-safe
+      analyticsRepository.recordDeletion(1).catch((err) => {
+        console.warn('[ANALYTICS_RECORD_DELETION_WARN] Gagal memperbarui analitik deletion:', err);
+      });
+
       // Attempt deletion on storage provider if URL is known
       let providerResult: {
         success: boolean;
@@ -372,7 +420,17 @@ export const mediaController = {
   async clearAllMedia(req: Request, res: Response): Promise<void> {
     const mediaRepository = getMediaRepository();
     try {
+      const existingItems = await mediaRepository.list(req.sessionId);
+      const count = existingItems.length;
+
       await mediaRepository.clearAll(req.sessionId);
+
+      if (count > 0) {
+        analyticsRepository.recordDeletion(count).catch((err) => {
+          console.warn('[ANALYTICS_RECORD_DELETION_WARN] Gagal memperbarui analitik clearAll:', err);
+        });
+      }
+
       const response: ApiSuccessResponse<{ cleared: boolean }> = {
         success: true,
         data: { cleared: true },

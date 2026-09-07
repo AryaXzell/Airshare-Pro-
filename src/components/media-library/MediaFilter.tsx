@@ -4,6 +4,7 @@ import {
   Image,
   Video,
   Music,
+  FileText,
   Layers,
   X,
   ArrowUpDown,
@@ -39,6 +40,7 @@ export const MediaFilter: React.FC<MediaFilterProps> = ({
     { id: 'image', label: 'Foto', icon: <Image className="w-3.5 h-3.5" /> },
     { id: 'video', label: 'Video', icon: <Video className="w-3.5 h-3.5" /> },
     { id: 'audio', label: 'Audio', icon: <Music className="w-3.5 h-3.5" /> },
+    { id: 'file', label: 'Berkas', icon: <FileText className="w-3.5 h-3.5" /> },
   ];
 
   return (

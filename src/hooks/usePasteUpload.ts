@@ -3,13 +3,6 @@ import { useEffect } from 'react';
 interface UsePasteUploadOptions {
   onFilePasted: (file: File) => void;
   isEnabled?: boolean;
-  onToast?: (
-    msg: string,
-    options?: {
-      description?: string;
-      type?: 'success' | 'error' | 'warning' | 'info';
-    }
-  ) => void;
 }
 
 /**
@@ -19,7 +12,6 @@ interface UsePasteUploadOptions {
 export function usePasteUpload({
   onFilePasted,
   isEnabled = true,
-  onToast,
 }: UsePasteUploadOptions): void {
   useEffect(() => {
     if (!isEnabled) return;
@@ -71,12 +63,6 @@ export function usePasteUpload({
         finalFile = new File([file], customName, { type: file.type });
       }
 
-      if (onToast) {
-        onToast('Berkas dari clipboard terdeteksi, memulai unggahan...', {
-          type: 'info',
-        });
-      }
-
       onFilePasted(finalFile);
     };
 
@@ -84,5 +70,5 @@ export function usePasteUpload({
     return () => {
       window.removeEventListener('paste', handlePaste);
     };
-  }, [onFilePasted, isEnabled, onToast]);
+  }, [onFilePasted, isEnabled]);
 }

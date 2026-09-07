@@ -1,4 +1,4 @@
-import { MediaObject, MediaRepository } from '../../types';
+import { MediaObject, MediaRepository, PublicMediaView } from '../../types';
 
 function assertValidSessionId(sessionId: unknown, operation: string): asserts sessionId is string {
   if (!sessionId || typeof sessionId !== 'string' || !sessionId.trim()) {
@@ -44,13 +44,31 @@ export class DevelopmentMediaRepository implements MediaRepository {
     return { ...item };
   }
 
-  public async getByIdPublic(id: string): Promise<MediaObject | null> {
+  public async getByIdPublic(id: string): Promise<PublicMediaView | null> {
     if (!id || typeof id !== 'string' || !id.trim()) {
       return null;
     }
     const item = this.items.get(id.trim());
     if (!item) return null;
-    return { ...item };
+    const publicItem: PublicMediaView = {
+      id: item.id,
+      name: item.name,
+      originalFileName: item.originalFileName,
+      type: item.type,
+      mimeType: item.mimeType,
+      size: item.size,
+      formattedSize: item.formattedSize,
+      shareUrl: item.shareUrl,
+      uploaderCountryCode: item.uploaderCountryCode,
+      uploaderCountryName: item.uploaderCountryName,
+      audioMeta: item.audioMeta,
+      videoMeta: item.videoMeta,
+      imageMeta: item.imageMeta,
+      createdAt: item.createdAt,
+      isTextPreviewable: item.isTextPreviewable,
+      textLanguageHint: item.textLanguageHint,
+    };
+    return publicItem;
   }
 
   public async delete(id: string, sessionId: string): Promise<boolean> {
@@ -70,6 +88,29 @@ export class DevelopmentMediaRepository implements MediaRepository {
         this.items.delete(id);
       }
     }
+  }
+
+  /**
+   * Internal Administrative Method ONLY.
+   * Cross-session lookup strictly for authenticated admin controller.
+   */
+  public async getByIdForAdmin(id: string): Promise<MediaObject | null> {
+    if (!id || typeof id !== 'string' || !id.trim()) {
+      return null;
+    }
+    const item = this.items.get(id.trim());
+    return item ? { ...item } : null;
+  }
+
+  /**
+   * Internal Administrative Method ONLY.
+   * Deletes item from repository across all sessions.
+   */
+  public async deleteForAdmin(id: string): Promise<boolean> {
+    if (!id || typeof id !== 'string' || !id.trim()) {
+      return false;
+    }
+    return this.items.delete(id.trim());
   }
 }
 

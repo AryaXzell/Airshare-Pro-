@@ -2,38 +2,38 @@ import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { mediaController } from './media-controller';
 import { rateLimitMiddleware } from '../security/rate-limiter';
+import { getUploadRateLimit, getMaxUploadSize } from '../security/system-config';
 import { ApiErrorResponse } from '../../types';
 
 const router = Router();
 
-const MAX_UPLOAD_SIZE = parseInt(
-  process.env.MAX_UPLOAD_SIZE || '209715200',
-  10
-);
+// Absolute safe upper boundary for Multer buffer allocation (500MB max)
+const MULTER_CEILING_SIZE = 500 * 1024 * 1024;
 
-// Multer memory storage configured with maximum file limit
+// Multer memory storage configured with maximum boundary
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: MAX_UPLOAD_SIZE,
+    fileSize: MULTER_CEILING_SIZE,
     files: 1, // Enforce single file per request
   },
 });
 
 // Middleware to handle Multer errors cleanly and return structured JSON
-function handleMulterErrors(
+async function handleMulterErrors(
   err: unknown,
   req: Request,
   res: Response,
   next: NextFunction
-): void {
+): Promise<void> {
   if (err instanceof multer.MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
+      const maxSize = await getMaxUploadSize();
       const errorResp: ApiErrorResponse = {
         success: false,
         error: {
           code: 'FILE_TOO_LARGE',
-          message: `Ukuran berkas melebihi batas maksimal ${(MAX_UPLOAD_SIZE / (1024 * 1024)).toFixed(0)} MB.`,
+          message: `Ukuran berkas melebihi batas maksimal ${(maxSize / (1024 * 1024)).toFixed(0)} MB.`,
         },
       };
       res.status(413).json(errorResp);
@@ -76,6 +76,7 @@ const uploadRateLimiter = rateLimitMiddleware({
   limit: parseInt(process.env.RATE_LIMIT_MAX_UPLOADS_PER_MIN || '20', 10),
   windowMs: 60 * 1000,
   keyPrefix: 'upload_ip',
+  getDynamicLimit: async () => getUploadRateLimit(),
 });
 
 const standardRateLimiter = rateLimitMiddleware({

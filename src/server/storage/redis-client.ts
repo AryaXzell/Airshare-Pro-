@@ -33,3 +33,54 @@ export function getRedisClient(): Redis | null {
 
   return redisInstance;
 }
+
+/**
+ * Actively checks Redis connectivity with a lightweight ping and latency measurement.
+ */
+export async function checkRedisHealth(): Promise<{
+  configured: boolean;
+  connected: boolean;
+  latencyMs: number | null;
+}> {
+  if (!isUpstashConfigured()) {
+    return {
+      configured: false,
+      connected: false,
+      latencyMs: null,
+    };
+  }
+
+  const client = getRedisClient();
+  if (!client) {
+    return {
+      configured: true,
+      connected: false,
+      latencyMs: null,
+    };
+  }
+
+  const start = Date.now();
+  try {
+    const pingPromise = client.ping();
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Redis ping timeout')), 2000)
+    );
+
+    const res = await Promise.race([pingPromise, timeoutPromise]);
+    const latencyMs = Date.now() - start;
+    const isConnected = res === 'PONG' || res === 'pong' || Boolean(res);
+
+    return {
+      configured: true,
+      connected: isConnected,
+      latencyMs: isConnected ? latencyMs : null,
+    };
+  } catch {
+    return {
+      configured: true,
+      connected: false,
+      latencyMs: null,
+    };
+  }
+}
+

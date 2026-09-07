@@ -134,6 +134,15 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
     }
   };
 
+  const handleCloseDetail = React.useCallback(() => {
+    setInspectingItem(null);
+  }, []);
+
+  const handleDeleteFromDetail = React.useCallback((id: string) => {
+    setInspectingItem(null);
+    setItemToDelete(id);
+  }, []);
+
   const getSelectedUrls = () => {
     return items
       .filter((item) => selectedIds.has(item.id))
@@ -303,8 +312,8 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
                   isSelected={selectedIds.has(item.id)}
                   onToggleSelect={onToggleSelect}
                   onPreview={onPreviewItem}
-                  onInspect={(itm) => setInspectingItem(itm)}
-                  onDelete={(id) => setItemToDelete(id)}
+                  onInspect={setInspectingItem}
+                  onDelete={setItemToDelete}
                   onToast={onToast}
                 />
               ))}
@@ -352,12 +361,9 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
       <MediaDetailModal
         item={inspectingItem}
         isOpen={inspectingItem !== null}
-        onClose={() => setInspectingItem(null)}
+        onClose={handleCloseDetail}
         onPreview={onPreviewItem}
-        onDelete={(id) => {
-          setInspectingItem(null);
-          setItemToDelete(id);
-        }}
+        onDelete={handleDeleteFromDetail}
         onToast={onToast}
       />
 

@@ -10,6 +10,7 @@ import {
   HardDrive,
   FileType,
   Cloud,
+  Globe,
   Maximize2,
   Trash2,
   Music,
@@ -118,6 +119,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
     if (item.type === 'image') return <ImageIcon className="w-5 h-5" style={{ color: 'var(--accent)' }} />;
     if (item.type === 'video') return <Video className="w-5 h-5" style={{ color: 'var(--accent)' }} />;
     if (item.type === 'audio') return <Music className="w-5 h-5" style={{ color: 'var(--accent)' }} />;
+    if (item.type === 'file') return <FileType className="w-5 h-5" style={{ color: 'var(--accent)' }} />;
     return <FileType className="w-5 h-5 opacity-60" />;
   };
 
@@ -242,10 +244,36 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                 </p>
               </div>
             </div>
+
+            {item.uploaderCountryName && (
+              <div
+                className="p-2.5 sm:p-3 rounded-2xl flex items-center space-x-2 sm:space-x-2.5 border min-w-0 overflow-hidden col-span-2"
+                style={{ backgroundColor: 'var(--surface-secondary)', borderColor: 'var(--border-subtle)' }}
+              >
+                {item.uploaderCountryCode ? (
+                  <img
+                    src={`/flags/${item.uploaderCountryCode.toLowerCase()}.svg`}
+                    alt={item.uploaderCountryName}
+                    className="w-5 h-4 object-cover rounded-xs shadow-xs flex-shrink-0"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = '/flags/globe.svg';
+                    }}
+                  />
+                ) : (
+                  <Globe className="w-4 h-4 opacity-50 flex-shrink-0" />
+                )}
+                <div className="min-w-0 flex-1 overflow-hidden">
+                  <p className="text-[10px] font-bold uppercase opacity-50 truncate">Lokasi Pengunggah</p>
+                  <p className="font-extrabold text-xs sm:text-sm truncate" style={{ color: 'var(--text-main)' }}>
+                    {item.uploaderCountryName} {item.uploaderCountryCode ? `(${item.uploaderCountryCode})` : ''}
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Audio / Video Specific Metadata */}
-          {item.audioMeta && (
+          {/* Audio / Video / Image Specific Metadata */}
+          {item.type === 'audio' && item.audioMeta && (
             <div
               className="p-3.5 rounded-2xl mb-4 text-xs space-y-1.5 border min-w-0 overflow-hidden"
               style={{ backgroundColor: 'var(--surface-secondary)', borderColor: 'var(--border-subtle)' }}
@@ -269,6 +297,56 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                   {item.audioMeta.album}
                 </p>
               )}
+            </div>
+          )}
+
+          {item.type === 'video' && item.videoMeta && (
+            <div
+              className="p-3.5 rounded-2xl mb-4 text-xs space-y-1.5 border min-w-0 overflow-hidden"
+              style={{ backgroundColor: 'var(--surface-secondary)', borderColor: 'var(--border-subtle)' }}
+            >
+              <p className="text-[10px] font-extrabold uppercase opacity-50">Metadata Video</p>
+              {item.videoMeta.width && item.videoMeta.height && (
+                <p className="font-bold truncate">
+                  <span className="opacity-50 font-normal">Resolusi: </span>
+                  {item.videoMeta.width} × {item.videoMeta.height}
+                </p>
+              )}
+              {item.videoMeta.duration && (
+                <p className="font-bold truncate">
+                  <span className="opacity-50 font-normal">Durasi: </span>
+                  {Math.round(item.videoMeta.duration)} detik
+                </p>
+              )}
+            </div>
+          )}
+
+          {item.type === 'image' && item.imageMeta && item.imageMeta.width && item.imageMeta.height && (
+            <div
+              className="p-3.5 rounded-2xl mb-4 text-xs space-y-1.5 border min-w-0 overflow-hidden"
+              style={{ backgroundColor: 'var(--surface-secondary)', borderColor: 'var(--border-subtle)' }}
+            >
+              <p className="text-[10px] font-extrabold uppercase opacity-50">Dimensi Gambar</p>
+              <p className="font-bold truncate">
+                <span className="opacity-50 font-normal">Resolusi: </span>
+                {item.imageMeta.width} × {item.imageMeta.height} px
+              </p>
+            </div>
+          )}
+
+          {item.type === 'file' && item.isTextPreviewable && (
+            <div
+              className="p-3.5 rounded-2xl mb-4 text-xs space-y-1.5 border min-w-0 overflow-hidden"
+              style={{ backgroundColor: 'var(--surface-secondary)', borderColor: 'var(--border-subtle)' }}
+            >
+              <p className="text-[10px] font-extrabold uppercase opacity-50">Pratinjau Kode & Teks</p>
+              <p className="font-bold truncate">
+                <span className="opacity-50 font-normal">Format/Bahasa: </span>
+                <span className="capitalize">{item.textLanguageHint || 'Teks Polos'}</span>
+              </p>
+              <p className="text-[11px] opacity-60">
+                Mendukung syntax highlighting dan nomor baris interaktif.
+              </p>
             </div>
           )}
 

@@ -9,6 +9,19 @@ import {
   extractVideoMetadata,
 } from '../lib/metadata/mediaMetadata';
 
+export interface StartUploadOptions {
+  source?: 'paste' | 'manual';
+}
+
+export type UploadToastFunction = (
+  msg: string,
+  options?: {
+    description?: string;
+    type?: 'success' | 'error' | 'warning' | 'info';
+    duration?: number;
+  }
+) => void;
+
 export interface UseUploadReturn {
   isUploading: boolean;
   progress: number;
@@ -19,14 +32,17 @@ export interface UseUploadReturn {
   lastFailedFile: File | null;
   result: MediaItem | null;
   error: string | null;
-  startUpload: (file: File) => Promise<MediaItem | null>;
+  startUpload: (file: File, options?: StartUploadOptions) => Promise<MediaItem | null>;
   retryUpload: () => Promise<MediaItem | null>;
   cancelUpload: () => void;
   resetUpload: () => void;
   dismissError: () => void;
 }
 
-export function useUpload(onSuccess?: (item: MediaItem) => void): UseUploadReturn {
+export function useUpload(
+  onSuccess?: (item: MediaItem) => void,
+  onToast?: UploadToastFunction
+): UseUploadReturn {
   const [isUploading, setIsUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [speed, setSpeed] = useState('—');
@@ -67,7 +83,7 @@ export function useUpload(onSuccess?: (item: MediaItem) => void): UseUploadRetur
   }, []);
 
   const startUpload = useCallback(
-    async (file: File): Promise<MediaItem | null> => {
+    async (file: File, options?: StartUploadOptions): Promise<MediaItem | null> => {
       // Validate file before initiating network request
       const validation = validateMediaFile(file);
       if (!validation.valid) {
@@ -81,6 +97,13 @@ export function useUpload(onSuccess?: (item: MediaItem) => void): UseUploadRetur
         setLastFailedFile(file);
         setError('Tidak dapat mengunggah — Anda sedang offline. Hubungkan perangkat ke internet untuk mengunggah.');
         return null;
+      }
+
+      // Post-validation feedback: if pasted from clipboard, notify user that valid media was detected
+      if (options?.source === 'paste' && onToast) {
+        onToast('Berkas dari clipboard terdeteksi, mengunggah...', {
+          type: 'info',
+        });
       }
 
       // Reset state but keep track of active upload
@@ -100,12 +123,9 @@ export function useUpload(onSuccess?: (item: MediaItem) => void): UseUploadRetur
 
       let localBlobUrl: string | null = null;
       try {
-        // Extract client-side metadata
-        const type: MediaType = file.type.startsWith('image/')
-          ? 'image'
-          : file.type.startsWith('video/')
-          ? 'video'
-          : 'audio';
+        // Extract client-side metadata strictly according to validated media type
+        const validation = validateMediaFile(file);
+        const type: MediaType = validation.type || 'file';
 
         let imageMeta;
         let videoMeta;
@@ -119,7 +139,11 @@ export function useUpload(onSuccess?: (item: MediaItem) => void): UseUploadRetur
           audioMeta = await extractAudioMetadata(file);
         }
 
-        const metadataPayload = { imageMeta, videoMeta, audioMeta };
+        const metadataPayload = {
+          imageMeta: type === 'image' ? imageMeta : undefined,
+          videoMeta: type === 'video' ? videoMeta : undefined,
+          audioMeta: type === 'audio' ? audioMeta : undefined,
+        };
 
         // Create temporary blob URL for instant preview capability
         localBlobUrl = URL.createObjectURL(file);
@@ -137,13 +161,13 @@ export function useUpload(onSuccess?: (item: MediaItem) => void): UseUploadRetur
           abortControllerRef.current.signal
         );
 
-        // Attach local blobUrl for temporary session preview
+        // Attach local blobUrl for temporary session preview with strict media type isolation
         const enrichedItem: MediaItem = {
           ...uploadedMedia,
           blobUrl: localBlobUrl,
-          imageMeta: uploadedMedia.imageMeta || imageMeta,
-          videoMeta: uploadedMedia.videoMeta || videoMeta,
-          audioMeta: uploadedMedia.audioMeta || audioMeta,
+          imageMeta: uploadedMedia.type === 'image' ? (uploadedMedia.imageMeta || imageMeta) : undefined,
+          videoMeta: uploadedMedia.type === 'video' ? (uploadedMedia.videoMeta || videoMeta) : undefined,
+          audioMeta: uploadedMedia.type === 'audio' ? (uploadedMedia.audioMeta || audioMeta) : undefined,
         };
 
         setResult(enrichedItem);
@@ -179,7 +203,7 @@ export function useUpload(onSuccess?: (item: MediaItem) => void): UseUploadRetur
         return null;
       }
     },
-    [onSuccess]
+    [onSuccess, onToast]
   );
 
   const retryUpload = useCallback(async (): Promise<MediaItem | null> => {

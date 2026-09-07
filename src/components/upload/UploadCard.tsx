@@ -11,7 +11,10 @@ interface UploadCardProps {
   uploadState: UseUploadReturn;
   onRequestActionSheet: () => void;
   onPreviewItem: (item: MediaItem) => void;
-  onToast: (msg: string) => void;
+  onToast: (
+    msg: string,
+    options?: { description?: string; type?: 'success' | 'error' | 'warning' | 'info' }
+  ) => void;
   isOnline?: boolean;
 }
 
@@ -103,7 +106,7 @@ export const UploadCard: React.FC<UploadCardProps> = ({
 
       {/* Main Upload Drag Zone */}
       <UploadZone
-        onFileSelected={(file) => startUpload(file)}
+        onFileSelected={startUpload}
         onRequestActionSheet={onRequestActionSheet}
         disabled={isUploading}
         isOnline={isOnline}

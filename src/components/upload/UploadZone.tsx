@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { PlusCircle, UploadCloud, Image, Video, Music, WifiOff } from 'lucide-react';
+import { PlusCircle, UploadCloud, Image, Video, Music, FileText, WifiOff } from 'lucide-react';
 
 interface UploadZoneProps {
   onFileSelected: (file: File) => void;
@@ -76,7 +76,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
       <input
         ref={genericInputRef}
         type="file"
-        accept="image/*,video/*,audio/*"
+        accept="image/*,video/*,audio/*,.zip,.rar,.7z,.tar,.gz,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json"
         disabled={effectiveDisabled}
         onChange={handleGenericFileChange}
         className="hidden"
@@ -154,7 +154,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
         </p>
 
         <div
-          className="flex items-center space-x-3.5 mt-5 pt-3.5 border-t w-full max-w-xs justify-center text-[11px] font-semibold pointer-events-none"
+          className="flex items-center space-x-3 mt-5 pt-3.5 border-t w-full max-w-sm justify-center text-[11px] font-semibold pointer-events-none"
           style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
         >
           <span className="flex items-center space-x-1">
@@ -170,6 +170,11 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
           <span className="flex items-center space-x-1">
             <Music className="w-3.5 h-3.5" />
             <span>Audio</span>
+          </span>
+          <span className="opacity-40">•</span>
+          <span className="flex items-center space-x-1">
+            <FileText className="w-3.5 h-3.5" />
+            <span>Berkas</span>
           </span>
         </div>
       </div>

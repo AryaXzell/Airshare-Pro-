@@ -151,6 +151,16 @@ export class MediaApiClient {
 
       xhr.open('POST', `${this.baseUrl}/upload`, true);
       xhr.timeout = 180000; // 3 minutes timeout for large files
+
+      try {
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        if (tz) {
+          xhr.setRequestHeader('X-Client-Timezone', tz);
+        }
+      } catch {
+        // Fail-open
+      }
+
       xhr.send(formData);
     });
   }

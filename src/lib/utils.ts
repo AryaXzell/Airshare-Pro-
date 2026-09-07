@@ -89,9 +89,10 @@ export function validateMediaFile(file: File): { valid: boolean; error?: string;
   if (videoExts.includes(ext)) return { valid: true, type: 'video' };
   if (audioExts.includes(ext)) return { valid: true, type: 'audio' };
 
+  // Allow generic files (zip, rar, 7z, tar, gz, pdf, docs, text, etc.) with server-side validation
   return {
-    valid: false,
-    error: `Format berkas ${ext ? `.${ext}` : 'ini'} tidak didukung. Unggah gambar, video, atau audio.`,
+    valid: true,
+    type: 'file',
   };
 }
 
@@ -122,15 +123,6 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-export function generateSlug(length = 7): string {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  let result = '';
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
 }
 
 export function getPublicShareUrl(item: { id: string; shareUrl: string; publicShareUrl?: string }): string {

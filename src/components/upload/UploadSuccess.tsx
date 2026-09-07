@@ -1,15 +1,17 @@
-import React, { useEffect, useState } from 'react';
-import { Sparkles, Link2, Copy, Check, Eye, PlusCircle, QrCode, Maximize2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { Sparkles, Link2, Copy, Check, Eye, PlusCircle, QrCode } from 'lucide-react';
 import { MediaItem } from '../../types';
 import { copyToClipboard, getPublicShareUrl } from '../../lib/utils';
-import { generateQrDataUrl } from '../../lib/qrcode-helper';
 import { QrCodeModal } from '../ui/QrCodeModal';
 
 interface UploadSuccessProps {
   mediaItem: MediaItem;
   onPreview: (item: MediaItem) => void;
   onReset: () => void;
-  onToast: (msg: string) => void;
+  onToast: (
+    msg: string,
+    options?: { description?: string; type?: 'success' | 'error' | 'warning' | 'info' }
+  ) => void;
 }
 
 export const UploadSuccess: React.FC<UploadSuccessProps> = ({
@@ -19,26 +21,9 @@ export const UploadSuccess: React.FC<UploadSuccessProps> = ({
   onToast,
 }) => {
   const [copied, setCopied] = useState(false);
-  const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
 
   const displayUrl = getPublicShareUrl(mediaItem);
-
-  useEffect(() => {
-    let isMounted = true;
-    if (displayUrl) {
-      generateQrDataUrl(displayUrl, 280)
-        .then((dataUrl) => {
-          if (isMounted) setQrDataUrl(dataUrl);
-        })
-        .catch(() => {
-          // ignore or silent fallback
-        });
-    }
-    return () => {
-      isMounted = false;
-    };
-  }, [displayUrl]);
 
   const handleCopy = async () => {
     const success = await copyToClipboard(displayUrl);
@@ -101,29 +86,20 @@ export const UploadSuccess: React.FC<UploadSuccessProps> = ({
           <span>{copied ? 'Disalin' : 'Salin'}</span>
         </button>
 
-        {/* Mini QR Code Button */}
-        {qrDataUrl && (
-          <button
-            onClick={() => setIsQrModalOpen(true)}
-            className="relative p-1.5 rounded-xl border clean-surface-elevated hover:scale-105 transition-all duration-150 clean-tap flex-shrink-0 group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
-            style={{
-              backgroundColor: '#ffffff',
-              borderColor: 'var(--border-subtle)',
-            }}
-            title="Klik untuk perbesar Kode QR"
-            aria-label="Perbesar kode QR"
-          >
-            <img
-              src={qrDataUrl}
-              alt="Kode QR mini"
-              className="w-8 h-8 rounded object-contain select-none"
-              draggable={false}
-            />
-            <div className="absolute inset-0 bg-black/40 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-              <Maximize2 className="w-3.5 h-3.5 text-white" />
-            </div>
-          </button>
-        )}
+        {/* Mini QR Code Button (Static Generic Icon) */}
+        <button
+          onClick={() => setIsQrModalOpen(true)}
+          className="p-3 rounded-xl border clean-surface-elevated hover:scale-105 transition-all duration-150 clean-tap flex-shrink-0 flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] shadow-xs"
+          style={{
+            backgroundColor: 'var(--surface-primary)',
+            borderColor: 'var(--border-subtle)',
+            color: 'var(--text-main)',
+          }}
+          title="Buka Kode QR"
+          aria-label="Buka kode QR berkas"
+        >
+          <QrCode className="w-4 h-4" style={{ color: 'var(--accent)' }} />
+        </button>
       </div>
 
       {/* Quick Action Buttons */}
@@ -153,9 +129,9 @@ export const UploadSuccess: React.FC<UploadSuccessProps> = ({
       <QrCodeModal
         isOpen={isQrModalOpen}
         shareUrl={displayUrl}
-        qrDataUrl={qrDataUrl}
         fileName={mediaItem.name}
         onClose={() => setIsQrModalOpen(false)}
+        onToast={onToast}
       />
     </div>
   );

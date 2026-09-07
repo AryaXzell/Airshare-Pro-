@@ -342,6 +342,16 @@ export function useMediaLibrary() {
     }
   }, [hasMore]);
 
+  const handleSetFilter = useCallback((newFilter: 'all' | MediaType) => {
+    setFilter(newFilter);
+    setPage(1);
+  }, []);
+
+  const handleSetSortBy = useCallback((newSort: SortOption) => {
+    setSortBy(newSort);
+    setPage(1);
+  }, []);
+
   return {
     items,
     filteredItems: paginatedItems,
@@ -353,17 +363,11 @@ export function useMediaLibrary() {
     removeMultiple,
     clearAll,
     filter,
-    setFilter: (newFilter: 'all' | MediaType) => {
-      setFilter(newFilter);
-      setPage(1);
-    },
+    setFilter: handleSetFilter,
     searchQuery,
     setSearchQuery,
     sortBy,
-    setSortBy: (newSort: SortOption) => {
-      setSortBy(newSort);
-      setPage(1);
-    },
+    setSortBy: handleSetSortBy,
     viewMode,
     setViewMode: updateViewMode,
     selectedIds,

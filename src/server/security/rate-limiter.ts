@@ -148,6 +148,7 @@ export interface RateLimitOptions {
   windowMs: number;
   keyPrefix?: string;
   limiter?: RateLimiter;
+  getDynamicLimit?: (req: Request) => Promise<{ limit: number; windowMs: number }>;
 }
 
 /**
@@ -159,6 +160,7 @@ export function rateLimitMiddleware(options: RateLimitOptions) {
     windowMs,
     keyPrefix = 'rl',
     limiter,
+    getDynamicLimit,
   } = options;
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -166,8 +168,23 @@ export function rateLimitMiddleware(options: RateLimitOptions) {
     const clientIp = getClientIp(req);
     const key = `${keyPrefix}:${clientIp}`;
 
+    let effectiveLimit = limit;
+    let effectiveWindow = windowMs;
+
+    if (getDynamicLimit) {
+      try {
+        const dyn = await getDynamicLimit(req);
+        if (dyn && dyn.limit > 0 && dyn.windowMs > 0) {
+          effectiveLimit = dyn.limit;
+          effectiveWindow = dyn.windowMs;
+        }
+      } catch (err) {
+        console.warn('[RATE_LIMIT_DYNAMIC] Gagal memuat dynamic limit, fallback static:', err);
+      }
+    }
+
     try {
-      const result = await activeLimiter.check(key, limit, windowMs);
+      const result = await activeLimiter.check(key, effectiveLimit, effectiveWindow);
 
       const resetSeconds = Math.max(1, Math.ceil((result.resetTimeMs - Date.now()) / 1000));
       res.setHeader('X-RateLimit-Limit', result.limit);
@@ -195,3 +212,14 @@ export function rateLimitMiddleware(options: RateLimitOptions) {
     }
   };
 }
+
+/**
+ * Standard rate limiter middleware for general public endpoints.
+ * 60 requests per minute per IP.
+ */
+export const standardRateLimiter = rateLimitMiddleware({
+  limit: 60,
+  windowMs: 60 * 1000,
+  keyPrefix: 'rl:std',
+});
+

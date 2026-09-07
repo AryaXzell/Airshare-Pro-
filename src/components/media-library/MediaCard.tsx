@@ -8,6 +8,9 @@ import {
   Play,
   Music,
   Image as ImageIcon,
+  FileText,
+  Archive,
+  FileCode,
   Info,
   CheckSquare,
   Square,
@@ -139,6 +142,42 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
       );
     }
 
+    if (item.type === 'file') {
+      const ext = item.name.split('.').pop()?.toLowerCase() || '';
+      const isArchive = ['zip', 'rar', '7z', 'tar', 'gz', 'bz2'].includes(ext);
+      const isPdf = ext === 'pdf';
+      const isCode = ['json', 'xml', 'md'].includes(ext);
+
+      return (
+        <div
+          className={`${sizeClass} flex flex-col items-center justify-center flex-shrink-0 border p-2 relative overflow-hidden`}
+          style={{
+            backgroundColor: isArchive
+              ? 'rgba(245, 158, 11, 0.12)'
+              : isPdf
+              ? 'rgba(239, 68, 68, 0.12)'
+              : isCode
+              ? 'rgba(16, 185, 129, 0.12)'
+              : 'rgba(59, 130, 246, 0.12)',
+            borderColor: 'var(--border-subtle)',
+          }}
+        >
+          {isArchive ? (
+            <Archive className="w-6 h-6 text-amber-500" />
+          ) : isCode ? (
+            <FileCode className="w-6 h-6 text-emerald-500" />
+          ) : (
+            <FileText className="w-6 h-6" style={{ color: isPdf ? '#ef4444' : 'var(--accent)' }} />
+          )}
+          {isLargeGrid && (
+            <span className="text-[10px] font-black uppercase mt-1 opacity-70 tracking-wider font-mono">
+              {ext || 'FILE'}
+            </span>
+          )}
+        </div>
+      );
+    }
+
     return (
       <div
         className={`${sizeClass} flex items-center justify-center flex-shrink-0 border`}
@@ -207,8 +246,19 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
             >
               {displayName}
             </p>
-            <p className="text-[11px] font-semibold truncate mt-1" style={{ color: 'var(--text-muted)' }}>
-              {subtitle}
+            <p className="text-[11px] font-semibold truncate mt-1 flex items-center space-x-1" style={{ color: 'var(--text-muted)' }}>
+              {item.uploaderCountryCode && (
+                <img
+                  src={`/flags/${item.uploaderCountryCode.toLowerCase()}.svg`}
+                  alt={item.uploaderCountryName || item.uploaderCountryCode}
+                  title={`Diupload dari ${item.uploaderCountryName || item.uploaderCountryCode}`}
+                  className="w-3.5 h-2.5 object-cover rounded-xs inline-block flex-shrink-0"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = 'none';
+                  }}
+                />
+              )}
+              <span className="truncate">{subtitle}</span>
             </p>
           </div>
         </div>
@@ -309,8 +359,19 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
           >
             {displayName}
           </p>
-          <p className="text-[11px] font-semibold truncate mt-1" style={{ color: 'var(--text-muted)' }}>
-            {subtitle}
+          <p className="text-[11px] font-semibold truncate mt-1 flex items-center space-x-1" style={{ color: 'var(--text-muted)' }}>
+            {item.uploaderCountryCode && (
+              <img
+                src={`/flags/${item.uploaderCountryCode.toLowerCase()}.svg`}
+                alt={item.uploaderCountryName || item.uploaderCountryCode}
+                title={`Diupload dari ${item.uploaderCountryName || item.uploaderCountryCode}`}
+                className="w-3.5 h-2.5 object-cover rounded-xs inline-block flex-shrink-0"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none';
+                }}
+              />
+            )}
+            <span className="truncate">{subtitle}</span>
           </p>
         </div>
       </div>

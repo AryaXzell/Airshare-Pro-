@@ -1,9 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
-import { Eye, X } from 'lucide-react';
+import { Eye, X, FileText } from 'lucide-react';
 import { ImagePreview } from './ImagePreview';
+import { FilePreview } from './FilePreview';
 import { CustomVideoPlayer } from '../video-player/CustomVideoPlayer';
 import { CustomAudioPlayer } from '../audio-player/CustomAudioPlayer';
+import { CustomPdfViewer } from '../pdf-viewer/CustomPdfViewer';
+import { CustomTextCodeViewer } from '../text-viewer/CustomTextCodeViewer';
+import { isTextPreviewableFile } from '../../shared/text-language-map';
 import { MediaItem } from '../../types';
 
 interface MediaPreviewModalProps {
@@ -125,6 +129,34 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
               <CustomVideoPlayer item={item} onClose={onClose} onToast={onToast} />
             ) : item.type === 'audio' ? (
               <CustomAudioPlayer item={item} onClose={onClose} onToast={onToast} />
+            ) : item.type === 'file' && (item.mimeType === 'application/pdf' || item.name.toLowerCase().endsWith('.pdf')) ? (
+              <CustomPdfViewer item={item} onClose={onClose} onToast={onToast} />
+            ) : item.type === 'file' && (item.isTextPreviewable || isTextPreviewableFile(item.name, item.mimeType, item.size)) ? (
+              <CustomTextCodeViewer item={item} onClose={onClose} onToast={onToast} />
+            ) : item.type === 'file' ? (
+              <div
+                className="w-full max-w-md bg-[#17171a] text-white rounded-[2rem] sm:rounded-[2.4rem] overflow-hidden shadow-2xl border border-white/10 flex flex-col relative transition-all duration-200"
+                style={{ zIndex: 10 }}
+              >
+                {/* Header */}
+                <div className="p-3.5 sm:p-4 border-b border-white/10 flex items-center justify-between bg-[#1f1f24]">
+                  <div className="flex items-center space-x-2.5 min-w-0">
+                    <FileText className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                    <span className="text-xs sm:text-sm font-bold truncate">
+                      {item.name}
+                    </span>
+                  </div>
+                  <button
+                    onClick={onClose}
+                    className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 transition-colors clean-tap flex-shrink-0"
+                    aria-label="Tutup pratinjau"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <FilePreview item={item} onToast={onToast} />
+              </div>
             ) : (
               <div
                 className={`w-full ${getImageModalWidth()} bg-[#17171a] text-white rounded-[2rem] sm:rounded-[2.4rem] overflow-hidden shadow-2xl border border-white/10 flex flex-col relative transition-all duration-200`}

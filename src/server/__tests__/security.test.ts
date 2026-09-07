@@ -7,6 +7,7 @@ import {
 import { SlidingWindowRateLimiter } from '../security/rate-limiter';
 import { generateRequestId } from '../security/request-logger';
 import { CatboxStorageProvider } from '../storage/catbox-storage-provider';
+import { resolveCountryFromRequest } from '../security/geo-lookup';
 
 async function runSecurityTests() {
   console.log('--- Running AirShare Pro Security Suite Tests ---');
@@ -231,7 +232,132 @@ async function runSecurityTests() {
   }
   assert(upstashCreateErr, 'UpstashMediaRepository.create rejects item without sessionId');
 
-  // Test 8.3: Dynamic Repository Selection
+  // Test 8.3: PublicMediaView projection never contains or leaks sessionId
+  const sampleWithSecretSession = {
+    ...sampleMedia,
+    sessionId: 'super_secret_session_uuid_999',
+    uploaderCountryCode: 'ID',
+    uploaderCountryName: 'Indonesia',
+  };
+
+  // 8.3a: DevelopmentMediaRepository
+  await devRepo.create(sampleWithSecretSession);
+  const devPublic = await devRepo.getByIdPublic(sampleWithSecretSession.id);
+  assert(devPublic !== null, 'devRepo.getByIdPublic returns item');
+  assert(
+    (devPublic as any)?.sessionId === undefined,
+    'DevelopmentMediaRepository.getByIdPublic never leaks sessionId'
+  );
+  assert(
+    devPublic?.uploaderCountryCode === 'ID' && devPublic?.uploaderCountryName === 'Indonesia',
+    'DevelopmentMediaRepository.getByIdPublic preserves uploaderCountryCode and uploaderCountryName'
+  );
+  assert(
+    typeof devPublic?.createdAt === 'number' && devPublic?.createdAt > 0,
+    'DevelopmentMediaRepository.getByIdPublic preserves accurate createdAt timestamp'
+  );
+
+  // 8.3b: UpstashMediaRepository creates public_media:{id} without sessionId but with country and timestamp
+  let storedPublicPayload: any = null;
+  const spyRedis: any = {
+    pipeline: () => ({
+      set: (key: string, val: string) => {
+        if (key.startsWith('public_media:')) {
+          storedPublicPayload = JSON.parse(val);
+        }
+      },
+      zadd: () => {},
+      expire: () => {},
+      del: () => {},
+      zrem: () => {},
+      exec: async () => [1],
+    }),
+    get: async (key: string) => {
+      if (key.startsWith('public_media:')) {
+        return storedPublicPayload ? JSON.stringify(storedPublicPayload) : null;
+      }
+      return null;
+    },
+    zrange: async () => [],
+    mget: async () => [],
+  };
+  const upstashSpyRepo = new UpstashMediaRepository(spyRedis);
+  await upstashSpyRepo.create(sampleWithSecretSession);
+  assert(storedPublicPayload !== null, 'public_media key was written to Redis pipeline');
+  assert(
+    storedPublicPayload?.sessionId === undefined,
+    'Upstash public_media key payload never contains sessionId'
+  );
+  assert(
+    storedPublicPayload?.uploaderCountryCode === 'ID' &&
+    storedPublicPayload?.uploaderCountryName === 'Indonesia',
+    'Upstash public_media key payload preserves uploaderCountryCode and uploaderCountryName'
+  );
+  assert(
+    typeof storedPublicPayload?.createdAt === 'number' && storedPublicPayload?.createdAt > 0,
+    'Upstash public_media key payload preserves accurate createdAt'
+  );
+
+  const upstashPublic = await upstashSpyRepo.getByIdPublic(sampleWithSecretSession.id);
+  assert(upstashPublic !== null, 'upstashSpyRepo.getByIdPublic returns item');
+  assert(
+    (upstashPublic as any)?.sessionId === undefined,
+    'UpstashMediaRepository.getByIdPublic never leaks sessionId'
+  );
+  assert(
+    upstashPublic?.uploaderCountryCode === 'ID' &&
+    upstashPublic?.uploaderCountryName === 'Indonesia',
+    'UpstashMediaRepository.getByIdPublic preserves uploaderCountryCode and uploaderCountryName'
+  );
+
+  // 8.3c: resolveCountryFromRequest tests
+  const cfGeo = await resolveCountryFromRequest({ headers: { 'cf-ipcountry': 'ID' } }, '127.0.0.1');
+  assert(
+    cfGeo?.countryCode === 'ID' && cfGeo?.countryName === 'Indonesia',
+    'resolveCountryFromRequest resolves Cloudflare cf-ipcountry header'
+  );
+
+  const tzGeo = await resolveCountryFromRequest({ headers: { 'x-client-timezone': 'Asia/Jakarta' } }, '127.0.0.1');
+  assert(
+    tzGeo?.countryCode === 'ID' && tzGeo?.countryName === 'Indonesia',
+    'resolveCountryFromRequest resolves client timezone fallback header'
+  );
+
+  // 8.3c: Deleting an item removes the public key preventing orphaned public share records
+  let deletedKeys: string[] = [];
+  const deleteSpyRedis: any = {
+    pipeline: () => ({
+      del: (k: string) => {
+        deletedKeys.push(k);
+      },
+      zrem: () => {},
+      exec: async () => [1, 1, 1],
+    }),
+    zrange: async () => [sampleWithSecretSession.id],
+  };
+  const deleteSpyRepo = new UpstashMediaRepository(deleteSpyRedis);
+  await deleteSpyRepo.delete(sampleWithSecretSession.id, sampleWithSecretSession.sessionId);
+  assert(
+    deletedKeys.includes(`public_media:${sampleWithSecretSession.id}`),
+    'UpstashMediaRepository.delete deletes public_media key'
+  );
+
+  deletedKeys = [];
+  await deleteSpyRepo.clearAll(sampleWithSecretSession.sessionId);
+  assert(
+    deletedKeys.includes(`public_media:${sampleWithSecretSession.id}`),
+    'UpstashMediaRepository.clearAll deletes public_media keys for all items'
+  );
+
+  // Development repository delete removes public lookup
+  await devRepo.delete(sampleWithSecretSession.id, sampleWithSecretSession.sessionId);
+  const devAfterDelete = await devRepo.getByIdPublic(sampleWithSecretSession.id);
+  assert(
+    devAfterDelete === null,
+    'DevelopmentMediaRepository.delete cleans public lookup immediately'
+  );
+
+  // Test 8.4: Dynamic Repository Selection
   delete process.env.UPSTASH_REDIS_REST_URL;
   delete process.env.UPSTASH_REDIS_REST_TOKEN;
   const repoWithoutRedis = getMediaRepository();
@@ -252,6 +378,69 @@ async function runSecurityTests() {
   delete process.env.UPSTASH_REDIS_REST_URL;
   delete process.env.UPSTASH_REDIS_REST_TOKEN;
 
+  // 8.5: AnalyticsRepository SessionId Leak Prevention (Memory & Redis)
+  const { analyticsRepository, AnalyticsRepository } = await import('../repository/analytics-repository');
+
+  const secretUploadItem: any = {
+    id: 'test_sec_media_999',
+    name: 'secret_file.pdf',
+    type: 'document',
+    size: 2048,
+    formattedSize: '2 KB',
+    shareUrl: 'https://files.catbox.moe/sec999.pdf',
+    sessionId: 'super_secret_analytics_token_9999',
+    uploaderCountryCode: 'ID',
+    uploaderCountryName: 'Indonesia',
+    createdAt: Date.now(),
+  };
+
+  // Test in-memory
+  await analyticsRepository.recordUpload(secretUploadItem);
+  const recentInMem = await analyticsRepository.getRecentUploads(20);
+  const foundInMem = recentInMem.find((r) => r.id === 'test_sec_media_999');
+  assert(
+    Boolean(foundInMem) && (foundInMem as any).sessionId === undefined && !('sessionId' in (foundInMem || {})),
+    'analyticsRepository.getRecentUploads never leaks sessionId from in-memory store'
+  );
+
+  // Test Redis pipeline payload
+  let redisMediaObjPayload: any = null;
+  const mockAnalyticsRedis: any = {
+    pipeline: () => ({
+      incr: () => {},
+      incrby: () => {},
+      pfadd: () => {},
+      hincrby: () => {},
+      zincrby: () => {},
+      zadd: () => {},
+      zremrangebyrank: () => {},
+      expire: () => {},
+      set: (key: string, val: string) => {
+        if (key.startsWith('stats:media_obj:')) {
+          redisMediaObjPayload = JSON.parse(val);
+        }
+      },
+      exec: async () => [1],
+    }),
+    zrange: async () => ['test_sec_media_999'],
+    mget: async () => [JSON.stringify(secretUploadItem)], // test stripping legacy redis objects
+  };
+
+  const redisAnalyticsRepo = new AnalyticsRepository(mockAnalyticsRedis);
+  await redisAnalyticsRepo.recordUpload(secretUploadItem);
+  assert(
+    redisMediaObjPayload !== null && redisMediaObjPayload.sessionId === undefined && !('sessionId' in redisMediaObjPayload),
+    'AnalyticsRepository Redis stats:media_obj payload strictly excludes sessionId'
+  );
+
+  const recentFromRedis = await redisAnalyticsRepo.getRecentUploads(10);
+  assert(
+    recentFromRedis.length > 0 &&
+    (recentFromRedis[0] as any).sessionId === undefined &&
+    !('sessionId' in recentFromRedis[0]),
+    'AnalyticsRepository.getRecentUploads strips legacy sessionId if present in Redis storage'
+  );
+
   // 9. HTTP Endpoint Integration & Method Validation (405, 404, Headers, Production CSP)
   const { createExpressApp } = await import('../app');
   const app = createExpressApp();
@@ -266,10 +455,15 @@ async function runSecurityTests() {
     const healthJson = await healthRes.json();
     assert(
       healthRes.status === 200 &&
-      healthJson.status === 'ok' &&
+      (healthJson.status === 'ok' || healthJson.status === 'degraded') &&
+      healthJson.redis !== undefined &&
+      typeof healthJson.redis.configured === 'boolean' &&
+      typeof healthJson.redis.connected === 'boolean' &&
+      healthJson.catbox !== undefined &&
+      typeof healthJson.catbox.available === 'boolean' &&
       healthRes.headers.get('x-content-type-options') === 'nosniff' &&
       healthRes.headers.has('x-request-id'),
-      'GET /api/health returns 200 with nosniff and X-Request-ID headers'
+      'GET /api/health returns 200 with nosniff, X-Request-ID, and real-time redis & catbox health properties'
     );
 
     // Test 9.2: POST /api/health -> 405 Method Not Allowed
@@ -319,7 +513,69 @@ async function runSecurityTests() {
       'GET /s/:id returns 404 HTML landing page when item is not found'
     );
 
-    // Test 9.7: Production CSP frame-ancestors is strictly 'self'
+    // Test 9.7: Share landing page handles image vs audio/video redirect correctly
+    const repo = getMediaRepository();
+    const testImage = {
+      id: 'img_test_redirect_1',
+      name: 'photo.jpg',
+      originalFileName: 'photo.jpg',
+      size: 500,
+      formattedSize: '500 B',
+      type: 'image' as const,
+      mimeType: 'image/jpeg',
+      shareUrl: 'https://files.catbox.moe/img1.jpg',
+      provider: 'catbox' as const,
+      createdAt: Date.now(),
+      sessionId: 'test_session_redirect',
+      uploaderCountryCode: 'ID',
+      uploaderCountryName: 'Indonesia',
+    };
+    const testAudio = {
+      id: 'audio_test_redirect_1',
+      name: 'song.mp3',
+      originalFileName: 'song.mp3',
+      size: 5000,
+      formattedSize: '5 KB',
+      type: 'audio' as const,
+      mimeType: 'audio/mpeg',
+      shareUrl: 'https://files.catbox.moe/song1.mp3',
+      provider: 'catbox' as const,
+      createdAt: Date.now(),
+      sessionId: 'test_session_redirect',
+      uploaderCountryCode: 'ID',
+      uploaderCountryName: 'Indonesia',
+    };
+    await repo.create(testImage);
+    await repo.create(testAudio);
+
+    const imageShareRes = await fetch(`${baseUrl}/s/${testImage.id}`);
+    const imageShareHtml = await imageShareRes.text();
+    assert(
+      imageShareRes.status === 200 &&
+      imageShareHtml.includes('<meta http-equiv="refresh"') &&
+      imageShareHtml.includes('Mengarahkan ke berkas asli dalam 2 detik...'),
+      'GET /s/:id for image includes meta refresh and countdown redirect'
+    );
+    assert(
+      imageShareHtml.includes('Indonesia') && imageShareHtml.includes('/flags/id.svg'),
+      'GET /s/:id includes uploader country name and vector flag'
+    );
+    assert(
+      imageShareHtml.includes('upload-time-text') &&
+      Boolean(imageShareRes.headers.get('cache-control')?.includes('no-cache')),
+      'GET /s/:id includes dynamic upload time element and no-cache header'
+    );
+
+    const audioShareRes = await fetch(`${baseUrl}/s/${testAudio.id}`);
+    const audioShareHtml = await audioShareRes.text();
+    assert(
+      audioShareRes.status === 200 &&
+      !audioShareHtml.includes('<meta http-equiv="refresh"') &&
+      audioShareHtml.includes('Putar langsung di halaman ini, atau buka berkas asli dengan tombol di bawah'),
+      'GET /s/:id for audio/video does NOT auto-redirect and allows inline playback'
+    );
+
+    // Test 9.8: Production CSP frame-ancestors is strictly 'self'
     const prevEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
     const prodApp = createExpressApp();
@@ -332,6 +588,10 @@ async function runSecurityTests() {
       assert(
         prodCsp.includes("frame-ancestors 'self'") && !prodCsp.includes('googleusercontent.com'),
         "Production CSP enforces strictly frame-ancestors 'self' without third-party Google domains"
+      );
+      assert(
+        !prodCsp.includes('images.unsplash.com'),
+        'CSP img-src strictly excludes removed domain images.unsplash.com'
       );
     } finally {
       prodServer.close();

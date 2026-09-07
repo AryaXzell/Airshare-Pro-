@@ -2,21 +2,28 @@ import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { QrCode, Download, Copy, Check, Image as ImageIcon, X } from 'lucide-react';
 import { copyToClipboard } from '../../lib/utils';
+import { generateQrDataUrl } from '../../lib/qrcode-helper';
 
 interface QrCodeModalProps {
   isOpen: boolean;
   shareUrl: string;
-  qrDataUrl: string;
   fileName: string;
   onClose: () => void;
+  onToast?: (
+    msg: string,
+    options?: { description?: string; type?: 'success' | 'error' | 'warning' | 'info' }
+  ) => void;
 }
+
+// Module-level cache to prevent re-generating QR code for the same URL across opens
+const qrCache = new Map<string, string>();
 
 export const QrCodeModal: React.FC<QrCodeModalProps> = ({
   isOpen,
   shareUrl,
-  qrDataUrl,
   fileName,
   onClose,
+  onToast,
 }) => {
   const triggerElementRef = useRef<HTMLElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -27,8 +34,50 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
 
   const shouldReduceMotion = useReducedMotion();
   const [isAnimating, setIsAnimating] = useState(true);
+  const [hasAnimationCompleted, setHasAnimationCompleted] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState<string>(() => (shareUrl ? qrCache.get(shareUrl) || '' : ''));
   const [linkCopied, setLinkCopied] = useState(false);
   const [imageCopied, setImageCopied] = useState(false);
+
+  // Lazy QR generation: generate only when modal is open and not already in cache.
+  // Delay generation until entrance animation completes to guarantee 0 FPS drop on entry.
+  useEffect(() => {
+    if (!isOpen) {
+      setHasAnimationCompleted(false);
+      return;
+    }
+
+    // If already in cache, load immediately
+    const cached = qrCache.get(shareUrl);
+    if (cached) {
+      setQrDataUrl(cached);
+      return;
+    }
+
+    // Reset displayed QR while loading
+    setQrDataUrl('');
+
+    // If motion is enabled, await entrance animation completion
+    if (!hasAnimationCompleted && !shouldReduceMotion) {
+      return;
+    }
+
+    let isMounted = true;
+    generateQrDataUrl(shareUrl, 280)
+      .then((dataUrl) => {
+        if (!isMounted) return;
+        qrCache.set(shareUrl, dataUrl);
+        setQrDataUrl(dataUrl);
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        onToast?.('Gagal membuat kode QR.', { type: 'error' });
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, shareUrl, hasAnimationCompleted, shouldReduceMotion, onToast]);
 
   // Check browser support for copying image blobs to clipboard
   const canCopyImage =
@@ -125,7 +174,13 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
       setImageCopied(true);
       setTimeout(() => setImageCopied(false), 2000);
     } catch {
-      // Fallback: copy link text if image blob copy is blocked by permission
+      // Fallback: notify user and copy link text if image blob copy is blocked or unsupported
+      onToast?.(
+        'Penyalinan gambar tidak didukung di perangkat ini — tautan disalin sebagai gantinya.',
+        {
+          type: 'warning',
+        }
+      );
       handleCopyLink();
     }
   };
@@ -153,7 +208,10 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
             animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
             exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.94, y: 6 }}
             transition={{ duration: shouldReduceMotion ? 0 : 0.15, ease: 'easeOut' }}
-            onAnimationComplete={() => setIsAnimating(false)}
+            onAnimationComplete={() => {
+              setIsAnimating(false);
+              setHasAnimationCompleted(true);
+            }}
             className="relative w-full max-w-sm rounded-[2rem] p-6 clean-surface-elevated z-10 border text-center"
             style={{
               backgroundColor: 'var(--surface-elevated)',
@@ -233,9 +291,12 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
               <button
                 ref={downloadButtonRef}
                 onClick={handleDownloadQr}
-                className="py-2.5 px-2 rounded-xl font-bold text-xs clean-interactive clean-tap border flex flex-col items-center justify-center space-y-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                disabled={!qrDataUrl}
+                className={`py-2.5 px-2 rounded-xl font-bold text-xs clean-interactive clean-tap border flex flex-col items-center justify-center space-y-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
+                  !qrDataUrl ? 'opacity-40 cursor-not-allowed' : ''
+                }`}
                 style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-main)' }}
-                title="Unduh file gambar QR"
+                title={qrDataUrl ? 'Unduh file gambar QR' : 'Menyiapkan kode QR...'}
                 aria-label="Unduh gambar kode QR"
               >
                 <Download className="w-4 h-4" style={{ color: 'var(--accent)' }} />
@@ -266,11 +327,12 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
                 <button
                   ref={copyImageButtonRef}
                   onClick={handleCopyQrImage}
+                  disabled={!qrDataUrl}
                   className={`py-2.5 px-2 rounded-xl font-bold text-xs clean-interactive clean-tap border flex flex-col items-center justify-center space-y-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
                     imageCopied ? 'border-emerald-500 text-emerald-600 bg-emerald-500/10' : ''
-                  }`}
+                  } ${!qrDataUrl ? 'opacity-40 cursor-not-allowed' : ''}`}
                   style={!imageCopied ? { borderColor: 'var(--border-subtle)', color: 'var(--text-main)' } : {}}
-                  title="Salin Gambar QR ke Clipboard"
+                  title={qrDataUrl ? 'Salin Gambar QR ke Clipboard' : 'Menyiapkan kode QR...'}
                   aria-label="Salin gambar kode QR ke clipboard"
                 >
                   {imageCopied ? (

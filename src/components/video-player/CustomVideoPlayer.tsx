@@ -32,6 +32,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
 
   const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTapRef = useRef<{ time: number; side: 'left' | 'right' }>({ time: 0, side: 'left' });
+  const lastTimeUpdateRef = useRef<number>(0);
 
   const videoTitle = item.name.replace(/\.[^/.]+$/, '');
 
@@ -62,6 +63,8 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   const handleRewind = useCallback(() => {
     if (!videoRef.current) return;
     videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - 15);
+    lastTimeUpdateRef.current = performance.now();
+    setCurrentTime(videoRef.current.currentTime);
     showControlsTemporarily();
   }, [showControlsTemporarily]);
 
@@ -69,6 +72,8 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     if (!videoRef.current) return;
     const dur = isFinite(videoRef.current.duration) ? videoRef.current.duration : duration;
     videoRef.current.currentTime = Math.min(dur || 999999, videoRef.current.currentTime + 15);
+    lastTimeUpdateRef.current = performance.now();
+    setCurrentTime(videoRef.current.currentTime);
     showControlsTemporarily();
   }, [duration, showControlsTemporarily]);
 
@@ -182,6 +187,8 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       if (!videoRef.current) return;
       const delta = side === 'left' ? -10 : 10;
       videoRef.current.currentTime = Math.max(0, Math.min(duration, videoRef.current.currentTime + delta));
+      lastTimeUpdateRef.current = performance.now();
+      setCurrentTime(videoRef.current.currentTime);
       setSeekFeedback({
         text: side === 'left' ? '↩ 10s' : '10s ↪',
         side,
@@ -196,7 +203,13 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
 
   const handleTimeUpdate = () => {
     if (!videoRef.current) return;
-    setCurrentTime(videoRef.current.currentTime);
+    const now = performance.now();
+    // Throttle React state updates to every 250ms during active playback to prevent excessive re-renders,
+    // while keeping MediaSession positionState and timeline slider accurate and responsive.
+    if (now - lastTimeUpdateRef.current >= 250) {
+      lastTimeUpdateRef.current = now;
+      setCurrentTime(videoRef.current.currentTime);
+    }
   };
 
   const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number } | null>(
@@ -221,6 +234,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     if (!videoRef.current || duration <= 0) return;
     const newTime = (percentage / 100) * duration;
     videoRef.current.currentTime = newTime;
+    lastTimeUpdateRef.current = performance.now();
     setCurrentTime(newTime);
     showControlsTemporarily();
   };
@@ -299,8 +313,20 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
           onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
-          onEnded={() => setIsPlaying(false)}
+          onPause={() => {
+            setIsPlaying(false);
+            if (videoRef.current) {
+              lastTimeUpdateRef.current = performance.now();
+              setCurrentTime(videoRef.current.currentTime);
+            }
+          }}
+          onEnded={() => {
+            setIsPlaying(false);
+            if (videoRef.current) {
+              lastTimeUpdateRef.current = performance.now();
+              setCurrentTime(videoRef.current.currentTime);
+            }
+          }}
           className="w-full h-full object-contain"
         />
 

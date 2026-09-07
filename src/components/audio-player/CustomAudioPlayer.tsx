@@ -16,7 +16,7 @@ import { AppleSlider } from '../ui/AppleSlider';
 import { AudioVisualizer } from './AudioVisualizer';
 import { MediaItem } from '../../types';
 import { DEFAULT_AUDIO_COVER } from '../../lib/constants';
-import { copyToClipboard, formatDuration } from '../../lib/utils';
+import { copyToClipboard, formatDuration, getPublicShareUrl } from '../../lib/utils';
 import { downloadMediaFile } from '../../lib/download-helper';
 
 interface CustomAudioPlayerProps {
@@ -31,6 +31,7 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
   onToast,
 }) => {
   const audioRef = useRef<HTMLAudioElement>(null);
+  const lastTimeUpdateRef = useRef<number>(0);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -61,12 +62,16 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
   const handleRewind = useCallback(() => {
     if (!audioRef.current) return;
     audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 10);
+    lastTimeUpdateRef.current = performance.now();
+    setCurrentTime(audioRef.current.currentTime);
   }, []);
 
   const handleForward = useCallback(() => {
     if (!audioRef.current) return;
     const dur = isFinite(audioRef.current.duration) ? audioRef.current.duration : duration;
     audioRef.current.currentTime = Math.min(dur || 999999, audioRef.current.currentTime + 10);
+    lastTimeUpdateRef.current = performance.now();
+    setCurrentTime(audioRef.current.currentTime);
   }, [duration]);
 
   // MediaSession API Integration (Lock Screen & Hardware Key Controls)
@@ -223,7 +228,13 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
 
   const handleTimeUpdate = () => {
     if (!audioRef.current) return;
-    setCurrentTime(audioRef.current.currentTime);
+    const now = performance.now();
+    // Throttle React state updates to every 250ms during playback to prevent excessive re-renders,
+    // while keeping lock screen MediaSession positionState and slider smooth.
+    if (now - lastTimeUpdateRef.current >= 250) {
+      lastTimeUpdateRef.current = now;
+      setCurrentTime(audioRef.current.currentTime);
+    }
   };
 
   const handleLoadedMetadata = () => {
@@ -236,6 +247,7 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
     if (!audioRef.current || duration <= 0) return;
     const newTime = (percentage / 100) * duration;
     audioRef.current.currentTime = newTime;
+    lastTimeUpdateRef.current = performance.now();
     setCurrentTime(newTime);
   };
 
@@ -261,7 +273,7 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
   };
 
   const handleCopy = async () => {
-    const ok = await copyToClipboard(item.shareUrl);
+    const ok = await copyToClipboard(getPublicShareUrl(item));
     if (ok) {
       setCopied(true);
       onToast('Tautan audio disalin!');
@@ -320,8 +332,20 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
-        onEnded={() => setIsPlaying(false)}
+        onPause={() => {
+          setIsPlaying(false);
+          if (audioRef.current) {
+            lastTimeUpdateRef.current = performance.now();
+            setCurrentTime(audioRef.current.currentTime);
+          }
+        }}
+        onEnded={() => {
+          setIsPlaying(false);
+          if (audioRef.current) {
+            lastTimeUpdateRef.current = performance.now();
+            setCurrentTime(audioRef.current.currentTime);
+          }
+        }}
       />
 
       {/* Main Container */}

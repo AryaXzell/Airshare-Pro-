@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ZoomIn, ZoomOut, RotateCcw, Copy, Download, Check, Info } from 'lucide-react';
 import { MediaItem } from '../../types';
-import { copyToClipboard } from '../../lib/utils';
+import { copyToClipboard, getPublicShareUrl } from '../../lib/utils';
 import { downloadMediaFile } from '../../lib/download-helper';
 
 interface ImagePreviewProps {
@@ -39,7 +39,7 @@ export const ImagePreview: React.FC<ImagePreviewProps> = ({ item, onToast }) => 
   };
 
   const handleCopy = async () => {
-    const ok = await copyToClipboard(item.shareUrl);
+    const ok = await copyToClipboard(getPublicShareUrl(item));
     if (ok) {
       setCopied(true);
       onToast('Tautan gambar berhasil disalin!');
