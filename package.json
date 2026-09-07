@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "description": "High-performance instant media sharing and streaming platform powered by Catbox storage.",
   "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild src/server/vercel.ts --bundle --platform=node --format=esm --packages=external --sourcemap --outfile=api/index.js",

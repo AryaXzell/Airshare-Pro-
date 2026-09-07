@@ -12,6 +12,10 @@
       "destination": "/api"
     },
     {
+      "source": "/media/(.*)",
+      "destination": "/api"
+    },
+    {
       "source": "/s/(.*)",
       "destination": "/api"
     }
