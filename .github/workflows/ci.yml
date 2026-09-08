@@ -42,3 +42,8 @@ jobs:
         run: npm run build
         env:
           NODE_ENV: production
+
+      - name: Verify Vercel function build output
+        run: |
+          test -s api/index.js || (echo "api/index.js is missing or empty!" && exit 1)
+          node --input-type=module -e "await import('./api/index.js')" || (echo "api/index.js failed to load!" && exit 1)

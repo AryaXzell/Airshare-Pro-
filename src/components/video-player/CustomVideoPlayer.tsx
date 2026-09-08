@@ -81,11 +81,10 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   useEffect(() => {
     if ('mediaSession' in navigator && typeof window.MediaMetadata !== 'undefined') {
       try {
-        navigator.mediaSession.metadata = new window.MediaMetadata({
+        const metadataInit: MediaMetadataInit = {
           title: videoTitle,
-          artist: 'AirShare Pro Video',
-          album: 'AirShare Pro',
-        });
+        };
+        navigator.mediaSession.metadata = new window.MediaMetadata(metadataInit);
 
         navigator.mediaSession.setActionHandler('play', () => {
           if (videoRef.current && videoRef.current.paused) {

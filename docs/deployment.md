@@ -69,12 +69,13 @@ Ensure the following variables are configured in your deployment platform:
 
 AirShare Pro deploys seamlessly to Vercel as a hybrid application (Vite SPA frontend + Express Serverless Function API):
 
-- **Serverless Entrypoint (`api/index.ts`)**:
-  - Exposes the shared Express application (`src/server/app.ts`) as a single unified Vercel Serverless Function handler with native TypeScript support via `@vercel/node`.
+- **Serverless Build Entrypoint (`src/server/vercel.ts` -> `api/index.js`)**:
+  - Exposes the shared Express application (`src/server/app.ts`) as a single unified Vercel Serverless Function handler bundled with `esbuild`.
   - Configured with `export const config = { api: { bodyParser: false } }` to pass raw multipart streams directly into Multer without body parser corruption.
+  - **Catatan Komitmen**: File `api/index.js` di-commit ke repositori agar Vercel dapat memvalidasi pattern function sebelum build dimulai.
 - **Routing & Function Configuration (`vercel.json`)**:
-  - `functions: { "api/index.ts": { "maxDuration": 60 } }` grants up to 60 seconds of execution time for processing large uploads.
-  - `rewrites: [{ "source": "/api/(.*)", "destination": "/api" }, { "source": "/media/(.*)", "destination": "/api" }, { "source": "/s/(.*)", "destination": "/api" }]` routes all API requests, media streaming, and public share landing pages directly to `api/index.ts`.
+  - `functions: { "api/index.js": { "maxDuration": 60 } }` grants up to 60 seconds of execution time for processing large uploads.
+  - `rewrites: [{ "source": "/api/(.*)", "destination": "/api" }, { "source": "/media/(.*)", "destination": "/api" }, { "source": "/s/(.*)", "destination": "/api" }]` routes all API requests, media streaming, and public share landing pages directly to `api/index.js`.
   - Non-API routes are automatically resolved by Vercel to static files compiled in `dist/` by Vite (`npm run build`).
 
 ### Serverless Operational Considerations:

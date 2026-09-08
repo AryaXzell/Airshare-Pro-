@@ -4,8 +4,6 @@ import {
   Pause,
   RotateCcw,
   RotateCw,
-  Volume2,
-  VolumeX,
   Copy,
   Check,
   Download,
@@ -36,8 +34,6 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [volume, setVolume] = useState(1);
-  const [isMuted, setIsMuted] = useState(false);
   const [copied, setCopied] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
 
@@ -45,7 +41,7 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
   const songTitle =
     item.audioMeta?.title || item.name.replace(/\.[^/.]+$/, '');
   const songArtist = item.audioMeta?.artist || 'Artis Tidak Dikenal';
-  const songAlbum = item.audioMeta?.album || 'AirShare Pro';
+  const songAlbum = item.audioMeta?.album?.trim();
 
   // Toggle play/pause handler
   const togglePlay = useCallback(() => {
@@ -120,12 +116,16 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
               },
             ];
 
-        navigator.mediaSession.metadata = new window.MediaMetadata({
+        const metadataInit: MediaMetadataInit = {
           title: songTitle,
           artist: songArtist,
-          album: songAlbum,
           artwork,
-        });
+        };
+        if (songAlbum) {
+          metadataInit.album = songAlbum;
+        }
+
+        navigator.mediaSession.metadata = new window.MediaMetadata(metadataInit);
 
         navigator.mediaSession.setActionHandler('play', () => {
           if (audioRef.current && audioRef.current.paused) {
@@ -251,27 +251,6 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
     setCurrentTime(newTime);
   };
 
-  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newVol = parseFloat(e.target.value);
-    setVolume(newVol);
-    setIsMuted(newVol === 0);
-    if (audioRef.current) {
-      audioRef.current.volume = newVol;
-      audioRef.current.muted = newVol === 0;
-    }
-  };
-
-  const toggleMute = () => {
-    if (!audioRef.current) return;
-    const nextMuted = !isMuted;
-    setIsMuted(nextMuted);
-    audioRef.current.muted = nextMuted;
-    if (!nextMuted && volume === 0) {
-      setVolume(0.5);
-      audioRef.current.volume = 0.5;
-    }
-  };
-
   const handleCopy = async () => {
     const ok = await copyToClipboard(getPublicShareUrl(item));
     if (ok) {
@@ -305,9 +284,6 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
         handleForward();
-      } else if (e.key === 'm') {
-        e.preventDefault();
-        toggleMute();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -447,52 +423,26 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
           </button>
         </div>
 
-        {/* Volume & Bottom Actions */}
-        <div className="flex items-center justify-between pt-1 border-t border-white/10 text-xs">
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={toggleMute}
-              className="text-white/70 hover:text-white transition-colors clean-tap"
-              aria-label={isMuted || volume === 0 ? 'Bunyikan suara' : 'Bisukan suara'}
-            >
-              {isMuted || volume === 0 ? (
-                <VolumeX className="w-4 h-4 text-rose-400" />
-              ) : (
-                <Volume2 className="w-4 h-4" />
-              )}
-            </button>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={isMuted ? 0 : volume}
-              onChange={handleVolumeChange}
-              aria-label="Volume audio"
-              className="w-16 h-1 rounded-full cursor-pointer accent-white"
-            />
-          </div>
+        {/* Bottom Actions */}
+        <div className="flex items-center justify-end pt-2 border-t border-white/10 text-xs gap-2.5">
+          <button
+            onClick={handleCopy}
+            className="flex items-center justify-center space-x-1.5 h-10 px-4 rounded-xl font-bold bg-white/10 hover:bg-white/20 text-white transition-all clean-tap"
+            aria-label="Salin tautan audio"
+          >
+            {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+            <span className="whitespace-nowrap">{copied ? 'Disalin' : 'Salin'}</span>
+          </button>
 
-          <div className="flex items-center space-x-1.5">
-            <button
-              onClick={handleCopy}
-              className="flex items-center space-x-1.5 py-1.5 px-3 rounded-xl font-bold bg-white/10 hover:bg-white/20 text-white transition-all clean-tap"
-              aria-label="Salin tautan audio"
-            >
-              {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copied ? 'Disalin' : 'Salin'}</span>
-            </button>
-
-            <button
-              onClick={handleDownload}
-              disabled={isDownloading}
-              className="flex items-center space-x-1.5 py-1.5 px-3 rounded-xl font-bold bg-white/10 hover:bg-white/20 text-white transition-all clean-tap disabled:opacity-50"
-              aria-label="Unduh berkas audio"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>{isDownloading ? 'Mengunduh...' : 'Unduh'}</span>
-            </button>
-          </div>
+          <button
+            onClick={handleDownload}
+            disabled={isDownloading}
+            className="flex items-center justify-center space-x-1.5 h-10 px-4 rounded-xl font-bold bg-white/10 hover:bg-white/20 text-white transition-all clean-tap disabled:opacity-50"
+            aria-label="Unduh berkas audio"
+          >
+            <Download className="w-4 h-4" />
+            <span className="whitespace-nowrap">{isDownloading ? 'Mengunduh...' : 'Unduh'}</span>
+          </button>
         </div>
       </div>
     </div>

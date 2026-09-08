@@ -38,12 +38,15 @@ The application will start on `http://localhost:3000` with hot asset serving and
 | Script | Command | Purpose |
 | --- | --- | --- |
 | `npm run dev` | `tsx server.ts` | Launches Express server with Vite middleware in development mode. |
-| `npm run build` | `vite build && esbuild server.ts ...` | Compiles client assets and bundles server to `dist/server.cjs`. |
+| `npm run build` | `vite build && esbuild ...` | Compiles client assets (`dist/`), bundles standalone server (`dist/server.cjs`), and bundles Vercel serverless function (`api/index.js`). |
 | `npm run start` | `node dist/server.cjs` | Runs the compiled standalone server in production mode. |
 | `npm run typecheck` | `tsc --noEmit` | Validates strict TypeScript types across the entire project. |
 | `npm run lint` | `tsc --noEmit` | Runs codebase type and syntax validation. |
-| `npm run test` | `tsx src/server/__tests__/security.test.ts` | Runs the security, sanitization, and rate limiter test suite. |
-| `npm run clean` | `rm -rf dist server.js` | Removes compiled build outputs and temporary artifacts. |
+| `npm run test` | `tsx src/server/__tests__/security.test.ts && tsx src/server/__tests__/admin.test.ts` | Runs the security, sanitization, and rate limiter test suite. |
+| `npm run clean` | `rm -rf dist server.js api/index.js api/index.js.map` | Removes compiled build outputs and temporary artifacts. |
+
+> **PENTING — Komitmen `api/index.js` ke Git:**
+> Berkas `api/index.js` dan `api/index.js.map` **wajib** ter-commit ke git dengan konten valid (bukan file kosong dan tidak boleh di-gitignore). Vercel CLI memvalidasi kecocokan pola `functions` di `vercel.json` terhadap berkas di direktori `api/` *sebelum* menjalankan siklus `npm run build`. Ini merupakan pengecualian yang disengaja terhadap konvensi umum "jangan commit build artifact" demi memenuhi kebutuhan validasi platform serverless Vercel.
 
 ---
 
