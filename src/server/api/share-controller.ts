@@ -342,14 +342,6 @@ export class ShareController {
             </div>
 
             <div class="controls-right">
-              <!-- Volume -->
-              <div class="vol-control">
-                <button class="ctrl-btn" id="vid-vol-btn" aria-label="Bisu atau bersuara">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="vid-vol-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
-                </button>
-                <input type="range" class="vol-slider" id="vid-vol-slider" min="0" max="1" step="0.05" value="1" aria-label="Volume" />
-              </div>
-
               <!-- Speed -->
               <button class="ctrl-btn speed-badge" id="vid-speed-btn" title="Kecepatan putar">1x</button>
 
@@ -373,7 +365,7 @@ export class ShareController {
   <meta name="twitter:card" content="summary" />`;
       const songTitle = item.audioMeta?.title || item.name.replace(/\.[^/.]+$/, '');
       const artist = item.audioMeta?.artist || 'Artis Tidak Dikenal';
-      const album = item.audioMeta?.album || 'AirShare Audio';
+      const album = item.audioMeta?.album?.trim();
       const hasCover = !!item.audioMeta?.coverUrl;
 
       previewTag = `
@@ -392,7 +384,7 @@ export class ShareController {
           <div class="audio-info">
             <h3 class="audio-title" title="${escapeHtml(songTitle)}">${escapeHtml(songTitle)}</h3>
             <p class="audio-artist" title="${escapeHtml(artist)}">${escapeHtml(artist)}</p>
-            <p class="audio-album" title="${escapeHtml(album)}">${escapeHtml(album)}</p>
+            ${album ? `<p class="audio-album" title="${escapeHtml(album)}">${escapeHtml(album)}</p>` : ''}
           </div>
         </div>
 
@@ -423,13 +415,6 @@ export class ShareController {
             <button class="ctrl-btn" id="aud-forward-btn" title="Maju 10 detik" aria-label="Maju 10 detik">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 17l5-5-5-5M6 17l5-5-5-5"/></svg>
             </button>
-          </div>
-
-          <div class="vol-control">
-            <button class="ctrl-btn" id="aud-vol-btn" aria-label="Volume">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="aud-vol-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
-            </button>
-            <input type="range" class="vol-slider" id="aud-vol-slider" min="0" max="1" step="0.05" value="1" aria-label="Volume audio" />
           </div>
         </div>
       </div>`;
@@ -688,18 +673,7 @@ export class ShareController {
       color: #d4d4d8;
       margin-left: 0.35rem;
     }
-    .vol-control {
-      display: flex;
-      align-items: center;
-      gap: 0.25rem;
-    }
-    .vol-slider {
-      width: 55px;
-      height: 4px;
-      accent-color: var(--accent);
-      cursor: pointer;
-      border-radius: 9999px;
-    }
+
 
     /* Custom Audio Player */
     .custom-audio-wrapper {
@@ -872,7 +846,7 @@ export class ShareController {
     .pdf-ext-btn:hover { background: rgba(255,255,255,0.15); }
     .pdf-frame-wrapper {
       width: 100%;
-      height: 520px;
+      height: min(520px, 60vh);
       background: #0f0f12;
       position: relative;
     }
@@ -1110,6 +1084,47 @@ export class ShareController {
     }
     .btn-secondary { background-color: var(--surface); color: var(--text); border: 1px solid var(--border); }
     .btn-secondary:hover { background-color: #323238; border-color: #3f3f46; }
+
+    /* Mobile Responsive Breakpoints */
+    @media (max-width: 480px) {
+      body { padding: 0.75rem; }
+      .card { padding: 1.1rem; border-radius: 1.25rem; }
+      .brand { margin-bottom: 1rem; }
+      .metadata-strip { gap: 0.5rem; font-size: 0.75rem; margin-bottom: 1rem; padding-bottom: 0.85rem; }
+      .custom-player-wrapper { margin-bottom: 1rem; border-radius: 1rem; }
+      .video-controls { padding: 1rem 0.65rem 0.5rem 0.65rem; }
+      .controls-left, .controls-right { gap: 0.25rem; }
+      .ctrl-btn { padding: 0.3rem; }
+      .speed-badge { font-size: 0.625rem; padding: 0.15rem 0.35rem; }
+      .time-display { font-size: 0.6875rem; margin-left: 0.15rem; }
+      .custom-audio-wrapper { padding: 1rem; gap: 0.85rem; }
+      .audio-cover-box { width: 54px; height: 54px; border-radius: 0.75rem; }
+      .audio-title { font-size: 0.875rem; }
+      .audio-artist { font-size: 0.75rem; }
+      .audio-album { font-size: 0.625rem; }
+      .audio-playback-cluster { gap: 0.5rem; }
+      .audio-main-play-btn { width: 40px; height: 40px; }
+      .btn { padding: 0.75rem 1rem; font-size: 0.8125rem; }
+      .file-hero-box { padding: 1.75rem 1rem; }
+      .file-icon-badge { width: 64px; height: 64px; }
+    }
+
+    @media (max-width: 380px) {
+      .controls-row {
+        flex-direction: column;
+        gap: 0.45rem;
+      }
+      .controls-left, .controls-right {
+        width: 100%;
+        justify-content: center;
+      }
+      .audio-controls-row {
+        gap: 0.35rem;
+      }
+      .audio-playback-cluster {
+        gap: 0.35rem;
+      }
+    }
   </style>
 </head>
 <body>
@@ -1225,9 +1240,6 @@ export class ShareController {
       var progress = document.getElementById('video-progress');
       var buffered = document.getElementById('video-buffered');
       var thumb = document.getElementById('video-thumb');
-      var volBtn = document.getElementById('vid-vol-btn');
-      var volIcon = document.getElementById('vid-vol-icon');
-      var volSlider = document.getElementById('vid-vol-slider');
       var speedBtn = document.getElementById('vid-speed-btn');
       var pipBtn = document.getElementById('vid-pip-btn');
       var fsBtn = document.getElementById('vid-fs-btn');
@@ -1258,7 +1270,14 @@ export class ShareController {
 
       if (bigPlayBtn) bigPlayBtn.addEventListener('click', togglePlay);
       if (playBtn) playBtn.addEventListener('click', togglePlay);
-      video.addEventListener('click', togglePlay);
+      video.addEventListener('click', function() {
+        if (controls && controls.classList.contains('hidden')) {
+          controls.classList.remove('hidden');
+          scheduleControlsHide();
+          return;
+        }
+        togglePlay();
+      });
 
       video.addEventListener('play', function() { updatePlayState(true); });
       video.addEventListener('pause', function() { updatePlayState(false); });
@@ -1321,34 +1340,6 @@ export class ShareController {
         });
       }
 
-      // Volume
-      if (volSlider) {
-        volSlider.addEventListener('input', function(e) {
-          var val = parseFloat(e.target.value);
-          video.volume = val;
-          video.muted = val === 0;
-          updateVolIcon();
-        });
-      }
-      if (volBtn) {
-        volBtn.addEventListener('click', function() {
-          video.muted = !video.muted;
-          if (!video.muted && video.volume === 0) {
-            video.volume = 0.5;
-            if (volSlider) volSlider.value = 0.5;
-          }
-          updateVolIcon();
-        });
-      }
-      function updateVolIcon() {
-        if (!volIcon) return;
-        if (video.muted || video.volume === 0) {
-          volIcon.innerHTML = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>';
-        } else {
-          volIcon.innerHTML = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>';
-        }
-      }
-
       // Speed
       if (speedBtn) {
         speedBtn.addEventListener('click', function() {
@@ -1399,6 +1390,10 @@ export class ShareController {
           if (controls) controls.classList.remove('hidden');
           scheduleControlsHide();
         });
+        wrap.addEventListener('touchstart', function() {
+          if (controls) controls.classList.remove('hidden');
+          scheduleControlsHide();
+        }, { passive: true });
       }
     })();
 
@@ -1417,9 +1412,6 @@ export class ShareController {
       var progress = document.getElementById('audio-progress');
       var buffered = document.getElementById('audio-buffered');
       var thumb = document.getElementById('audio-thumb');
-      var volBtn = document.getElementById('aud-vol-btn');
-      var volIcon = document.getElementById('aud-vol-icon');
-      var volSlider = document.getElementById('aud-vol-slider');
       var speedBtn = document.getElementById('aud-speed-btn');
       var coverBox = document.getElementById('audio-cover-box');
 
@@ -1506,33 +1498,6 @@ export class ShareController {
           window.addEventListener('pointermove', onPointerMove);
           window.addEventListener('pointerup', onPointerUp);
         });
-      }
-
-      if (volSlider) {
-        volSlider.addEventListener('input', function(e) {
-          var val = parseFloat(e.target.value);
-          audio.volume = val;
-          audio.muted = val === 0;
-          updateVolIcon();
-        });
-      }
-      if (volBtn) {
-        volBtn.addEventListener('click', function() {
-          audio.muted = !audio.muted;
-          if (!audio.muted && audio.volume === 0) {
-            audio.volume = 0.5;
-            if (volSlider) volSlider.value = 0.5;
-          }
-          updateVolIcon();
-        });
-      }
-      function updateVolIcon() {
-        if (!volIcon) return;
-        if (audio.muted || audio.volume === 0) {
-          volIcon.innerHTML = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>';
-        } else {
-          volIcon.innerHTML = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>';
-        }
       }
 
       if (speedBtn) {
