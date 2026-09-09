@@ -117,6 +117,12 @@ export interface StorageProvider {
   isDeleteSupported(): boolean;
 }
 
+export interface MediaTombstone {
+  id: string;
+  deletedAt: number;
+  reason: 'USER_DELETED' | 'USER_CLEARED' | 'ADMIN_DELETED' | 'UPSTREAM_PURGED' | string;
+}
+
 export interface MediaRepository {
   create(media: MediaObject): Promise<MediaObject>;
   list(sessionId: string, limit?: number): Promise<MediaObject[]>;
@@ -124,6 +130,8 @@ export interface MediaRepository {
   getByIdPublic(id: string): Promise<PublicMediaView | null>;
   delete(id: string, sessionId: string): Promise<boolean>;
   clearAll(sessionId: string): Promise<void>;
+  getTombstone(id: string): Promise<MediaTombstone | null>;
+  recordTombstone(id: string, reason: string): Promise<void>;
 
   /**
    * Internal Administrative Method ONLY.

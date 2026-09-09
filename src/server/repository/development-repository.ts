@@ -1,4 +1,4 @@
-import { MediaObject, MediaRepository, PublicMediaView } from '../../types';
+import { MediaObject, MediaRepository, MediaTombstone, PublicMediaView } from '../../types';
 
 function assertValidSessionId(sessionId: unknown, operation: string): asserts sessionId is string {
   if (!sessionId || typeof sessionId !== 'string' || !sessionId.trim()) {
@@ -8,10 +8,15 @@ function assertValidSessionId(sessionId: unknown, operation: string): asserts se
 
 export class DevelopmentMediaRepository implements MediaRepository {
   private items: Map<string, MediaObject> = new Map();
+  private tombstones: Map<string, MediaTombstone> = new Map();
   private maxItems = 250;
+  private maxTombstones = 1000;
 
   public async create(media: MediaObject): Promise<MediaObject> {
     assertValidSessionId(media.sessionId, 'create');
+
+    // Remove from tombstones if re-created
+    this.tombstones.delete(media.id);
 
     // Evict oldest items if exceeding memory threshold in development
     if (this.items.size >= this.maxItems) {
@@ -48,7 +53,11 @@ export class DevelopmentMediaRepository implements MediaRepository {
     if (!id || typeof id !== 'string' || !id.trim()) {
       return null;
     }
-    const item = this.items.get(id.trim());
+    const cleanId = id.trim();
+    if (this.tombstones.has(cleanId)) {
+      return null;
+    }
+    const item = this.items.get(cleanId);
     if (!item) return null;
     const publicItem: PublicMediaView = {
       id: item.id,
@@ -71,6 +80,29 @@ export class DevelopmentMediaRepository implements MediaRepository {
     return publicItem;
   }
 
+  public async getTombstone(id: string): Promise<MediaTombstone | null> {
+    if (!id || typeof id !== 'string' || !id.trim()) {
+      return null;
+    }
+    return this.tombstones.get(id.trim()) || null;
+  }
+
+  public async recordTombstone(id: string, reason: string): Promise<void> {
+    if (!id || typeof id !== 'string' || !id.trim()) {
+      return;
+    }
+    const cleanId = id.trim();
+    if (this.tombstones.size >= this.maxTombstones) {
+      const oldestKey = this.tombstones.keys().next().value;
+      if (oldestKey) this.tombstones.delete(oldestKey);
+    }
+    this.tombstones.set(cleanId, {
+      id: cleanId,
+      deletedAt: Date.now(),
+      reason,
+    });
+  }
+
   public async delete(id: string, sessionId: string): Promise<boolean> {
     assertValidSessionId(sessionId, 'delete');
     const item = this.items.get(id);
@@ -78,7 +110,11 @@ export class DevelopmentMediaRepository implements MediaRepository {
     if (item.sessionId !== sessionId) {
       return false;
     }
-    return this.items.delete(id);
+    const deleted = this.items.delete(id);
+    if (deleted) {
+      await this.recordTombstone(id, 'USER_DELETED');
+    }
+    return deleted;
   }
 
   public async clearAll(sessionId: string): Promise<void> {
@@ -86,6 +122,7 @@ export class DevelopmentMediaRepository implements MediaRepository {
     for (const [id, item] of this.items.entries()) {
       if (item.sessionId === sessionId) {
         this.items.delete(id);
+        await this.recordTombstone(id, 'USER_CLEARED');
       }
     }
   }
@@ -110,7 +147,10 @@ export class DevelopmentMediaRepository implements MediaRepository {
     if (!id || typeof id !== 'string' || !id.trim()) {
       return false;
     }
-    return this.items.delete(id.trim());
+    const cleanId = id.trim();
+    const deleted = this.items.delete(cleanId);
+    await this.recordTombstone(cleanId, 'ADMIN_DELETED');
+    return deleted;
   }
 }
 

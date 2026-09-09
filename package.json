@@ -17,7 +17,8 @@
     "lint": "tsc --noEmit",
     "test:security": "tsx src/server/__tests__/security.test.ts",
     "test:admin": "tsx src/server/__tests__/admin.test.ts",
-    "test": "tsx src/server/__tests__/security.test.ts && tsx src/server/__tests__/admin.test.ts"
+    "test:vercel-routing": "tsx src/server/__tests__/vercel-routing.test.ts",
+    "test": "tsx src/server/__tests__/security.test.ts && tsx src/server/__tests__/admin.test.ts && tsx src/server/__tests__/vercel-routing.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

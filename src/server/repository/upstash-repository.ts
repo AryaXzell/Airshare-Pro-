@@ -1,5 +1,5 @@
 import { Redis } from '@upstash/redis';
-import { MediaObject, MediaRepository, PublicMediaView } from '../../types';
+import { MediaObject, MediaRepository, MediaTombstone, PublicMediaView } from '../../types';
 
 function assertValidSessionId(sessionId: unknown, operation: string): asserts sessionId is string {
   if (!sessionId || typeof sessionId !== 'string' || !sessionId.trim()) {
@@ -28,6 +28,43 @@ export class UpstashMediaRepository implements MediaRepository {
    */
   private getIdToSessionKey(id: string): string {
     return `id_to_session:${id}`;
+  }
+
+  private getTombstoneKey(id: string): string {
+    return `deleted_media:${id}`;
+  }
+
+  public async getTombstone(id: string): Promise<MediaTombstone | null> {
+    if (!id || typeof id !== 'string' || !id.trim()) {
+      return null;
+    }
+    const cleanId = id.trim();
+    try {
+      const raw = await this.redis.get<string | MediaTombstone>(this.getTombstoneKey(cleanId));
+      if (!raw) return null;
+      return typeof raw === 'string' ? JSON.parse(raw) : (raw as MediaTombstone);
+    } catch {
+      return null;
+    }
+  }
+
+  public async recordTombstone(id: string, reason: string): Promise<void> {
+    if (!id || typeof id !== 'string' || !id.trim()) {
+      return;
+    }
+    const cleanId = id.trim();
+    const tombstone: MediaTombstone = {
+      id: cleanId,
+      deletedAt: Date.now(),
+      reason,
+    };
+    try {
+      await this.redis.set(this.getTombstoneKey(cleanId), JSON.stringify(tombstone), {
+        ex: 14 * 24 * 60 * 60,
+      });
+    } catch {
+      // Fail-open
+    }
   }
 
   public async create(media: MediaObject): Promise<MediaObject> {
@@ -69,6 +106,10 @@ export class UpstashMediaRepository implements MediaRepository {
     pipeline.expire(publicKey, 30 * 24 * 60 * 60);
     pipeline.expire(idToSessionKey, 30 * 24 * 60 * 60);
     pipeline.expire(indexKey, 30 * 24 * 60 * 60);
+
+    // Clear any previous tombstone for this id
+    const tombstoneKey = this.getTombstoneKey(media.id);
+    pipeline.del(tombstoneKey);
 
     await pipeline.exec();
     return media;
@@ -121,6 +162,13 @@ export class UpstashMediaRepository implements MediaRepository {
       return null;
     }
     const cleanId = id.trim();
+
+    // 1. If marked as deleted tombstone, NEVER return it
+    const tombstone = await this.getTombstone(cleanId);
+    if (tombstone) {
+      return null;
+    }
+
     const publicKey = this.getPublicKey(cleanId);
     const raw = await this.redis.get<string>(publicKey);
 
@@ -133,57 +181,35 @@ export class UpstashMediaRepository implements MediaRepository {
       }
     }
 
-    // Self-healing / backwards compatibility:
-    // If public record is missing or lacks country code/timestamp, check global stats:media_obj
-    if (!publicMedia || !publicMedia.uploaderCountryCode || !publicMedia.createdAt) {
+    // 2. STRICT RULE: DO NOT resurrect a file if publicMedia is null!
+    // A missing publicMedia key means the item was deleted.
+    // Only enrich if publicMedia ALREADY exists in repository, but is missing country code or createdAt
+    if (publicMedia && (!publicMedia.uploaderCountryCode || !publicMedia.createdAt)) {
       try {
         const fullRaw = await this.redis.get<string>(`stats:media_obj:${cleanId}`);
         if (fullRaw) {
           const full = typeof fullRaw === 'string' ? JSON.parse(fullRaw) : (fullRaw as MediaObject);
           if (full && typeof full === 'object') {
-            if (!publicMedia) {
-              publicMedia = {
-                id: full.id || cleanId,
-                name: full.name || 'Berkas',
-                originalFileName: full.originalFileName || full.name || 'Berkas',
-                type: full.type || 'file',
-                mimeType: full.mimeType || 'application/octet-stream',
-                size: full.size || 0,
-                formattedSize: full.formattedSize || '0 B',
-                shareUrl: full.shareUrl || '',
-                createdAt: full.createdAt || Date.now(),
-                uploaderCountryCode: full.uploaderCountryCode,
-                uploaderCountryName: full.uploaderCountryName,
-                audioMeta: full.audioMeta,
-                videoMeta: full.videoMeta,
-                imageMeta: full.imageMeta,
-                isTextPreviewable: full.isTextPreviewable,
-                textLanguageHint: full.textLanguageHint,
-              };
-            } else {
-              if (!publicMedia.uploaderCountryCode && full.uploaderCountryCode) {
-                publicMedia.uploaderCountryCode = full.uploaderCountryCode;
-                publicMedia.uploaderCountryName = full.uploaderCountryName;
-              }
-              if ((!publicMedia.createdAt || isNaN(publicMedia.createdAt)) && full.createdAt) {
-                publicMedia.createdAt = full.createdAt;
-              }
-              if (!publicMedia.audioMeta && full.audioMeta && full.type === 'audio') {
-                publicMedia.audioMeta = full.audioMeta;
-              }
-              if (!publicMedia.videoMeta && full.videoMeta && full.type === 'video') {
-                publicMedia.videoMeta = full.videoMeta;
-              }
-              if (!publicMedia.imageMeta && full.imageMeta && full.type === 'image') {
-                publicMedia.imageMeta = full.imageMeta;
-              }
-              if (publicMedia.isTextPreviewable === undefined && full.isTextPreviewable !== undefined) {
-                publicMedia.isTextPreviewable = full.isTextPreviewable;
-                publicMedia.textLanguageHint = full.textLanguageHint;
-              }
+            if (!publicMedia.uploaderCountryCode && full.uploaderCountryCode) {
+              publicMedia.uploaderCountryCode = full.uploaderCountryCode;
+              publicMedia.uploaderCountryName = full.uploaderCountryName;
             }
-            // Asynchronously sync recovered fields back to public Redis key (30-day TTL)
-            this.redis.set(publicKey, JSON.stringify(publicMedia), { ex: 30 * 24 * 60 * 60 }).catch(() => {});
+            if ((!publicMedia.createdAt || isNaN(publicMedia.createdAt)) && full.createdAt) {
+              publicMedia.createdAt = full.createdAt;
+            }
+            if (!publicMedia.audioMeta && full.audioMeta && full.type === 'audio') {
+              publicMedia.audioMeta = full.audioMeta;
+            }
+            if (!publicMedia.videoMeta && full.videoMeta && full.type === 'video') {
+              publicMedia.videoMeta = full.videoMeta;
+            }
+            if (!publicMedia.imageMeta && full.imageMeta && full.type === 'image') {
+              publicMedia.imageMeta = full.imageMeta;
+            }
+            if (publicMedia.isTextPreviewable === undefined && full.isTextPreviewable !== undefined) {
+              publicMedia.isTextPreviewable = full.isTextPreviewable;
+              publicMedia.textLanguageHint = full.textLanguageHint;
+            }
           }
         }
       } catch {
@@ -196,17 +222,35 @@ export class UpstashMediaRepository implements MediaRepository {
 
   public async delete(id: string, sessionId: string): Promise<boolean> {
     assertValidSessionId(sessionId, 'delete');
-    const itemKey = this.getItemKey(sessionId, id);
-    const publicKey = this.getPublicKey(id);
+    const cleanId = id.trim();
+    const itemKey = this.getItemKey(sessionId, cleanId);
+    const publicKey = this.getPublicKey(cleanId);
     const indexKey = this.getIndexKey(sessionId);
-    const idToSessionKey = this.getIdToSessionKey(id);
+    const idToSessionKey = this.getIdToSessionKey(cleanId);
+    const tombstoneKey = this.getTombstoneKey(cleanId);
+
+    const tombstoneData: MediaTombstone = {
+      id: cleanId,
+      deletedAt: Date.now(),
+      reason: 'USER_DELETED',
+    };
 
     const pipeline = this.redis.pipeline();
     pipeline.del(itemKey);
     pipeline.del(publicKey);
     pipeline.del(idToSessionKey);
-    pipeline.zrem(indexKey, id);
+    pipeline.del(`stats:media_obj:${cleanId}`);
+    pipeline.zrem(indexKey, cleanId);
+    pipeline.zrem('stats:recent_uploads', cleanId);
+    if (typeof pipeline.set === 'function') {
+      pipeline.set(tombstoneKey, JSON.stringify(tombstoneData), { ex: 14 * 24 * 60 * 60 });
+    }
     const results = await pipeline.exec();
+
+    // Fallback if pipeline.set wasn't available in pipeline mock
+    if (typeof pipeline.set !== 'function') {
+      this.recordTombstone(cleanId, 'USER_DELETED').catch(() => {});
+    }
 
     const delCount = results[0] as number;
     return typeof delCount === 'number' && delCount > 0;
@@ -220,10 +264,21 @@ export class UpstashMediaRepository implements MediaRepository {
 
     const pipeline = this.redis.pipeline();
     if (ids && ids.length > 0) {
+      const now = Date.now();
       ids.forEach((id) => {
-        pipeline.del(this.getItemKey(sessionId, id));
-        pipeline.del(this.getPublicKey(id));
-        pipeline.del(this.getIdToSessionKey(id));
+        const cleanId = id.trim();
+        pipeline.del(this.getItemKey(sessionId, cleanId));
+        pipeline.del(this.getPublicKey(cleanId));
+        pipeline.del(this.getIdToSessionKey(cleanId));
+        pipeline.del(`stats:media_obj:${cleanId}`);
+        pipeline.zrem('stats:recent_uploads', cleanId);
+        if (typeof pipeline.set === 'function') {
+          pipeline.set(
+            this.getTombstoneKey(cleanId),
+            JSON.stringify({ id: cleanId, deletedAt: now, reason: 'USER_CLEARED' }),
+            { ex: 14 * 24 * 60 * 60 }
+          );
+        }
       });
     }
     pipeline.del(indexKey);
@@ -301,12 +356,22 @@ export class UpstashMediaRepository implements MediaRepository {
     const cleanId = id.trim();
     const idToSessionKey = this.getIdToSessionKey(cleanId);
     const sessionId = await this.redis.get<string>(idToSessionKey);
+    const tombstoneKey = this.getTombstoneKey(cleanId);
+
+    const tombstoneData: MediaTombstone = {
+      id: cleanId,
+      deletedAt: Date.now(),
+      reason: 'ADMIN_DELETED',
+    };
 
     const pipeline = this.redis.pipeline();
     pipeline.del(this.getPublicKey(cleanId));
     pipeline.del(idToSessionKey);
     pipeline.del(`stats:media_obj:${cleanId}`);
     pipeline.zrem('stats:recent_uploads', cleanId);
+    if (typeof pipeline.set === 'function') {
+      pipeline.set(tombstoneKey, JSON.stringify(tombstoneData), { ex: 14 * 24 * 60 * 60 });
+    }
 
     if (sessionId) {
       pipeline.del(this.getItemKey(sessionId, cleanId));
@@ -314,6 +379,9 @@ export class UpstashMediaRepository implements MediaRepository {
     }
 
     const results = await pipeline.exec();
+    if (typeof pipeline.set !== 'function') {
+      this.recordTombstone(cleanId, 'ADMIN_DELETED').catch(() => {});
+    }
     return results.some((r) => typeof r === 'number' && r > 0);
   }
 }

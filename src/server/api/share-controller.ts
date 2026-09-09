@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import hljs from 'highlight.js';
 import { getMediaRepository } from '../repository/media-repository';
 import { analyticsRepository } from '../repository/analytics-repository';
+import { checkUpstreamFileStatus } from '../storage/catbox-health-check';
 import { PublicMediaView } from '../../types';
 import { getFlagAssetPath } from '../../shared/flags';
 import {
@@ -116,21 +117,124 @@ function getFileCategoryIcon(mimeType: string, filename: string): string {
   </svg>`;
 }
 
+export interface ThemedErrorOptions {
+  title: string;
+  heading: string;
+  message: string;
+  errorCode: string;
+  httpStatus: number;
+  itemId?: string;
+  deletedAt?: number;
+  reason?: string;
+  upstreamUrl?: string;
+  upstreamStatus?: string;
+  requestId?: string;
+}
+
 export class ShareController {
   public async renderShareLanding(req: Request, res: Response): Promise<void> {
-    const id = req.params.id;
-    if (!id || typeof id !== 'string' || !id.trim()) {
-      res.status(400).send(ShareController.renderNotFoundHtml('ID berkas tidak valid.'));
+    const rawId = req.params.id;
+    const requestId =
+      (req as any).id ||
+      (res.getHeader('X-Request-ID') as string) ||
+      `req_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+
+    if (!rawId || typeof rawId !== 'string' || !rawId.trim()) {
+      res.status(400).send(
+        ShareController.renderThemedErrorHtml({
+          title: 'Format Tautan Tidak Valid — AirShare Pro',
+          heading: 'Format Tautan Tidak Dikenali',
+          message: 'Tautan berkas yang Anda buka memiliki format yang salah, kosong, atau tidak lengkap.',
+          errorCode: 'ERR_INVALID_ID',
+          httpStatus: 400,
+          requestId,
+        })
+      );
       return;
     }
 
+    const cleanId = rawId.trim();
+
     try {
       const repo = getMediaRepository();
-      const item = await repo.getByIdPublic(id.trim());
+
+      // Step 1: Check if this file was explicitly deleted (Tombstone detection)
+      const tombstone = await repo.getTombstone(cleanId);
+      if (tombstone) {
+        const isUpstream = tombstone.reason === 'UPSTREAM_PURGED';
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store, max-age=0');
+        res.status(410).send(
+          ShareController.renderThemedErrorHtml({
+            title: isUpstream
+              ? 'Berkas Telah Terhapus dari Upstream — AirShare Pro'
+              : 'Berkas Telah Dihapus — AirShare Pro',
+            heading: isUpstream ? 'Berkas Telah Dihapus dari Catbox' : 'Berkas Telah Dihapus',
+            message: isUpstream
+              ? 'Media fisik pada server penyimpanan Catbox telah terhapus atau kedaluwarsa, sehingga tautan ini tidak dapat lagi diakses.'
+              : 'Berkas ini telah dihapus permanen oleh pemilik unggahan atau administrator sistem dan tidak lagi tersedia di jaringan.',
+            errorCode: isUpstream ? 'ERR_UPSTREAM_PURGED' : 'ERR_MEDIA_DELETED',
+            httpStatus: 410,
+            itemId: cleanId,
+            deletedAt: tombstone.deletedAt,
+            reason: tombstone.reason,
+            requestId,
+          })
+        );
+        return;
+      }
+
+      // Step 2: Fetch public record from repository
+      const item = await repo.getByIdPublic(cleanId);
 
       if (!item) {
-        res.status(404).send(ShareController.renderNotFoundHtml('Tautan berkas tidak ditemukan atau sudah kedaluwarsa.'));
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store, max-age=0');
+        res.status(404).send(
+          ShareController.renderThemedErrorHtml({
+            title: 'Berkas Tidak Ditemukan — AirShare Pro',
+            heading: 'Berkas Tidak Ditemukan',
+            message: 'Tautan berkas yang Anda akses tidak terdaftar di sistem atau masa berlakunya telah habis.',
+            errorCode: 'ERR_MEDIA_NOT_FOUND',
+            httpStatus: 404,
+            itemId: cleanId,
+            requestId,
+          })
+        );
         return;
+      }
+
+      // Step 3: Upstream verification with Catbox Cloud Storage
+      // If the media was deleted directly from upstream Catbox, purge metadata and tombstone immediately
+      if (item.shareUrl) {
+        const upstreamStatus = await checkUpstreamFileStatus(item.shareUrl);
+        if (upstreamStatus.isPurged) {
+          // Asynchronously clean up stale Redis metadata to prevent future ghost lookups
+          repo.deleteForAdmin(item.id).catch(() => {});
+          repo.recordTombstone(item.id, 'UPSTREAM_PURGED').catch(() => {});
+          analyticsRepository.removeRecentUpload(item.id).catch(() => {});
+
+          console.warn(`[SHARE_SYNC] File ${item.id} detected as 404/410 on Catbox upstream. Tombstone recorded.`);
+
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-store, max-age=0');
+          res.status(410).send(
+            ShareController.renderThemedErrorHtml({
+              title: 'Berkas Telah Terhapus dari Catbox — AirShare Pro',
+              heading: 'Berkas Telah Dihapus dari Catbox',
+              message: 'Berkas ini sebelumnya tersinkronisasi, namun media fisik pada server Catbox telah dihapus atau kedaluwarsa.',
+              errorCode: 'ERR_UPSTREAM_PURGED',
+              httpStatus: 410,
+              itemId: item.id,
+              deletedAt: Date.now(),
+              reason: 'Media fisik telah terhapus dari server penyimpanan Catbox upstream (HTTP 404/410)',
+              upstreamUrl: item.shareUrl,
+              upstreamStatus: `HTTP ${upstreamStatus.status} (Purged Upstream)`,
+              requestId,
+            })
+          );
+          return;
+        }
       }
 
       const host = req.get('host') || 'localhost:3000';
@@ -148,45 +252,521 @@ export class ShareController {
       res.status(200).send(html);
     } catch (err) {
       console.error('[SHARE_CONTROLLER_ERROR]', err);
-      res.status(500).send(ShareController.renderNotFoundHtml('Terjadi kesalahan saat memuat berkas.'));
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.status(500).send(
+        ShareController.renderThemedErrorHtml({
+          title: 'Terjadi Kesalahan Sistem — AirShare Pro',
+          heading: 'Gagal Memuat Berkas',
+          message: 'Terjadi kendala saat memproses permintaan berkas. Silakan coba beberapa saat lagi.',
+          errorCode: 'ERR_INTERNAL_SERVER',
+          httpStatus: 500,
+          itemId: cleanId,
+          requestId,
+        })
+      );
     }
   }
 
-  private static renderNotFoundHtml(message: string): string {
+  public static renderNotFoundHtml(message: string): string {
+    return ShareController.renderThemedErrorHtml({
+      title: 'Berkas Tidak Ditemukan — AirShare Pro',
+      heading: 'Berkas Tidak Ditemukan',
+      message,
+      errorCode: 'ERR_MEDIA_NOT_FOUND',
+      httpStatus: 404,
+    });
+  }
+
+  public static renderThemedErrorHtml(options: ThemedErrorOptions): string {
+    const {
+      title,
+      heading,
+      message,
+      errorCode,
+      httpStatus,
+      itemId,
+      deletedAt,
+      reason,
+      upstreamUrl,
+      upstreamStatus,
+      requestId,
+    } = options;
+
+    const isDeleted = httpStatus === 410 || errorCode.includes('DELETED') || errorCode.includes('PURGED');
+    const isNotFound = httpStatus === 404;
+
+    const statusBadgeLabel = isDeleted ? '410 GONE' : isNotFound ? '404 NOT FOUND' : `${httpStatus} ERROR`;
+    const accentColor = isDeleted ? '#ef4444' : isNotFound ? '#f59e0b' : '#6366f1';
+    const accentGlow = isDeleted
+      ? 'rgba(239, 68, 68, 0.15)'
+      : isNotFound
+      ? 'rgba(245, 158, 11, 0.15)'
+      : 'rgba(99, 102, 241, 0.15)';
+
+    const heroIcon = isDeleted
+      ? `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          <line x1="10" y1="11" x2="10" y2="17"></line>
+          <line x1="14" y1="11" x2="14" y2="17"></line>
+        </svg>`
+      : isNotFound
+      ? `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="9" y1="15" x2="15" y2="15"></line>
+        </svg>`
+      : `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="8" x2="12" y2="12"></line>
+          <line x1="12" y1="16" x2="12.01" y2="16"></line>
+        </svg>`;
+
+    const exactDeletedTime = deletedAt ? formatExactDate(deletedAt) : null;
+    const relativeDeletedTime = deletedAt ? formatRelativeTime(deletedAt) : null;
+    const safeRequestId = requestId || `req_${Date.now().toString(36)}`;
+
+    // Prepare JSON payload for the copy diagnostic log button
+    const diagnosticPayload = {
+      service: 'AirShare Pro Edge Network',
+      timestamp: new Date().toISOString(),
+      httpStatus,
+      errorCode,
+      message,
+      itemId: itemId || null,
+      deletedAt: exactDeletedTime ? `${exactDeletedTime} (${relativeDeletedTime})` : null,
+      reason: reason || (isDeleted ? 'User or system permanent removal' : 'Resource missing'),
+      upstreamStatus: upstreamStatus || 'Checked / Synchronized',
+      upstreamUrl: upstreamUrl || null,
+      requestId: safeRequestId,
+    };
+    const jsonString = JSON.stringify(diagnosticPayload, null, 2);
+
     return `<!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Berkas Tidak Ditemukan — AirShare Pro</title>
+  <meta name="robots" content="noindex, nofollow" />
+  <title>${escapeHtml(title)}</title>
   <style>
     :root {
       --bg: #09090b;
-      --card: #18181b;
-      --text: #f4f4f5;
-      --muted: #a1a1aa;
+      --card: #121216;
+      --card-inner: #181820;
       --border: #27272a;
-      --accent: #2563eb;
+      --border-subtle: #202025;
+      --text: #f4f4f5;
+      --text-muted: #a1a1aa;
+      --text-dim: #71717a;
+      --accent: ${accentColor};
+      --accent-glow: ${accentGlow};
+      --blue: #3b82f6;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background-color: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
-    .card { background-color: var(--card); border: 1px solid var(--border); border-radius: 1.5rem; padding: 2rem; max-width: 420px; width: 100%; text-align: center; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); }
-    .icon { width: 48px; height: 48px; margin: 0 auto 1.25rem; border-radius: 1rem; background: rgba(239, 68, 68, 0.15); color: #ef4444; display: flex; align-items: center; justify-content: center; }
-    h1 { font-size: 1.25rem; font-weight: 700; margin-bottom: 0.5rem; }
-    p { color: var(--muted); font-size: 0.875rem; line-height: 1.5; margin-bottom: 1.5rem; }
-    .btn { display: inline-block; background-color: var(--accent); color: #fff; text-decoration: none; padding: 0.75rem 1.5rem; border-radius: 0.75rem; font-weight: 600; font-size: 0.875rem; transition: opacity 0.2s; }
-    .btn:hover { opacity: 0.9; }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      position: relative;
+      overflow-x: hidden;
+    }
+    /* Subtle background grid */
+    body::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 360px;
+      background: radial-gradient(circle at 50% 10%, rgba(59, 130, 246, 0.08) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+    .wrapper {
+      position: relative;
+      z-index: 1;
+      max-width: 520px;
+      width: 100%;
+    }
+    /* Header Brand */
+    .brand {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.625rem;
+      margin-bottom: 1.5rem;
+      text-decoration: none;
+      color: var(--text);
+    }
+    .brand-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #2563eb, #3b82f6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+    }
+    .brand-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .brand-tag {
+      font-size: 0.7rem;
+      padding: 0.15rem 0.45rem;
+      border-radius: 9999px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      font-weight: 500;
+    }
+    /* Card Container */
+    .card {
+      background-color: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 1.25rem;
+      padding: 2rem;
+      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.03);
+    }
+    .status-badge-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1.25rem;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      background-color: var(--accent-glow);
+      color: var(--accent);
+      border: 1px solid rgba(239, 68, 68, 0.25);
+      border-radius: 9999px;
+      padding: 0.3rem 0.75rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background-color: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+    }
+    .req-id {
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    .hero-icon-container {
+      width: 60px;
+      height: 60px;
+      border-radius: 1rem;
+      background-color: var(--accent-glow);
+      color: var(--accent);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1.25rem;
+    }
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.6rem;
+      color: var(--text);
+      line-height: 1.3;
+    }
+    .desc {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      line-height: 1.6;
+      margin-bottom: 1.5rem;
+    }
+    /* Diagnostic Terminal Box */
+    .diagnostic-box {
+      background-color: var(--card-inner);
+      border: 1px solid var(--border-subtle);
+      border-radius: 0.85rem;
+      overflow: hidden;
+      margin-bottom: 1.75rem;
+      text-align: left;
+    }
+    .diagnostic-header {
+      background-color: rgba(255, 255, 255, 0.02);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 0.6rem 0.9rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .diagnostic-dots {
+      display: flex;
+      gap: 0.35rem;
+      align-items: center;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .dot-red { background: #ef4444; }
+    .dot-yellow { background: #f59e0b; }
+    .dot-green { background: #10b981; }
+    .diagnostic-title {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+    }
+    .btn-copy {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 0.4rem;
+      color: var(--text-muted);
+      font-size: 0.72rem;
+      padding: 0.25rem 0.55rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      transition: all 0.2s;
+    }
+    .btn-copy:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+      border-color: #3f3f46;
+    }
+    .diagnostic-body {
+      padding: 0.85rem 1rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.76rem;
+      line-height: 1.65;
+    }
+    .diag-row {
+      display: flex;
+      padding: 0.15rem 0;
+    }
+    .diag-label {
+      color: var(--text-dim);
+      width: 130px;
+      flex-shrink: 0;
+    }
+    .diag-value {
+      color: var(--text);
+      word-break: break-all;
+    }
+    .diag-value.highlight-red { color: #f87171; font-weight: 600; }
+    .diag-value.highlight-amber { color: #fbbf24; font-weight: 600; }
+    .diag-value.highlight-blue { color: #60a5fa; }
+    /* Action Buttons */
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+    @media (max-width: 440px) {
+      .actions { grid-template-columns: 1fr; }
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1rem;
+      border-radius: 0.75rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s;
+      cursor: pointer;
+      border: 1px solid transparent;
+    }
+    .btn-primary {
+      background-color: var(--blue);
+      color: #fff;
+    }
+    .btn-primary:hover {
+      background-color: #2563eb;
+    }
+    .btn-secondary {
+      background-color: var(--card-inner);
+      color: var(--text-muted);
+      border-color: var(--border);
+    }
+    .btn-secondary:hover {
+      background-color: #202028;
+      color: var(--text);
+    }
+    /* Footer */
+    .footer-note {
+      text-align: center;
+      margin-top: 1.5rem;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+    }
   </style>
 </head>
 <body>
-  <div class="card">
-    <div class="icon">
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+  <div class="wrapper">
+    <a href="/" class="brand" title="Beranda AirShare Pro">
+      <div class="brand-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
+          <path d="m16 16-4-4-4 4"></path>
+          <path d="M12 12v9"></path>
+        </svg>
+      </div>
+      <span class="brand-title">AirShare Pro</span>
+      <span class="brand-tag">Mesh Sync</span>
+    </a>
+
+    <div class="card">
+      <div class="status-badge-row">
+        <div class="status-badge">
+          <span class="status-dot"></span>
+          <span>${statusBadgeLabel}</span>
+        </div>
+        <span class="req-id">${escapeHtml(safeRequestId)}</span>
+      </div>
+
+      <div class="hero-icon-container">
+        ${heroIcon}
+      </div>
+
+      <h1>${escapeHtml(heading)}</h1>
+      <p class="desc">${escapeHtml(message)}</p>
+
+      <div class="diagnostic-box">
+        <div class="diagnostic-header">
+          <div class="diagnostic-dots">
+            <span class="dot dot-red"></span>
+            <span class="dot dot-yellow"></span>
+            <span class="dot dot-green"></span>
+          </div>
+          <span class="diagnostic-title">Audit Log Diagnostik</span>
+          <button type="button" class="btn-copy" id="btnCopyLog" onclick="copyDiagnosticLog()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            <span id="copyBtnText">Salin Log</span>
+          </button>
+        </div>
+        <div class="diagnostic-body">
+          <div class="diag-row">
+            <span class="diag-label">STATUS_CODE:</span>
+            <span class="diag-value ${isDeleted ? 'highlight-red' : 'highlight-amber'}">${httpStatus} (${isDeleted ? 'Gone' : isNotFound ? 'Not Found' : 'Error'})</span>
+          </div>
+          <div class="diag-row">
+            <span class="diag-label">ERROR_CODE:</span>
+            <span class="diag-value highlight-blue">${escapeHtml(errorCode)}</span>
+          </div>
+          ${itemId ? `
+          <div class="diag-row">
+            <span class="diag-label">TARGET_ID:</span>
+            <span class="diag-value">${escapeHtml(itemId)}</span>
+          </div>
+          ` : ''}
+          ${exactDeletedTime ? `
+          <div class="diag-row">
+            <span class="diag-label">WAKTU_HAPUS:</span>
+            <span class="diag-value">${escapeHtml(exactDeletedTime)} (${escapeHtml(relativeDeletedTime || '')})</span>
+          </div>
+          ` : ''}
+          ${reason ? `
+          <div class="diag-row">
+            <span class="diag-label">ALASAN:</span>
+            <span class="diag-value">${escapeHtml(reason)}</span>
+          </div>
+          ` : ''}
+          <div class="diag-row">
+            <span class="diag-label">UPSTREAM_SYNC:</span>
+            <span class="diag-value">${escapeHtml(upstreamStatus || 'Catbox Synchronized')}</span>
+          </div>
+          <div class="diag-row">
+            <span class="diag-label">DIAGNOSIS:</span>
+            <span class="diag-value">${isDeleted ? 'Resource purged permanently from AirShare repository & upstream storage.' : 'Target resource does not exist or expired.'}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <a href="/" class="btn btn-primary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="17 8 12 3 7 8"></polyline>
+            <line x1="12" y1="3" x2="12" y2="15"></line>
+          </svg>
+          Unggah Berkas Baru
+        </a>
+        <a href="/api/health" class="btn btn-secondary" target="_blank" rel="noopener noreferrer">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+          </svg>
+          Periksa Status Server
+        </a>
+      </div>
     </div>
-    <h1>Berkas Tidak Ditemukan</h1>
-    <p>${escapeHtml(message)}</p>
-    <a href="/" class="btn">Kembali ke Beranda</a>
+
+    <p class="footer-note">AirShare Pro Storage Network • Verifikasi Sinkronisasi Upstream Otomatis</p>
   </div>
+
+  <textarea id="diagJson" style="display:none;">${escapeHtml(jsonString)}</textarea>
+
+  <script>
+    function copyDiagnosticLog() {
+      var text = document.getElementById('diagJson').value;
+      var btn = document.getElementById('btnCopyLog');
+      var label = document.getElementById('copyBtnText');
+
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(onCopied, fallbackCopy);
+      } else {
+        fallbackCopy();
+      }
+
+      function fallbackCopy() {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+          document.execCommand('copy');
+          onCopied();
+        } catch(e) {
+          label.innerText = 'Gagal';
+        }
+        document.body.removeChild(ta);
+      }
+
+      function onCopied() {
+        label.innerText = 'Tersalin!';
+        btn.style.borderColor = '#10b981';
+        btn.style.color = '#10b981';
+        setTimeout(function() {
+          label.innerText = 'Salin Log';
+          btn.style.borderColor = '';
+          btn.style.color = '';
+        }, 2500);
+      }
+    }
+  </script>
 </body>
 </html>`;
   }

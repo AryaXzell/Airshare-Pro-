@@ -246,7 +246,7 @@ export const mediaController = {
           message,
         },
       };
-      res.status(502).json(err);
+      res.status(isTimeout ? 504 : 502).json(err);
     }
   },
 
@@ -374,6 +374,11 @@ export const mediaController = {
         console.warn('[ANALYTICS_RECORD_DELETION_WARN] Gagal memperbarui analitik deletion:', err);
       });
 
+      // Purge from recent uploads in analytics
+      analyticsRepository.removeRecentUpload(id).catch((err) => {
+        console.warn('[ANALYTICS_REMOVE_RECENT_WARN] Gagal menghapus recent upload:', err);
+      });
+
       // Attempt deletion on storage provider if URL is known
       let providerResult: {
         success: boolean;
@@ -428,6 +433,9 @@ export const mediaController = {
       if (count > 0) {
         analyticsRepository.recordDeletion(count).catch((err) => {
           console.warn('[ANALYTICS_RECORD_DELETION_WARN] Gagal memperbarui analitik clearAll:', err);
+        });
+        existingItems.forEach((item) => {
+          analyticsRepository.removeRecentUpload(item.id).catch(() => {});
         });
       }
 

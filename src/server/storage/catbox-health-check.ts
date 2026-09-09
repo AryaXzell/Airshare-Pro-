@@ -84,6 +84,92 @@ export async function checkCatboxHealth(forceRefresh = false): Promise<CatboxHea
   return pendingCheckPromise;
 }
 
+export interface UpstreamFileStatus {
+  exists: boolean;
+  isPurged: boolean;
+  status: number;
+  error?: string;
+}
+
+const upstreamUrlCache = new Map<string, { result: UpstreamFileStatus; expiresAt: number }>();
+
+export function getCachedUpstreamStatus(url: string): UpstreamFileStatus | null {
+  const entry = upstreamUrlCache.get(url);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    upstreamUrlCache.delete(url);
+    return null;
+  }
+  return entry.result;
+}
+
+export function setCachedUpstreamStatus(url: string, result: UpstreamFileStatus, ttlMs = 60000): void {
+  if (upstreamUrlCache.size > 500) {
+    const firstKey = upstreamUrlCache.keys().next().value;
+    if (firstKey) upstreamUrlCache.delete(firstKey);
+  }
+  upstreamUrlCache.set(url, {
+    result,
+    expiresAt: Date.now() + ttlMs,
+  });
+}
+
+/**
+ * Live verification of upstream Catbox file status.
+ * Distinguishes between explicitly deleted/purged files (404 / 410) and network timeouts.
+ */
+export async function checkUpstreamFileStatus(shareUrl: string): Promise<UpstreamFileStatus> {
+  if (!shareUrl || typeof shareUrl !== 'string' || !shareUrl.startsWith('http')) {
+    return { exists: false, isPurged: true, status: 400, error: 'INVALID_URL' };
+  }
+
+  const cached = getCachedUpstreamStatus(shareUrl);
+  if (cached) {
+    return cached;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+    const response = await fetch(shareUrl, {
+      method: 'HEAD',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'AirSharePro-ShareVerifier/1.0',
+      },
+    });
+
+    clearTimeout(timeoutId);
+
+    const status = response.status;
+    const isPurged = status === 404 || status === 410;
+    const exists = status >= 200 && status < 300;
+
+    const result: UpstreamFileStatus = {
+      exists,
+      isPurged,
+      status,
+    };
+
+    if (exists) {
+      setCachedUpstreamStatus(shareUrl, result, 60000); // cache healthy for 60s
+    } else if (isPurged) {
+      setCachedUpstreamStatus(shareUrl, result, 600000); // cache purged for 10m
+    }
+
+    return result;
+  } catch (err) {
+    // Fail-open on timeout or connection hiccups so users aren't falsely blocked
+    return {
+      exists: true,
+      isPurged: false,
+      status: 0,
+      error: err instanceof Error ? err.message : 'TIMEOUT_OR_NETWORK_ERROR',
+    };
+  }
+}
+
 /**
  * Verifies whether a specific file exists on Catbox via a lightweight HEAD request.
  * Returns true if status is 200 OK; false if 404 or request fails.

@@ -125,6 +125,18 @@ export class MediaApiClient {
           } catch {
             // Fallback status text
           }
+          if (xhr.status === 504) {
+            reject(new Error('Koneksi server ke penyedia penyimpanan melebihi batas waktu (504 Gateway Timeout). Coba gunakan berkas lebih kecil atau periksa stabilitas koneksi internet.'));
+            return;
+          }
+          if (xhr.status === 413) {
+            reject(new Error('Ukuran berkas melebihi batas yang diizinkan oleh platform serverless (413 Payload Too Large).'));
+            return;
+          }
+          if (xhr.status === 502) {
+            reject(new Error('Penyedia penyimpanan eksternal (Catbox) tidak merespons dengan benar (502 Bad Gateway).'));
+            return;
+          }
           reject(new Error(`Server error: HTTP ${xhr.status}`));
         }
       };

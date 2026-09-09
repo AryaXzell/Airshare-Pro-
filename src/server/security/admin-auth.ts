@@ -48,8 +48,8 @@ export function getAdminConfig(): {
   panelPath: string;
   secretKey: string;
 } {
-  const rawPath = process.env.ADMIN_PANEL_PATH?.trim() || '';
   const rawSecret = process.env.ADMIN_SECRET_KEY?.trim() || '';
+  const rawPath = process.env.ADMIN_PANEL_PATH?.trim() || (rawSecret.length >= 16 ? 'superadmin' : '');
 
   // Clean path: strip leading and trailing slashes
   const cleanPath = rawPath.replace(/^\/+|\/+$/g, '');

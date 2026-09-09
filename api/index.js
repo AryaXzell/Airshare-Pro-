@@ -11,8 +11,10 @@ var CatboxStorageProvider = class {
   constructor(options) {
     this.name = "catbox";
     this.apiUrl = "https://catbox.moe/user/api.php";
-    this.timeoutMs = options?.timeoutMs || parseInt(process.env.CATBOX_TIMEOUT_MS || "60000", 10);
-    this.maxRetries = options?.maxRetries ?? 2;
+    const defaultTimeout = process.env.VERCEL ? 35e3 : 45e3;
+    const configuredTimeout = options?.timeoutMs || parseInt(process.env.CATBOX_TIMEOUT_MS || `${defaultTimeout}`, 10);
+    this.timeoutMs = process.env.VERCEL ? Math.min(configuredTimeout, 4e4) : configuredTimeout;
+    this.maxRetries = options?.maxRetries ?? (process.env.VERCEL ? 1 : 2);
   }
   /**
    * Reads userhash securely only on the server runtime.
@@ -61,8 +63,17 @@ var CatboxStorageProvider = class {
       });
       clearTimeout(timeoutId);
       if (!response.ok) {
+        let bodyText = "";
+        try {
+          bodyText = (await response.text()).trim();
+        } catch {
+        }
         const isTransient = response.status >= 500 && response.status < 600;
-        const err = new Error(`Catbox HTTP ${response.status}: ${response.statusText}`);
+        let errorMessage = `Catbox HTTP ${response.status}: ${bodyText || response.statusText || "Gagal memproses berkas"}`;
+        if (bodyText.includes("Invalid uploader")) {
+          errorMessage = "Catbox menolak unggahan anonim dari server cloud (Invalid uploader). Harap konfigurasikan CATBOX_USERHASH di Environment Variables Vercel Anda untuk menghubungkan akun Catbox resmi.";
+        }
+        const err = new Error(errorMessage);
         err.isTransient = isTransient;
         throw err;
       }
@@ -85,8 +96,10 @@ var CatboxStorageProvider = class {
     } catch (err) {
       clearTimeout(timeoutId);
       if (err instanceof Error && err.name === "AbortError") {
-        const timeoutErr = new Error(`Unggahan ke Catbox melebihi batas waktu (${this.timeoutMs / 1e3}s).`);
-        timeoutErr.isTransient = true;
+        const timeoutErr = new Error(
+          `Unggahan ke Catbox melebihi batas waktu (${this.timeoutMs / 1e3}s). Server upstream sedang lambat atau berkas terlalu besar untuk diproses dalam batas waktu serverless.`
+        );
+        timeoutErr.isTransient = false;
         throw timeoutErr;
       }
       throw err;
@@ -2390,7 +2403,7 @@ var mediaController = {
           message
         }
       };
-      res.status(502).json(err);
+      res.status(isTimeout ? 504 : 502).json(err);
     }
   },
   /**

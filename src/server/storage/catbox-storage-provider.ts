@@ -12,8 +12,11 @@ export class CatboxStorageProvider implements StorageProvider {
   private readonly maxRetries: number;
 
   constructor(options?: CatboxProviderOptions) {
-    this.timeoutMs = options?.timeoutMs || parseInt(process.env.CATBOX_TIMEOUT_MS || '60000', 10);
-    this.maxRetries = options?.maxRetries ?? 2;
+    const defaultTimeout = process.env.VERCEL ? 35000 : 45000;
+    const configuredTimeout = options?.timeoutMs || parseInt(process.env.CATBOX_TIMEOUT_MS || `${defaultTimeout}`, 10);
+    // On Vercel, cap timeout at 40s to guarantee the server responds before Vercel 60s hard kill
+    this.timeoutMs = process.env.VERCEL ? Math.min(configuredTimeout, 40000) : configuredTimeout;
+    this.maxRetries = options?.maxRetries ?? (process.env.VERCEL ? 1 : 2);
   }
 
   /**
@@ -76,9 +79,22 @@ export class CatboxStorageProvider implements StorageProvider {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
+        // Read response body text to extract upstream explanation if available
+        let bodyText = '';
+        try {
+          bodyText = (await response.text()).trim();
+        } catch {
+          // ignore
+        }
+
         // Distinguish non-retryable 4xx errors vs retryable 5xx errors
         const isTransient = response.status >= 500 && response.status < 600;
-        const err = new Error(`Catbox HTTP ${response.status}: ${response.statusText}`);
+        let errorMessage = `Catbox HTTP ${response.status}: ${bodyText || response.statusText || 'Gagal memproses berkas'}`;
+        if (bodyText.includes('Invalid uploader')) {
+          errorMessage = 'Catbox menolak unggahan anonim dari server cloud (Invalid uploader). Harap konfigurasikan CATBOX_USERHASH di Environment Variables Vercel Anda untuk menghubungkan akun Catbox resmi.';
+        }
+
+        const err = new Error(errorMessage);
         (err as unknown as { isTransient: boolean }).isTransient = isTransient;
         throw err;
       }
@@ -111,8 +127,10 @@ export class CatboxStorageProvider implements StorageProvider {
     } catch (err) {
       clearTimeout(timeoutId);
       if (err instanceof Error && err.name === 'AbortError') {
-        const timeoutErr = new Error(`Unggahan ke Catbox melebihi batas waktu (${this.timeoutMs / 1000}s).`);
-        (timeoutErr as unknown as { isTransient: boolean }).isTransient = true;
+        const timeoutErr = new Error(
+          `Unggahan ke Catbox melebihi batas waktu (${this.timeoutMs / 1000}s). Server upstream sedang lambat atau berkas terlalu besar untuk diproses dalam batas waktu serverless.`
+        );
+        (timeoutErr as unknown as { isTransient: boolean }).isTransient = false;
         throw timeoutErr;
       }
       throw err;
