@@ -61,7 +61,7 @@ export const ThemeSelector: React.FC<ThemeSelectorProps> = ({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: -4 }}
             transition={{ duration: 0.15, ease: 'easeOut' }}
-            className="absolute right-0 top-12 w-64 rounded-3xl p-3 clean-floating-menu z-[60]"
+            className="absolute right-0 top-12 w-[min(16rem,calc(100vw-2rem))] rounded-3xl p-3 clean-floating-menu z-[60]"
             style={{
               borderColor: 'var(--border-subtle)',
             }}

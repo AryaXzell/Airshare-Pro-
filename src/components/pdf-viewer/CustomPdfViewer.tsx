@@ -98,7 +98,7 @@ export const CustomPdfViewer: React.FC<CustomPdfViewerProps> = ({
               <h2 className="text-xs sm:text-sm font-extrabold truncate max-w-[200px] sm:max-w-md" title={item.name}>
                 {item.name}
               </h2>
-              <span className="hidden xs:inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/15 text-red-400 border border-red-500/25 uppercase">
+              <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/15 text-red-400 border border-red-500/25 uppercase">
                 PDF
               </span>
             </div>

@@ -20,19 +20,19 @@ async function runVercelRoutingTests() {
 
   try {
     // Scenario A: When Admin is configured (current env has ADMIN_SECRET_KEY)
-    // /superadmin should redirect to login page (302 -> /login, 200) instead of falling back to SPA
-    const configuredRes = await fetch(`${baseUrl}/superadmin`, { redirect: 'follow' });
-    assert.strictEqual(configuredRes.status, 200, 'Configured /superadmin renders admin login page');
+    // /admin should redirect to login page (302 -> /login, 200) instead of falling back to SPA
+    const configuredRes = await fetch(`${baseUrl}/admin`, { redirect: 'follow' });
+    assert.strictEqual(configuredRes.status, 200, 'Configured /admin renders admin login page');
     const configuredHtml = await configuredRes.text();
     assert(configuredHtml.includes('Admin') && (configuredHtml.includes('password') || configuredHtml.includes('Masuk') || configuredHtml.includes('AirShare')), 'Login page contains admin login form');
-    console.log('✅ PASS: Configured /superadmin routes correctly to admin login page (not SPA home)');
+    console.log('✅ PASS: Configured /admin routes correctly to admin login page (not SPA home)');
 
-    // Test Vercel rewritten /superadmin (i.e. /api?__vpath=/superadmin)
-    const rewrittenSuperadminRes = await fetch(`${baseUrl}/api?__vpath=/superadmin`, { redirect: 'follow' });
-    assert.strictEqual(rewrittenSuperadminRes.status, 200, 'Rewritten /superadmin renders login page');
-    const rewrittenHtml = await rewrittenSuperadminRes.text();
+    // Test Vercel rewritten /admin (i.e. /api?__vpath=/admin)
+    const rewrittenAdminRes = await fetch(`${baseUrl}/api?__vpath=/admin`, { redirect: 'follow' });
+    assert.strictEqual(rewrittenAdminRes.status, 200, 'Rewritten /admin renders login page');
+    const rewrittenHtml = await rewrittenAdminRes.text();
     assert(rewrittenHtml.includes('Admin') && (rewrittenHtml.includes('password') || rewrittenHtml.includes('Masuk')), 'Rewritten request preserved login form');
-    console.log('✅ PASS: Vercel rewritten /api?__vpath=/superadmin routes to admin handler');
+    console.log('✅ PASS: Vercel rewritten /api?__vpath=/admin routes to admin handler');
 
     // 2. Test Vercel rewritten /s/:id (i.e. /api?__vpath=/s/item_999)
     const rewrittenShareRes = await fetch(`${baseUrl}/api?__vpath=/s/nonexistent_share_item_999`);

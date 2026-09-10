@@ -260,11 +260,11 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
                 <img
                   src={qrDataUrl}
                   alt={`Kode QR untuk ${fileName}`}
-                  className="w-[240px] h-[240px] sm:w-[260px] sm:h-[260px] object-contain rounded-lg select-none"
+                  className="w-full max-w-[240px] aspect-square sm:max-w-[260px] object-contain rounded-lg select-none"
                   draggable={false}
                 />
               ) : (
-                <div className="w-[240px] h-[240px] flex items-center justify-center text-xs text-gray-500 font-medium">
+                <div className="w-full max-w-[240px] aspect-square sm:max-w-[260px] flex items-center justify-center text-xs text-gray-500 font-medium">
                   Membuat kode QR...
                 </div>
               )}

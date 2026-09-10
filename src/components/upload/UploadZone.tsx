@@ -154,7 +154,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
         </p>
 
         <div
-          className="flex items-center space-x-3 mt-5 pt-3.5 border-t w-full max-w-sm justify-center text-[11px] font-semibold pointer-events-none"
+          className="flex items-center flex-wrap gap-x-3 gap-y-1.5 mt-5 pt-3.5 border-t w-full max-w-sm justify-center text-[11px] font-semibold pointer-events-none"
           style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
         >
           <span className="flex items-center space-x-1">

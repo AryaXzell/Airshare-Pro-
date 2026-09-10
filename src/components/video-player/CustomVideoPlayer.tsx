@@ -409,7 +409,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
                 e.stopPropagation();
                 togglePlay();
               }}
-              className="w-13 h-13 sm:w-15 sm:h-15 rounded-full bg-white text-black hover:scale-105 active:scale-95 transition-transform duration-100 shadow-xl flex items-center justify-center"
+              className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-white text-black hover:scale-105 active:scale-95 transition-transform duration-100 shadow-xl flex items-center justify-center"
               aria-label={isPlaying ? 'Jeda' : 'Putar'}
             >
               {isPlaying ? (

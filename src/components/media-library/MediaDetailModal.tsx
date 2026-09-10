@@ -254,6 +254,8 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                   <img
                     src={`/flags/${item.uploaderCountryCode.toLowerCase()}.svg`}
                     alt={item.uploaderCountryName}
+                    loading="lazy"
+                    decoding="async"
                     className="w-5 h-4 object-cover rounded-xs shadow-xs flex-shrink-0"
                     onError={(e) => {
                       (e.target as HTMLImageElement).src = '/flags/globe.svg';

@@ -43,27 +43,26 @@ async function runAdminTests() {
 
   // 2. Admin Config Validation & Activation Gate
   // Without env vars set
-  const origPath = process.env.ADMIN_PANEL_PATH;
   const origSecret = process.env.ADMIN_SECRET_KEY;
 
-  delete process.env.ADMIN_PANEL_PATH;
   delete process.env.ADMIN_SECRET_KEY;
   let config = getAdminConfig();
-  assert(config.enabled === false, 'Admin panel disabled when env vars missing');
+  assert(config.enabled === false, 'Admin panel disabled when ADMIN_SECRET_KEY is missing');
+  assert(config.panelPath === 'admin', 'panelPath is always fixed to "admin"');
 
   // Secret too short (<16 chars)
-  process.env.ADMIN_PANEL_PATH = 'secret-panel';
   process.env.ADMIN_SECRET_KEY = 'too-short';
   config = getAdminConfig();
   assert(config.enabled === false, 'Admin panel disabled when ADMIN_SECRET_KEY < 16 chars');
+  assert(config.panelPath === 'admin', 'panelPath remains "admin" even when disabled');
 
-  // Valid config (16+ chars secret)
+  // Valid config (16+ chars secret) - ADMIN_PANEL_PATH env is completely ignored
   const validSecret = 'kunci-rahasia-admin-airshare-pro-2026!';
-  process.env.ADMIN_PANEL_PATH = 'custom-987x-vault';
+  (process.env as Record<string, string | undefined>).ADMIN_PANEL_PATH = 'custom-987x-vault-ignored';
   process.env.ADMIN_SECRET_KEY = validSecret;
   config = getAdminConfig();
-  assert(config.enabled === true, 'Admin panel enabled with valid 16+ char secret and path');
-  assert(config.panelPath === 'custom-987x-vault', 'panelPath correctly sanitized');
+  assert(config.enabled === true, 'Admin panel enabled with valid 16+ char secret');
+  assert(config.panelPath === 'admin', 'panelPath is fixed to "admin" and completely ignores ADMIN_PANEL_PATH env var');
 
   // 3. verifyAdminPassword against environment secret
   const validPassCheck = await verifyAdminPassword(validSecret);
@@ -170,7 +169,6 @@ async function runAdminTests() {
 
   // 7. Live Stats Polling API Integration & Auth Enforcement
   const { createExpressApp } = await import('../app');
-  process.env.ADMIN_PANEL_PATH = 'nigga';
   process.env.ADMIN_SECRET_KEY = 'super-secret-key-16-chars-min!';
 
   const app = createExpressApp();
@@ -181,7 +179,7 @@ async function runAdminTests() {
 
   try {
     // 7.1: Unauthenticated live stats API returns 401 JSON (not HTML redirect)
-    const unauthRes = await fetch(`${baseUrl}/nigga/api/live-stats`, {
+    const unauthRes = await fetch(`${baseUrl}/admin/api/live-stats`, {
       headers: { 'Accept': 'application/json' },
     });
     assert(unauthRes.status === 401, 'Unauthenticated GET /api/live-stats returns 401');
@@ -193,7 +191,7 @@ async function runAdminTests() {
 
     // 7.2: Authenticated live stats API returns real-time stats JSON
     const authSessionToken = await createAdminSession();
-    const authRes = await fetch(`${baseUrl}/nigga/api/live-stats`, {
+    const authRes = await fetch(`${baseUrl}/admin/api/live-stats`, {
       headers: {
         'Accept': 'application/json',
         'Cookie': `admin_auth_token=${authSessionToken}`,
@@ -218,19 +216,19 @@ async function runAdminTests() {
     );
 
     // Test: Unauthenticated calls to new admin endpoints return 401
-    const unauthDel = await fetch(`${baseUrl}/nigga/api/delete-permanent`, {
+    const unauthDel = await fetch(`${baseUrl}/admin/api/delete-permanent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: 'any_id' }),
     });
     assert(unauthDel.status === 401, 'Unauthenticated POST /api/delete-permanent returns 401');
 
-    const unauthSync = await fetch(`${baseUrl}/nigga/api/sync-check`, {
+    const unauthSync = await fetch(`${baseUrl}/admin/api/sync-check`, {
       method: 'POST',
     });
     assert(unauthSync.status === 401, 'Unauthenticated POST /api/sync-check returns 401');
 
-    const unauthHist = await fetch(`${baseUrl}/nigga/api/delete-history-only`, {
+    const unauthHist = await fetch(`${baseUrl}/admin/api/delete-history-only`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: 'any_id' }),
@@ -238,7 +236,7 @@ async function runAdminTests() {
     assert(unauthHist.status === 401, 'Unauthenticated POST /api/delete-history-only returns 401');
 
     // Test: Authenticated POST /api/delete-permanent with missing id returns 400
-    const authDelBad = await fetch(`${baseUrl}/nigga/api/delete-permanent`, {
+    const authDelBad = await fetch(`${baseUrl}/admin/api/delete-permanent`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -249,7 +247,7 @@ async function runAdminTests() {
     assert(authDelBad.status === 400, 'Authenticated POST /api/delete-permanent with missing ID returns 400');
 
     // Test: Authenticated POST /api/sync-check returns valid sync check summary
-    const authSyncRes = await fetch(`${baseUrl}/nigga/api/sync-check`, {
+    const authSyncRes = await fetch(`${baseUrl}/admin/api/sync-check`, {
       method: 'POST',
       headers: {
         Cookie: `admin_auth_token=${authSessionToken}`,
@@ -284,7 +282,7 @@ async function runAdminTests() {
     });
 
     // Test: Authenticated POST /api/delete-permanent cleans item from repo
-    const authDelRes = await fetch(`${baseUrl}/nigga/api/delete-permanent`, {
+    const authDelRes = await fetch(`${baseUrl}/admin/api/delete-permanent`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -306,8 +304,6 @@ async function runAdminTests() {
   }
 
   // Restore env vars
-  if (origPath !== undefined) process.env.ADMIN_PANEL_PATH = origPath;
-  else delete process.env.ADMIN_PANEL_PATH;
   if (origSecret !== undefined) process.env.ADMIN_SECRET_KEY = origSecret;
   else delete process.env.ADMIN_SECRET_KEY;
 

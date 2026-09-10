@@ -1,39 +1,47 @@
 import React, { useEffect, useState } from 'react';
+import { useReducedMotion } from 'motion/react';
 
 interface AudioVisualizerProps {
   isPlaying: boolean;
 }
 
 export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ isPlaying }) => {
-  const [barHeights, setBarHeights] = useState<number[]>([4, 4, 4, 4, 4]);
+  const shouldReduceMotion = useReducedMotion();
+  const [barScales, setBarScales] = useState<number[]>([0.25, 0.25, 0.25, 0.25, 0.25]);
 
   useEffect(() => {
     if (!isPlaying) {
-      setBarHeights([4, 4, 4, 4, 4]);
+      setBarScales([0.25, 0.25, 0.25, 0.25, 0.25]);
+      return;
+    }
+
+    if (shouldReduceMotion) {
+      setBarScales([0.5, 0.5, 0.5, 0.5, 0.5]);
       return;
     }
 
     const interval = setInterval(() => {
-      setBarHeights([
-        Math.floor(Math.random() * 12) + 4,
-        Math.floor(Math.random() * 16) + 4,
-        Math.floor(Math.random() * 14) + 4,
-        Math.floor(Math.random() * 18) + 4,
-        Math.floor(Math.random() * 10) + 4,
+      setBarScales([
+        Math.random() * 0.55 + 0.25,
+        Math.random() * 0.70 + 0.30,
+        Math.random() * 0.60 + 0.25,
+        Math.random() * 0.75 + 0.25,
+        Math.random() * 0.45 + 0.25,
       ]);
-    }, 110);
+    }, 160);
 
     return () => clearInterval(interval);
-  }, [isPlaying]);
+  }, [isPlaying, shouldReduceMotion]);
 
   return (
     <div className="flex items-end gap-[3.5px] h-5 py-0.5" aria-hidden="true">
-      {barHeights.map((h, i) => (
+      {barScales.map((scale, i) => (
         <div
           key={i}
-          className="w-[3px] rounded-full viz-bar transition-[height] duration-100 ease-out"
+          className="w-[3px] h-full rounded-full viz-bar transition-transform duration-100 ease-out"
           style={{
-            height: `${h}px`,
+            transform: `scaleY(${scale})`,
+            transformOrigin: 'bottom',
             backgroundColor: 'var(--accent, #3b82f6)',
             opacity: 0.75 + (i % 3) * 0.1,
           }}

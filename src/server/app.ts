@@ -157,12 +157,7 @@ export function createExpressApp(): Express {
 
   // Dynamic robots.txt to strictly disallow crawling of admin path and sensitive endpoints
   app.get('/robots.txt', (req: Request, res: Response) => {
-    const adminConfig = getAdminConfig();
-    let content = `User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /s/\n`;
-    if (adminConfig.enabled && adminConfig.panelPath) {
-      content += `Disallow: /${adminConfig.panelPath}/\n`;
-    }
-    content += `\nSitemap: https://airshare-pro.vercel.app/sitemap.xml\n`;
+    let content = `User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /s/\nDisallow: /admin/\n\nSitemap: https://airshare-pro.vercel.app/sitemap.xml\n`;
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.send(content);
@@ -170,124 +165,107 @@ export function createExpressApp(): Express {
 
   // Mount Admin Panel (Enabled if ADMIN_SECRET_KEY is configured)
   const adminConfig = getAdminConfig();
-  if (adminConfig.enabled && adminConfig.panelPath) {
-    const adminBase = `/${adminConfig.panelPath}`;
-    const mountedBases = new Set<string>();
+  if (adminConfig.enabled) {
+    const basePath = '/admin';
 
-    const registerAdminRoutes = (basePath: string) => {
-      // Root of admin path -> redirect to dashboard (will hit requireAdminAuth)
-      app.get(basePath, (req: Request, res: Response) => {
-        res.redirect(`${basePath}/dashboard`);
-      });
+    // Root of admin path -> redirect to dashboard (will hit requireAdminAuth)
+    app.get([basePath, `${basePath}/`], (req: Request, res: Response) => {
+      res.redirect(`${basePath}/dashboard`);
+    });
 
-      // Admin Authentication Endpoints
-      app.get(`${basePath}/login`, (req: Request, res: Response) => {
-        return adminController.renderLoginPage(req, res);
-      });
-      app.post(`${basePath}/login`, (req: Request, res: Response) => {
-        return adminController.handleLogin(req, res);
-      });
-      app.all(`${basePath}/logout`, (req: Request, res: Response) => {
-        return adminController.handleLogout(req, res);
-      });
+    // Admin Authentication Endpoints
+    app.get(`${basePath}/login`, (req: Request, res: Response) => {
+      return adminController.renderLoginPage(req, res);
+    });
+    app.post(`${basePath}/login`, (req: Request, res: Response) => {
+      return adminController.handleLogin(req, res);
+    });
+    app.all(`${basePath}/logout`, (req: Request, res: Response) => {
+      return adminController.handleLogout(req, res);
+    });
 
-      // Admin Dashboard (Strictly protected by requireAdminAuth middleware)
-      app.get(`${basePath}/dashboard`, requireAdminAuth, (req: Request, res: Response) => {
-        return adminController.renderDashboard(req, res);
-      });
+    // Admin Dashboard (Strictly protected by requireAdminAuth middleware)
+    app.get(`${basePath}/dashboard`, requireAdminAuth, (req: Request, res: Response) => {
+      return adminController.renderDashboard(req, res);
+    });
 
-      // Admin Real-Time Live Stats API (Strictly protected by requireAdminAuth middleware)
-      app.get(`${basePath}/api/live-stats`, requireAdminAuth, (req: Request, res: Response) => {
-        return adminController.getLiveStats(req, res);
-      });
+    // Admin Real-Time Live Stats API (Strictly protected by requireAdminAuth middleware)
+    app.get(`${basePath}/api/live-stats`, requireAdminAuth, (req: Request, res: Response) => {
+      return adminController.getLiveStats(req, res);
+    });
 
-      // Admin Permanent Delete from Catbox & Database (Strictly protected by requireAdminAuth)
-      app.post(`${basePath}/api/delete-permanent`, requireAdminAuth, (req: Request, res: Response) => {
-        return adminController.deletePermanent(req, res);
-      });
+    // Admin Permanent Delete from Catbox & Database (Strictly protected by requireAdminAuth)
+    app.post(`${basePath}/api/delete-permanent`, requireAdminAuth, (req: Request, res: Response) => {
+      return adminController.deletePermanent(req, res);
+    });
 
-      // Admin Delete from History Only (Strictly protected by requireAdminAuth)
-      app.post(`${basePath}/api/delete-history-only`, requireAdminAuth, (req: Request, res: Response) => {
-        return adminController.deleteHistoryOnly(req, res);
-      });
+    // Admin Delete from History Only (Strictly protected by requireAdminAuth)
+    app.post(`${basePath}/api/delete-history-only`, requireAdminAuth, (req: Request, res: Response) => {
+      return adminController.deleteHistoryOnly(req, res);
+    });
 
-      // Admin Health-Check Synchronization with Catbox (Strictly protected by requireAdminAuth)
-      app.post(`${basePath}/api/sync-check`, requireAdminAuth, (req: Request, res: Response) => {
-        return adminController.runSyncCheck(req, res);
-      });
+    // Admin Health-Check Synchronization with Catbox (Strictly protected by requireAdminAuth)
+    app.post(`${basePath}/api/sync-check`, requireAdminAuth, (req: Request, res: Response) => {
+      return adminController.runSyncCheck(req, res);
+    });
 
-      // Admin Dynamic System Config API
-      app.post(`${basePath}/api/config`, requireAdminAuth, (req: Request, res: Response) => {
-        return adminController.updateConfig(req, res);
-      });
+    // Admin Dynamic System Config API
+    app.post(`${basePath}/api/config`, requireAdminAuth, (req: Request, res: Response) => {
+      return adminController.updateConfig(req, res);
+    });
 
-      // Admin Toggle Maintenance Kill Switch
-      app.post(`${basePath}/api/maintenance`, requireAdminAuth, (req: Request, res: Response) => {
-        return adminController.toggleMaintenance(req, res);
-      });
+    // Admin Toggle Maintenance Kill Switch
+    app.post(`${basePath}/api/maintenance`, requireAdminAuth, (req: Request, res: Response) => {
+      return adminController.toggleMaintenance(req, res);
+    });
 
-      // Admin Session Management APIs
-      app.post(`${basePath}/api/revoke-session`, requireAdminAuth, (req: Request, res: Response) => {
-        return adminController.revokeSession(req, res);
-      });
-      app.post(`${basePath}/api/revoke-all-sessions`, requireAdminAuth, (req: Request, res: Response) => {
-        return adminController.revokeAllSessions(req, res);
-      });
+    // Admin Session Management APIs
+    app.post(`${basePath}/api/revoke-session`, requireAdminAuth, (req: Request, res: Response) => {
+      return adminController.revokeSession(req, res);
+    });
+    app.post(`${basePath}/api/revoke-all-sessions`, requireAdminAuth, (req: Request, res: Response) => {
+      return adminController.revokeAllSessions(req, res);
+    });
 
-      // Admin Search Files in Repository
-      app.get(`${basePath}/api/search`, requireAdminAuth, (req: Request, res: Response) => {
-        return adminController.searchFiles(req, res);
-      });
+    // Admin Search Files in Repository
+    app.get(`${basePath}/api/search`, requireAdminAuth, (req: Request, res: Response) => {
+      return adminController.searchFiles(req, res);
+    });
 
-      // Admin Bulk Cleanup (Preview & Execute)
-      app.post(`${basePath}/api/bulk-cleanup/preview`, requireAdminAuth, (req: Request, res: Response) => {
-        return adminController.previewBulkCleanup(req, res);
-      });
-      app.post(`${basePath}/api/bulk-cleanup`, requireAdminAuth, (req: Request, res: Response) => {
-        return adminController.executeBulkCleanup(req, res);
-      });
+    // Admin Bulk Cleanup (Preview & Execute)
+    app.post(`${basePath}/api/bulk-cleanup/preview`, requireAdminAuth, (req: Request, res: Response) => {
+      return adminController.previewBulkCleanup(req, res);
+    });
+    app.post(`${basePath}/api/bulk-cleanup`, requireAdminAuth, (req: Request, res: Response) => {
+      return adminController.executeBulkCleanup(req, res);
+    });
 
-      // Admin Telegram Bot status
-      app.get(`${basePath}/api/telegram-status`, requireAdminAuth, (req: Request, res: Response) => {
-        const config = getTelegramConfig();
-        res.json({
-          success: true,
-          data: {
-            enabled: config.enabled,
-            adminCount: config.adminUserIds.length,
-            hasSecret: Boolean(config.webhookSecret),
-          },
-        });
+    // Admin Telegram Bot status
+    app.get(`${basePath}/api/telegram-status`, requireAdminAuth, (req: Request, res: Response) => {
+      const config = getTelegramConfig();
+      res.json({
+        success: true,
+        data: {
+          enabled: config.enabled,
+          adminCount: config.adminUserIds.length,
+          hasSecret: Boolean(config.webhookSecret),
+        },
       });
+    });
 
-      // Fallback for unhandled subroutes under this admin path
-      app.all(`${basePath}/*`, requireAdminAuth, (req: Request, res: Response) => {
-        res.status(404).send('<!DOCTYPE html><html><body>404 Not Found</body></html>');
-      });
-    };
-
-    // Mount on configured adminBase
-    registerAdminRoutes(adminBase);
-    mountedBases.add(adminBase);
-
-    // Also mount on standard /superadmin and /admin if not already mounted so user never gets 404 or redirected to home
-    if (!mountedBases.has('/superadmin')) {
-      registerAdminRoutes('/superadmin');
-      mountedBases.add('/superadmin');
-    }
-    if (!mountedBases.has('/admin')) {
-      registerAdminRoutes('/admin');
-      mountedBases.add('/admin');
-    }
+    // Fallback for unhandled subroutes under /admin
+    app.all(`${basePath}/*`, requireAdminAuth, (req: Request, res: Response) => {
+      res.status(404).send('<!DOCTYPE html><html><body>404 Not Found</body></html>');
+    });
   } else {
     // If admin panel is not yet configured, render a clean setup guidance page
-    app.get(['/superadmin', '/superadmin/*', '/admin', '/admin/*'], (req: Request, res: Response) => {
+    app.all(['/admin', '/admin/*'], (req: Request, res: Response) => {
       res.status(503).send(`<!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Superadmin Panel — Konfigurasi Diperlukan</title>
+  <title>Admin Panel — Konfigurasi Diperlukan</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b101b; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 1.5rem; box-sizing: border-box; }
     .card { background: #131c2e; border: 1px solid #23324d; border-radius: 16px; max-width: 520px; width: 100%; padding: 2.25rem; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.7); text-align: center; }
@@ -296,18 +274,16 @@ export function createExpressApp(): Express {
     .code-box { background: #080c14; border: 1px solid #1e293b; border-radius: 10px; padding: 1rem; text-align: left; font-family: monospace; font-size: 0.85rem; color: #e2e8f0; margin-bottom: 1.5rem; line-height: 1.6; }
     .code-box .key { color: #38bdf8; font-weight: 600; }
     .code-box .val { color: #34d399; }
-    .code-box .comment { color: #64748b; }
     a { display: inline-block; background: #0284c7; color: #fff; text-decoration: none; padding: 0.7rem 1.5rem; border-radius: 8px; font-weight: 600; font-size: 0.9rem; }
     a:hover { background: #0369a1; }
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>Superadmin Panel Memerlukan Konfigurasi</h1>
-    <p>Panel Superadmin dinonaktifkan secara aman karena kunci rahasia belum disetel di Environment Variables hosting / Vercel Anda.</p>
+    <h1>Admin Panel Memerlukan Konfigurasi</h1>
+    <p>Panel Admin dinonaktifkan secara aman karena kunci rahasia belum disetel di Environment Variables hosting / Vercel Anda. Panel admin selalu diakses di path <code>/admin</code>.</p>
     <div class="code-box">
-      <span class="key">ADMIN_SECRET_KEY</span>=<span class="val">kunci-rahasia-minimal-16-karakter</span><br>
-      <span class="key">ADMIN_PANEL_PATH</span>=<span class="val">superadmin</span> <span class="comment">(opsional)</span>
+      <span class="key">ADMIN_SECRET_KEY</span>=<span class="val">kunci-rahasia-minimal-16-karakter</span>
     </div>
     <p style="font-size: 0.8rem; margin-bottom: 1.5rem; color: #64748b;">Tambahkan di Settings &gt; Environment Variables Vercel, lalu redeploy project Anda.</p>
     <a href="/">Kembali ke Halaman Utama</a>

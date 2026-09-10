@@ -20,14 +20,6 @@
       "destination": "/api?__vpath=/s/$1"
     },
     {
-      "source": "/superadmin",
-      "destination": "/api?__vpath=/superadmin"
-    },
-    {
-      "source": "/superadmin/(.*)",
-      "destination": "/api?__vpath=/superadmin/$1"
-    },
-    {
       "source": "/admin",
       "destination": "/api?__vpath=/admin"
     },

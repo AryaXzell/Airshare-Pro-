@@ -128,6 +128,8 @@ export const FilePreview: React.FC<FilePreviewProps> = ({ item, onToast }) => {
               <img
                 src={`/flags/${item.uploaderCountryCode.toLowerCase()}.svg`}
                 alt={item.uploaderCountryName}
+                loading="lazy"
+                decoding="async"
                 className="w-4 h-3 object-cover rounded-xs"
                 onError={(e) => {
                   (e.target as HTMLImageElement).style.display = 'none';

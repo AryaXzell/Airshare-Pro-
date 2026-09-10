@@ -145,7 +145,7 @@ curl -F "url=https://airshare-pro.vercel.app/api/telegram/webhook" \
      -F "secret_token=YOUR_TELEGRAM_WEBHOOK_SECRET" \
      https://api.telegram.org/bot<YOUR_TELEGRAM_BOT_TOKEN>/setWebhook
 ```
-Or execute the automated setup from the web admin panel: `POST /{ADMIN_PANEL_PATH}/api/telegram-setup`.
+Or execute the automated setup from the web admin panel: `POST /admin/api/telegram-setup`.
 
 ---
 

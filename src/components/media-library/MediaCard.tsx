@@ -64,7 +64,7 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
   const renderThumbnail = (isLargeGrid = false) => {
     const sizeClass = isLargeGrid
       ? 'w-full h-36 rounded-2xl'
-      : 'w-13 h-13 sm:w-14 sm:h-14 rounded-2xl';
+      : 'w-14 h-14 sm:w-14 sm:h-14 rounded-2xl';
 
     if (item.type === 'image') {
       return (
@@ -252,6 +252,8 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
                   src={`/flags/${item.uploaderCountryCode.toLowerCase()}.svg`}
                   alt={item.uploaderCountryName || item.uploaderCountryCode}
                   title={`Diupload dari ${item.uploaderCountryName || item.uploaderCountryCode}`}
+                  loading="lazy"
+                  decoding="async"
                   className="w-3.5 h-2.5 object-cover rounded-xs inline-block flex-shrink-0"
                   onError={(e) => {
                     (e.target as HTMLImageElement).style.display = 'none';
@@ -365,6 +367,8 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
                 src={`/flags/${item.uploaderCountryCode.toLowerCase()}.svg`}
                 alt={item.uploaderCountryName || item.uploaderCountryCode}
                 title={`Diupload dari ${item.uploaderCountryName || item.uploaderCountryCode}`}
+                loading="lazy"
+                decoding="async"
                 className="w-3.5 h-2.5 object-cover rounded-xs inline-block flex-shrink-0"
                 onError={(e) => {
                   (e.target as HTMLImageElement).style.display = 'none';
@@ -383,7 +387,7 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
             e.stopPropagation();
             onInspect(item);
           }}
-          className="p-2 sm:p-2.5 rounded-full clean-interactive clean-tap opacity-70 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+          className="hidden sm:inline-flex p-2 sm:p-2.5 rounded-full clean-interactive clean-tap opacity-70 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
           title="Detail Metadata"
           aria-label={`Detail metadata ${displayName}`}
         >

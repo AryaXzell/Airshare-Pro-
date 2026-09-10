@@ -35,13 +35,17 @@ function cleanupMemorySessions() {
   }
 }
 
+export const ADMIN_PANEL_PATH = 'admin';
+
 // In-memory cache for hashed ADMIN_SECRET_KEY so we don't re-hash on every request
 let cachedAdminSecretKey: string | null = null;
 let cachedAdminSecretHash: string | null = null;
 
 /**
  * Validates and retrieves the admin configuration.
- * If either ADMIN_SECRET_KEY or ADMIN_PANEL_PATH is missing/invalid, admin panel is completely disabled.
+ * The admin panel path is fixed to 'admin'.
+ * Admin panel is enabled if ADMIN_SECRET_KEY is configured with at least 16 characters.
+ * Any ADMIN_PANEL_PATH environment variable is completely ignored.
  */
 export function getAdminConfig(): {
   enabled: boolean;
@@ -49,26 +53,19 @@ export function getAdminConfig(): {
   secretKey: string;
 } {
   const rawSecret = process.env.ADMIN_SECRET_KEY?.trim() || '';
-  const rawPath = process.env.ADMIN_PANEL_PATH?.trim() || (rawSecret.length >= 16 ? 'superadmin' : '');
-
-  // Clean path: strip leading and trailing slashes
-  const cleanPath = rawPath.replace(/^\/+|\/+$/g, '');
-
-  // Strict security: require non-empty path and minimum 16 characters for the secret (passphrase)
-  const isPathValid = cleanPath.length >= 3 && !cleanPath.includes('..') && !cleanPath.includes(' ');
   const isSecretValid = rawSecret.length >= 16;
 
-  if (!isPathValid || !isSecretValid) {
+  if (!isSecretValid) {
     return {
       enabled: false,
-      panelPath: '',
+      panelPath: ADMIN_PANEL_PATH,
       secretKey: '',
     };
   }
 
   return {
     enabled: true,
-    panelPath: cleanPath,
+    panelPath: ADMIN_PANEL_PATH,
     secretKey: rawSecret,
   };
 }

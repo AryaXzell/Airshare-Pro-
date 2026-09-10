@@ -403,7 +403,7 @@ export const CustomAudioPlayer: React.FC<CustomAudioPlayerProps> = ({
 
           <button
             onClick={togglePlay}
-            className="w-13 h-13 sm:w-14 sm:h-14 bg-white text-black rounded-full hover:scale-105 active:scale-95 transition-transform duration-100 shadow-lg flex items-center justify-center"
+            className="w-14 h-14 sm:w-14 sm:h-14 bg-white text-black rounded-full hover:scale-105 active:scale-95 transition-transform duration-100 shadow-lg flex items-center justify-center"
             aria-label={isPlaying ? 'Jeda' : 'Putar'}
           >
             {isPlaying ? (

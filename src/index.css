@@ -305,7 +305,9 @@
 .apple-thick-slider-container {
   position: relative;
   width: 100%;
-  height: 24px;
+  height: 44px;
+  padding: 10px 0;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -363,8 +365,8 @@
 
 /* Audio Visualizer Bars */
 .viz-bar {
-  transition: height 0.08s ease-in-out;
-  will-change: height;
+  transition: transform 0.08s ease-in-out;
+  will-change: transform;
 }
 
 /* =========================================================================
@@ -378,5 +380,17 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+
+  .clean-backdrop-blur,
+  .clean-backdrop {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background-color: rgba(0, 0, 0, 0.65);
+  }
+
+  .clean-floating-menu {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 }

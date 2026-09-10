@@ -75,7 +75,7 @@ export const UploadSuccess: React.FC<UploadSuccessProps> = ({
 
         <button
           onClick={handleCopy}
-          className={`font-bold text-xs sm:text-sm px-3.5 sm:px-4 py-3 rounded-xl transition-all duration-150 clean-tap flex items-center space-x-1.5 shadow-xs flex-shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
+          className={`font-bold text-xs sm:text-sm px-3 sm:px-4 py-3 rounded-xl transition-all duration-150 clean-tap flex items-center space-x-1.5 shadow-xs flex-shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
             copied ? 'bg-emerald-600 text-white' : ''
           }`}
           style={!copied ? { backgroundColor: 'var(--accent)', color: 'var(--accent-text)' } : {}}
@@ -83,7 +83,7 @@ export const UploadSuccess: React.FC<UploadSuccessProps> = ({
           title="Salin Tautan"
         >
           {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-          <span>{copied ? 'Disalin' : 'Salin'}</span>
+          <span className="hidden sm:inline">{copied ? 'Disalin' : 'Salin'}</span>
         </button>
 
         {/* Mini QR Code Button (Static Generic Icon) */}

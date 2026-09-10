@@ -63,7 +63,7 @@ export default defineConfig(() => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,json}'],
-          navigateFallbackDenylist: [/^\/s(\/.*)?$/, /^\/api(\/.*)?$/, /^\/superadmin(\/.*)?$/, /^\/admin(\/.*)?$/],
+          navigateFallbackDenylist: [/^\/s(\/.*)?$/, /^\/api(\/.*)?$/, /^\/admin(\/.*)?$/],
           runtimeCaching: [
             // 1. Strict Online-First: Never cache API endpoints with stale data
             {

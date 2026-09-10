@@ -248,7 +248,7 @@ export const adminController = {
    * GET /{ADMIN_PANEL_PATH}/login
    */
   async renderLoginPage(req: Request, res: Response): Promise<void> {
-    const { enabled, panelPath } = getAdminConfig();
+    const { enabled, fullAdminPath } = getAdminConfig();
     if (!enabled) {
       res.status(404).send('<!DOCTYPE html><html><body>404 Not Found</body></html>');
       return;
@@ -257,7 +257,7 @@ export const adminController = {
     // Check if already authenticated
     const token = req.cookies?.[ADMIN_COOKIE_NAME];
     if (token && (await verifyAdminSession(token))) {
-      res.redirect(`/${panelPath}/dashboard`);
+      res.redirect(`/${fullAdminPath}/dashboard`);
       return;
     }
 
@@ -406,7 +406,7 @@ export const adminController = {
         : ''
     }
 
-    <form method="POST" action="/${escapeHtml(panelPath)}/login">
+    <form method="POST" action="/${escapeHtml(fullAdminPath)}/login">
       <div class="form-group">
         <label for="password">Kunci Sandi Admin (ADMIN_SECRET_KEY)</label>
         <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="••••••••••••••••" autofocus />
@@ -428,7 +428,7 @@ export const adminController = {
    * POST /{ADMIN_PANEL_PATH}/login
    */
   async handleLogin(req: Request, res: Response): Promise<void> {
-    const { enabled, panelPath } = getAdminConfig();
+    const { enabled, fullAdminPath } = getAdminConfig();
     if (!enabled) {
       res.status(404).send('<!DOCTYPE html><html><body>404 Not Found</body></html>');
       return;
@@ -448,13 +448,13 @@ export const adminController = {
       alertAdminLoginFailed(clientIp).catch((alertErr) => {
         console.warn('[TELEGRAM_ALERT_WARN] Gagal mengirim alert login admin gagal:', alertErr);
       });
-      res.redirect(`/${panelPath}/login?error=rate_limited&retryAfter=${rateLimit.retryAfterSeconds}`);
+      res.redirect(`/${fullAdminPath}/login?error=rate_limited&retryAfter=${rateLimit.retryAfterSeconds}`);
       return;
     }
 
     const password = req.body?.password;
     if (!password || typeof password !== 'string') {
-      res.redirect(`/${panelPath}/login?error=invalid`);
+      res.redirect(`/${fullAdminPath}/login?error=invalid`);
       return;
     }
 
@@ -467,7 +467,7 @@ export const adminController = {
         detail: 'Percobaan login admin gagal dengan sandi tidak valid',
         ip: clientIp,
       });
-      res.redirect(`/${panelPath}/login?error=invalid`);
+      res.redirect(`/${fullAdminPath}/login?error=invalid`);
       return;
     }
 
@@ -490,14 +490,14 @@ export const adminController = {
       path: '/',
     });
 
-    res.redirect(`/${panelPath}/dashboard`);
+    res.redirect(`/${fullAdminPath}/dashboard`);
   },
 
   /**
    * POST / GET /{ADMIN_PANEL_PATH}/logout
    */
   async handleLogout(req: Request, res: Response): Promise<void> {
-    const { enabled, panelPath } = getAdminConfig();
+    const { enabled, fullAdminPath } = getAdminConfig();
     if (!enabled) {
       res.status(404).send('<!DOCTYPE html><html><body>404 Not Found</body></html>');
       return;
@@ -522,14 +522,14 @@ export const adminController = {
       sameSite: 'strict',
     });
 
-    res.redirect(`/${panelPath}/login`);
+    res.redirect(`/${fullAdminPath}/login`);
   },
 
   /**
    * GET /{ADMIN_PANEL_PATH}/dashboard
    */
   async renderDashboard(req: Request, res: Response): Promise<void> {
-    const { enabled, panelPath } = getAdminConfig();
+    const { enabled, fullAdminPath } = getAdminConfig();
     if (!enabled) {
       res.status(404).send('<!DOCTYPE html><html><body>404 Not Found</body></html>');
       return;
@@ -946,7 +946,7 @@ export const adminController = {
             <span class="live-sync-time" id="live-sync-time">Terakhir sinkron: ${escapeHtml(initialTimeFormatted)}</span>
           </div>
         </div>
-        <form method="POST" action="/${escapeHtml(panelPath)}/logout" style="margin:0;">
+        <form method="POST" action="/${escapeHtml(fullAdminPath)}/logout" style="margin:0;">
           <button type="submit" class="btn-logout">Keluar (Logout)</button>
         </form>
       </div>
@@ -1329,7 +1329,7 @@ export const adminController = {
 
   <script>
     (function() {
-      const panelPath = ${JSON.stringify(panelPath)};
+      const panelPath = ${JSON.stringify(fullAdminPath)};
       const badgeDot = document.getElementById('live-sync-dot');
       const badgeTitle = document.getElementById('live-sync-title');
       const badgeTime = document.getElementById('live-sync-time');
@@ -1607,7 +1607,7 @@ export const adminController = {
       setInterval(fetchLiveStats, 20000);
     })();
 
-    ${getOperationalPanelScripts(panelPath)}
+    ${getOperationalPanelScripts(fullAdminPath)}
   </script>
 </body>
 </html>`;

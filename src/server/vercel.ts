@@ -19,8 +19,8 @@ export const config = {
 
 export default function handler(req: VercelRequest, res: VercelResponse) {
   // Resolve original request path in Vercel Serverless environment.
-  // When vercel.json rewrites /s/:id or /superadmin to /api?__vpath=...,
-  // restore req.url so Express routes (/s/:id, /superadmin, etc.) match correctly.
+  // When vercel.json rewrites /s/:id or /admin to /api?__vpath=...,
+  // restore req.url so Express routes (/s/:id, /admin, etc.) match correctly.
   let queryVPath: string | undefined;
   if (req.query && typeof req.query.__vpath === 'string') {
     queryVPath = req.query.__vpath;
