@@ -88,9 +88,9 @@ export function createExpressApp(): Express {
     next();
   });
 
-  // Body parsers for JSON and URL-encoded
-  app.use(express.json({ limit: '10mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+  // Body parsers for JSON and URL-encoded (aligned with Vercel 4.5MB payload limit)
+  app.use(express.json({ limit: '4mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '4mb' }));
 
   // Middleware to catch JSON body parsing syntax errors gracefully
   app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
@@ -112,32 +112,42 @@ export function createExpressApp(): Express {
   const healthHandler = async (req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
-    const [redisHealth, catboxHealth] = await Promise.all([
-      checkRedisHealth(),
-      checkCatboxHealth(),
-    ]);
+    try {
+      const [redisHealth, catboxHealth] = await Promise.all([
+        checkRedisHealth(),
+        checkCatboxHealth(),
+      ]);
 
-    const isDegraded = redisHealth.configured && !redisHealth.connected;
-    if (isDegraded) {
-      alertRedisFailure('Koneksi ke cluster Redis terputus atau melebihi batas waktu (timeout)').catch(() => {});
+      const isDegraded = redisHealth.configured && !redisHealth.connected;
+      if (isDegraded) {
+        alertRedisFailure('Koneksi ke cluster Redis terputus atau melebihi batas waktu (timeout)').catch(() => {});
+      }
+
+      res.json({
+        status: isDegraded ? 'degraded' : 'ok',
+        service: 'AirShare Pro API',
+        timestamp: new Date().toISOString(),
+        storageProvider: 'catbox',
+        hasUserhash: Boolean(process.env.CATBOX_USERHASH?.trim()),
+        redis: {
+          configured: redisHealth.configured,
+          connected: redisHealth.connected,
+          latencyMs: redisHealth.latencyMs,
+        },
+        catbox: {
+          available: catboxHealth.available,
+          latencyMs: catboxHealth.latencyMs,
+        },
+      });
+    } catch (err: unknown) {
+      console.error('[HEALTH_CHECK_ERROR]', err);
+      res.status(500).json({
+        status: 'error',
+        service: 'AirShare Pro API',
+        timestamp: new Date().toISOString(),
+        message: 'Gagal menjalankan pemeriksaan kesehatan sistem.',
+      });
     }
-
-    res.json({
-      status: isDegraded ? 'degraded' : 'ok',
-      service: 'AirShare Pro API',
-      timestamp: new Date().toISOString(),
-      storageProvider: 'catbox',
-      hasUserhash: Boolean(process.env.CATBOX_USERHASH?.trim()),
-      redis: {
-        configured: redisHealth.configured,
-        connected: redisHealth.connected,
-        latencyMs: redisHealth.latencyMs,
-      },
-      catbox: {
-        available: catboxHealth.available,
-        latencyMs: catboxHealth.latencyMs,
-      },
-    });
   };
 
   const healthMethodNotAllowed = (req: Request, res: Response) => {
@@ -154,6 +164,23 @@ export function createExpressApp(): Express {
 
   app.route('/api/health').get(healthHandler).all(healthMethodNotAllowed);
   app.route('/health').get(healthHandler).all(healthMethodNotAllowed);
+
+  // Root API descriptor endpoint
+  app.get(['/api', '/api/'], (req: Request, res: Response) => {
+    res.json({
+      success: true,
+      service: 'AirShare Pro API',
+      status: 'operational',
+      version: '1.0.0',
+      endpoints: {
+        health: '/api/health',
+        systemStatus: '/api/system-status',
+        config: '/api/media/config',
+        upload: '/api/media/upload',
+        media: '/api/media',
+      },
+    });
+  });
 
   // Dynamic robots.txt to strictly disallow crawling of admin path and sensitive endpoints
   app.get('/robots.txt', (req: Request, res: Response) => {
@@ -209,6 +236,11 @@ export function createExpressApp(): Express {
       return adminController.runSyncCheck(req, res);
     });
 
+    // Admin Purge Broken / 404 Files
+    app.post(`${basePath}/api/purge-broken`, requireAdminAuth, (req: Request, res: Response) => {
+      return adminController.purgeBrokenFiles(req, res);
+    });
+
     // Admin Dynamic System Config API
     app.post(`${basePath}/api/config`, requireAdminAuth, (req: Request, res: Response) => {
       return adminController.updateConfig(req, res);
@@ -251,6 +283,19 @@ export function createExpressApp(): Express {
           hasSecret: Boolean(config.webhookSecret),
         },
       });
+    });
+
+    // Admin Deleted Files Management APIs
+    app.get(`${basePath}/api/deleted-files`, requireAdminAuth, (req: Request, res: Response) => {
+      return adminController.getDeletedFiles(req, res);
+    });
+    app.post(`${basePath}/api/clear-deleted-history`, requireAdminAuth, (req: Request, res: Response) => {
+      return adminController.clearDeletedHistory(req, res);
+    });
+
+    // Admin Real-Time Gemini AI System Recommendations & Summary API
+    app.all(`${basePath}/api/ai-recommendations`, requireAdminAuth, (req: Request, res: Response) => {
+      return adminController.getAiRecommendations(req, res);
     });
 
     // Fallback for unhandled subroutes under /admin
@@ -296,25 +341,40 @@ export function createExpressApp(): Express {
   // Public System Status API (Maintenance Mode, Announcement Banner, Feature Flags)
   app.get(['/api/system-status', '/system-status'], standardRateLimiter, async (req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    const [maintenanceMode, rawAnnouncement, featureFlags] = await Promise.all([
-      isMaintenanceModeActive(),
-      getAnnouncement(),
-      getFeatureFlags(),
-    ]);
+    try {
+      const [maintenanceMode, rawAnnouncement, featureFlags] = await Promise.all([
+        isMaintenanceModeActive(),
+        getAnnouncement(),
+        getFeatureFlags(),
+      ]);
 
-    const activeAnnouncement = rawAnnouncement && rawAnnouncement.enabled ? rawAnnouncement : null;
+      const activeAnnouncement = rawAnnouncement && rawAnnouncement.enabled ? rawAnnouncement : null;
 
-    res.json({
-      success: true,
-      data: {
-        maintenanceMode,
-        announcement: activeAnnouncement,
-        featureFlags,
-      },
-    });
+      res.json({
+        success: true,
+        data: {
+          maintenanceMode,
+          announcement: activeAnnouncement,
+          featureFlags,
+        },
+      });
+    } catch (err: unknown) {
+      console.error('[SYSTEM_STATUS_ERROR]', err);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'SYSTEM_STATUS_ERROR',
+          message: 'Gagal memuat status sistem.',
+        },
+      });
+    }
   });
 
   // Mount Public Share Landing Page (/s/:id) with Open Graph preview
+  app.get(['/s', '/s/'], (req: Request, res: Response) => {
+    res.redirect('/');
+  });
+
   app.get('/s/:id', (req: Request, res: Response) => {
     return shareController.renderShareLanding(req, res);
   });
@@ -329,7 +389,7 @@ export function createExpressApp(): Express {
   app.use('/media', mediaRouter);
 
   // Unhandled API route fallback
-  app.all(['/api/*', '/media/*'], (req: Request, res: Response) => {
+  app.all(['/api', '/api/*', '/media', '/media/*'], (req: Request, res: Response) => {
     const errorResp: ApiErrorResponse = {
       success: false,
       error: {

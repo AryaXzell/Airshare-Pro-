@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { CatboxStorageProvider } from '../storage/catbox-storage-provider';
 import { getMediaRepository } from '../repository/media-repository';
 import { analyticsRepository } from '../repository/analytics-repository';
+import { deletedFilesRepository } from '../repository/deleted-files-repository';
 import {
   validateUploadedFile,
   isValidMediaId,
@@ -40,26 +41,38 @@ export const mediaController = {
    * Provides non-sensitive upload configuration to client
    */
   async getConfig(req: Request, res: Response): Promise<void> {
-    const currentMaxSize = await getMaxUploadSize();
-    const currentRateLimit = await getUploadRateLimit();
+    try {
+      const currentMaxSize = await getMaxUploadSize();
+      const currentRateLimit = await getUploadRateLimit();
 
-    const response: ApiSuccessResponse<{
-      maxUploadSize: number;
-      formattedMaxSize: string;
-      provider: string;
-      isDeleteSupported: boolean;
-      rateLimitUploadsPerMinute: number;
-    }> = {
-      success: true,
-      data: {
-        maxUploadSize: currentMaxSize,
-        formattedMaxSize: formatBytes(currentMaxSize),
-        provider: storageProvider.name,
-        isDeleteSupported: storageProvider.isDeleteSupported(),
-        rateLimitUploadsPerMinute: currentRateLimit.limit,
-      },
-    };
-    res.json(response);
+      const response: ApiSuccessResponse<{
+        maxUploadSize: number;
+        formattedMaxSize: string;
+        provider: string;
+        isDeleteSupported: boolean;
+        rateLimitUploadsPerMinute: number;
+      }> = {
+        success: true,
+        data: {
+          maxUploadSize: currentMaxSize,
+          formattedMaxSize: formatBytes(currentMaxSize),
+          provider: storageProvider.name,
+          isDeleteSupported: storageProvider.isDeleteSupported(),
+          rateLimitUploadsPerMinute: currentRateLimit.limit,
+        },
+      };
+      res.json(response);
+    } catch (error: unknown) {
+      console.error('[MEDIA_GET_CONFIG_ERROR]', error);
+      const err: ApiErrorResponse = {
+        success: false,
+        error: {
+          code: 'CONFIG_ERROR',
+          message: 'Gagal memuat konfigurasi sistem.',
+        },
+      };
+      res.status(500).json(err);
+    }
   },
 
   /**
@@ -369,14 +382,28 @@ export const mediaController = {
       // Delete from repository
       await mediaRepository.delete(id, req.sessionId);
 
+      // Record in dedicated DeletedFiles archive
+      deletedFilesRepository.recordDeleted({
+        id: item.id,
+        name: item.name || item.id,
+        formattedSize: item.formattedSize || '-',
+        type: item.type || 'file',
+        shareUrl: item.shareUrl || '#',
+        deletedAt: Date.now(),
+        deletedBy: 'user',
+        reason: 'Dihapus oleh pengguna via sesi aplikasi',
+      }).catch((err) => {
+        console.warn('[DELETED_FILES_RECORD_WARN]:', err);
+      });
+
       // Record analytics deletion fail-safe
       analyticsRepository.recordDeletion(1).catch((err) => {
         console.warn('[ANALYTICS_RECORD_DELETION_WARN] Gagal memperbarui analitik deletion:', err);
       });
 
-      // Purge from recent uploads in analytics
-      analyticsRepository.removeRecentUpload(id).catch((err) => {
-        console.warn('[ANALYTICS_REMOVE_RECENT_WARN] Gagal menghapus recent upload:', err);
+      // Purge completely from all stats footprint in analytics
+      analyticsRepository.removeFileFromAllStats(id).catch((err) => {
+        console.warn('[ANALYTICS_REMOVE_ALL_WARN] Gagal membersihkan jejak berkas:', err);
       });
 
       // Attempt deletion on storage provider if URL is known
@@ -435,7 +462,17 @@ export const mediaController = {
           console.warn('[ANALYTICS_RECORD_DELETION_WARN] Gagal memperbarui analitik clearAll:', err);
         });
         existingItems.forEach((item) => {
-          analyticsRepository.removeRecentUpload(item.id).catch(() => {});
+          deletedFilesRepository.recordDeleted({
+            id: item.id,
+            name: item.name || item.id,
+            formattedSize: item.formattedSize || '-',
+            type: item.type || 'file',
+            shareUrl: item.shareUrl || '#',
+            deletedAt: Date.now(),
+            deletedBy: 'user',
+            reason: 'Pengguna membersihkan seluruh riwayat sesi',
+          }).catch(() => {});
+          analyticsRepository.removeFileFromAllStats(item.id).catch(() => {});
         });
       }
 

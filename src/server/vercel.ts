@@ -1,6 +1,16 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import app from './app';
 
+/**
+ * PERINGATAN TENTANG VERCEL HOBBY PLAN vs PRO:
+ * Konfigurasi `maxDuration: 60` di vercel.json HANYA berlaku untuk akun Vercel Pro atau Enterprise.
+ * Pada akun Vercel Gratis (Hobby Plan), Vercel secara sepihak memaksakan batas maksimal eksekusi fungsi
+ * sebesar 10 detik (hard limit), terlepas dari konfigurasi maxDuration yang ada di vercel.json.
+ * Jika aplikasi dideploy di atas akun Hobby, setiap operasi (termasuk upload ke Catbox atau polling Redis)
+ * yang membutuhkan waktu lebih dari 10 detik akan diputus secara paksa oleh platform Vercel dengan HTTP 504 Gateway Timeout.
+ * Untuk lingkungan produksi berskala besar, pertimbangkan upgrade ke Vercel Pro atau deploy service backend
+ * ke container mandiri (Docker/Railway/VPS/Cloud Run).
+ */
 const FUNCTION_MAX_DURATION_MS = 60000;
 const catboxTimeoutMs = parseInt(process.env.CATBOX_TIMEOUT_MS || '60000', 10);
 
@@ -39,8 +49,13 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
   const forwardedUri = (req.headers['x-forwarded-uri'] || req.headers['x-matched-path']) as string | undefined;
 
   let targetPath = queryVPath;
-  if (!targetPath && forwardedUri && !forwardedUri.startsWith('/api')) {
+  if (!targetPath && forwardedUri) {
     targetPath = forwardedUri;
+  }
+
+  // If invoked directly at serverless root (/ or /api) without a specific subpath
+  if (!targetPath && (!req.url || req.url === '/' || req.url === '/api' || req.url.startsWith('/api?'))) {
+    targetPath = '/api';
   }
 
   if (targetPath) {
@@ -54,9 +69,16 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
     const currentUrl = req.url || '';
     const queryIdx = currentUrl.indexOf('?');
     if (queryIdx !== -1) {
-      const qs = currentUrl.slice(queryIdx);
-      const cleanQs = qs.replace(/[?&]__vpath=[^&]*/, '').replace(/^&/, '?');
-      req.url = normalizedPath + (cleanQs.length > 1 ? cleanQs : '');
+      try {
+        const dummyUrl = new URL(currentUrl, 'http://localhost');
+        dummyUrl.searchParams.delete('__vpath');
+        const remainingQuery = dummyUrl.search;
+        req.url = normalizedPath + remainingQuery;
+      } catch {
+        const qs = currentUrl.slice(queryIdx);
+        const cleanQs = qs.replace(/[?&]__vpath=[^&]*/g, '').replace(/^[?&]+/, '?');
+        req.url = normalizedPath + (cleanQs !== '?' ? cleanQs : '');
+      }
     } else {
       req.url = normalizedPath;
     }

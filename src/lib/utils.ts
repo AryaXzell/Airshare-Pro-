@@ -36,7 +36,7 @@ export function formatDate(timestamp: number): string {
   });
 }
 
-export const MAX_FILE_SIZE_BYTES = 200 * 1024 * 1024; // 200MB limit for Catbox
+export const MAX_FILE_SIZE_BYTES = 4 * 1024 * 1024; // 4MB safe boundary for Vercel Serverless (4.5MB hard payload limit)
 
 export function validateMediaFile(file: File): { valid: boolean; error?: string; type?: MediaType } {
   if (!file) {
@@ -56,7 +56,7 @@ export function validateMediaFile(file: File): { valid: boolean; error?: string;
   if (file.size > MAX_FILE_SIZE_BYTES) {
     return {
       valid: false,
-      error: `Ukuran berkas (${formatBytes(file.size)}) melebihi batas maksimal 200 MB.`,
+      error: `Ukuran berkas (${formatBytes(file.size)}) melebihi batas maksimal 4 MB.`,
     };
   }
 

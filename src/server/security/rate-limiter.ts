@@ -23,6 +23,10 @@ export class SlidingWindowRateLimiter implements RateLimiter {
   private buckets = new Map<string, { count: number; expiresAt: number }>();
   private lastCleanup = Date.now();
 
+  public resetKey(key: string): void {
+    this.buckets.delete(key);
+  }
+
   private cleanup(now: number) {
     if (now - this.lastCleanup < 30000) return;
     this.lastCleanup = now;
@@ -81,6 +85,14 @@ export class SlidingWindowRateLimiter implements RateLimiter {
  */
 export class RedisRateLimiter implements RateLimiter {
   constructor(private redis: Redis) {}
+
+  public async resetKey(key: string): Promise<void> {
+    try {
+      await this.redis.del(`rl:${key}`);
+    } catch {
+      // ignore
+    }
+  }
 
   public async check(
     key: string,

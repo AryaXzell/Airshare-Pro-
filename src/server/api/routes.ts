@@ -7,8 +7,11 @@ import { ApiErrorResponse } from '../../types';
 
 const router = Router();
 
-// Absolute safe upper boundary for Multer buffer allocation (500MB max)
-const MULTER_CEILING_SIZE = 500 * 1024 * 1024;
+// Absolute safe upper boundary for Multer buffer allocation
+// On Vercel Serverless Functions, hard body limit is 4.5MB; non-Vercel environments allow up to 500MB.
+const MULTER_CEILING_SIZE = process.env.VERCEL
+  ? 4.5 * 1024 * 1024 // 4.5MB Vercel serverless hard limit ceiling
+  : 500 * 1024 * 1024;
 
 // Multer memory storage configured with maximum boundary
 const upload = multer({

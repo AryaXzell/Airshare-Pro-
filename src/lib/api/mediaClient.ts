@@ -258,8 +258,8 @@ export class MediaApiClient {
 
     if (!res.ok) {
       return {
-        maxUploadSize: 209715200,
-        formattedMaxSize: '200 MB',
+        maxUploadSize: 4194304,
+        formattedMaxSize: '4 MB',
         provider: 'catbox',
         isDeleteSupported: false,
       };
@@ -271,8 +271,8 @@ export class MediaApiClient {
     }
 
     return {
-      maxUploadSize: 209715200,
-      formattedMaxSize: '200 MB',
+      maxUploadSize: 4194304,
+      formattedMaxSize: '4 MB',
       provider: 'catbox',
       isDeleteSupported: false,
     };

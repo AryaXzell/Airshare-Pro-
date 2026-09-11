@@ -224,10 +224,13 @@ function assertValidSessionId(sessionId, operation) {
 var DevelopmentMediaRepository = class {
   constructor() {
     this.items = /* @__PURE__ */ new Map();
+    this.tombstones = /* @__PURE__ */ new Map();
     this.maxItems = 250;
+    this.maxTombstones = 1e3;
   }
   async create(media) {
     assertValidSessionId(media.sessionId, "create");
+    this.tombstones.delete(media.id);
     if (this.items.size >= this.maxItems) {
       const oldestKey = this.items.keys().next().value;
       if (oldestKey) {
@@ -256,7 +259,11 @@ var DevelopmentMediaRepository = class {
     if (!id || typeof id !== "string" || !id.trim()) {
       return null;
     }
-    const item = this.items.get(id.trim());
+    const cleanId = id.trim();
+    if (this.tombstones.has(cleanId)) {
+      return null;
+    }
+    const item = this.items.get(cleanId);
     if (!item) return null;
     const publicItem = {
       id: item.id,
@@ -278,6 +285,27 @@ var DevelopmentMediaRepository = class {
     };
     return publicItem;
   }
+  async getTombstone(id) {
+    if (!id || typeof id !== "string" || !id.trim()) {
+      return null;
+    }
+    return this.tombstones.get(id.trim()) || null;
+  }
+  async recordTombstone(id, reason) {
+    if (!id || typeof id !== "string" || !id.trim()) {
+      return;
+    }
+    const cleanId = id.trim();
+    if (this.tombstones.size >= this.maxTombstones) {
+      const oldestKey = this.tombstones.keys().next().value;
+      if (oldestKey) this.tombstones.delete(oldestKey);
+    }
+    this.tombstones.set(cleanId, {
+      id: cleanId,
+      deletedAt: Date.now(),
+      reason
+    });
+  }
   async delete(id, sessionId) {
     assertValidSessionId(sessionId, "delete");
     const item = this.items.get(id);
@@ -285,13 +313,18 @@ var DevelopmentMediaRepository = class {
     if (item.sessionId !== sessionId) {
       return false;
     }
-    return this.items.delete(id);
+    const deleted = this.items.delete(id);
+    if (deleted) {
+      await this.recordTombstone(id, "USER_DELETED");
+    }
+    return deleted;
   }
   async clearAll(sessionId) {
     assertValidSessionId(sessionId, "clearAll");
     for (const [id, item] of this.items.entries()) {
       if (item.sessionId === sessionId) {
         this.items.delete(id);
+        await this.recordTombstone(id, "USER_CLEARED");
       }
     }
   }
@@ -314,10 +347,29 @@ var DevelopmentMediaRepository = class {
     if (!id || typeof id !== "string" || !id.trim()) {
       return false;
     }
-    return this.items.delete(id.trim());
+    const cleanId = id.trim();
+    const deleted = this.items.delete(cleanId);
+    await this.recordTombstone(cleanId, "ADMIN_DELETED");
+    return deleted;
+  }
+  /**
+   * Cleans all mock/test fixture artifacts so automated tests or stale test runs
+   * never pollute real development memory.
+   */
+  clearTestData() {
+    for (const id of Array.from(this.items.keys())) {
+      if (id.startsWith("test-") || id.startsWith("mock-") || id.startsWith("secret_") || id.startsWith("img_test_") || id.startsWith("audio_test_")) {
+        this.items.delete(id);
+      }
+    }
+  }
+  resetStore() {
+    this.items.clear();
+    this.tombstones.clear();
   }
 };
 var developmentMediaRepository = new DevelopmentMediaRepository();
+developmentMediaRepository.clearTestData();
 
 // src/server/repository/upstash-repository.ts
 function assertValidSessionId2(sessionId, operation) {
@@ -344,6 +396,39 @@ var UpstashMediaRepository = class {
    */
   getIdToSessionKey(id) {
     return `id_to_session:${id}`;
+  }
+  getTombstoneKey(id) {
+    return `deleted_media:${id}`;
+  }
+  async getTombstone(id) {
+    if (!id || typeof id !== "string" || !id.trim()) {
+      return null;
+    }
+    const cleanId = id.trim();
+    try {
+      const raw = await this.redis.get(this.getTombstoneKey(cleanId));
+      if (!raw) return null;
+      return typeof raw === "string" ? JSON.parse(raw) : raw;
+    } catch {
+      return null;
+    }
+  }
+  async recordTombstone(id, reason) {
+    if (!id || typeof id !== "string" || !id.trim()) {
+      return;
+    }
+    const cleanId = id.trim();
+    const tombstone = {
+      id: cleanId,
+      deletedAt: Date.now(),
+      reason
+    };
+    try {
+      await this.redis.set(this.getTombstoneKey(cleanId), JSON.stringify(tombstone), {
+        ex: 14 * 24 * 60 * 60
+      });
+    } catch {
+    }
   }
   async create(media) {
     assertValidSessionId2(media.sessionId, "create");
@@ -379,6 +464,8 @@ var UpstashMediaRepository = class {
     pipeline.expire(publicKey, 30 * 24 * 60 * 60);
     pipeline.expire(idToSessionKey, 30 * 24 * 60 * 60);
     pipeline.expire(indexKey, 30 * 24 * 60 * 60);
+    const tombstoneKey = this.getTombstoneKey(media.id);
+    pipeline.del(tombstoneKey);
     await pipeline.exec();
     return media;
   }
@@ -419,6 +506,10 @@ var UpstashMediaRepository = class {
       return null;
     }
     const cleanId = id.trim();
+    const tombstone = await this.getTombstone(cleanId);
+    if (tombstone) {
+      return null;
+    }
     const publicKey = this.getPublicKey(cleanId);
     const raw = await this.redis.get(publicKey);
     let publicMedia = null;
@@ -429,55 +520,32 @@ var UpstashMediaRepository = class {
         publicMedia = null;
       }
     }
-    if (!publicMedia || !publicMedia.uploaderCountryCode || !publicMedia.createdAt) {
+    if (publicMedia && (!publicMedia.uploaderCountryCode || !publicMedia.createdAt)) {
       try {
         const fullRaw = await this.redis.get(`stats:media_obj:${cleanId}`);
         if (fullRaw) {
           const full = typeof fullRaw === "string" ? JSON.parse(fullRaw) : fullRaw;
           if (full && typeof full === "object") {
-            if (!publicMedia) {
-              publicMedia = {
-                id: full.id || cleanId,
-                name: full.name || "Berkas",
-                originalFileName: full.originalFileName || full.name || "Berkas",
-                type: full.type || "file",
-                mimeType: full.mimeType || "application/octet-stream",
-                size: full.size || 0,
-                formattedSize: full.formattedSize || "0 B",
-                shareUrl: full.shareUrl || "",
-                createdAt: full.createdAt || Date.now(),
-                uploaderCountryCode: full.uploaderCountryCode,
-                uploaderCountryName: full.uploaderCountryName,
-                audioMeta: full.audioMeta,
-                videoMeta: full.videoMeta,
-                imageMeta: full.imageMeta,
-                isTextPreviewable: full.isTextPreviewable,
-                textLanguageHint: full.textLanguageHint
-              };
-            } else {
-              if (!publicMedia.uploaderCountryCode && full.uploaderCountryCode) {
-                publicMedia.uploaderCountryCode = full.uploaderCountryCode;
-                publicMedia.uploaderCountryName = full.uploaderCountryName;
-              }
-              if ((!publicMedia.createdAt || isNaN(publicMedia.createdAt)) && full.createdAt) {
-                publicMedia.createdAt = full.createdAt;
-              }
-              if (!publicMedia.audioMeta && full.audioMeta && full.type === "audio") {
-                publicMedia.audioMeta = full.audioMeta;
-              }
-              if (!publicMedia.videoMeta && full.videoMeta && full.type === "video") {
-                publicMedia.videoMeta = full.videoMeta;
-              }
-              if (!publicMedia.imageMeta && full.imageMeta && full.type === "image") {
-                publicMedia.imageMeta = full.imageMeta;
-              }
-              if (publicMedia.isTextPreviewable === void 0 && full.isTextPreviewable !== void 0) {
-                publicMedia.isTextPreviewable = full.isTextPreviewable;
-                publicMedia.textLanguageHint = full.textLanguageHint;
-              }
+            if (!publicMedia.uploaderCountryCode && full.uploaderCountryCode) {
+              publicMedia.uploaderCountryCode = full.uploaderCountryCode;
+              publicMedia.uploaderCountryName = full.uploaderCountryName;
             }
-            this.redis.set(publicKey, JSON.stringify(publicMedia), { ex: 30 * 24 * 60 * 60 }).catch(() => {
-            });
+            if ((!publicMedia.createdAt || isNaN(publicMedia.createdAt)) && full.createdAt) {
+              publicMedia.createdAt = full.createdAt;
+            }
+            if (!publicMedia.audioMeta && full.audioMeta && full.type === "audio") {
+              publicMedia.audioMeta = full.audioMeta;
+            }
+            if (!publicMedia.videoMeta && full.videoMeta && full.type === "video") {
+              publicMedia.videoMeta = full.videoMeta;
+            }
+            if (!publicMedia.imageMeta && full.imageMeta && full.type === "image") {
+              publicMedia.imageMeta = full.imageMeta;
+            }
+            if (publicMedia.isTextPreviewable === void 0 && full.isTextPreviewable !== void 0) {
+              publicMedia.isTextPreviewable = full.isTextPreviewable;
+              publicMedia.textLanguageHint = full.textLanguageHint;
+            }
           }
         }
       } catch {
@@ -487,16 +555,32 @@ var UpstashMediaRepository = class {
   }
   async delete(id, sessionId) {
     assertValidSessionId2(sessionId, "delete");
-    const itemKey = this.getItemKey(sessionId, id);
-    const publicKey = this.getPublicKey(id);
+    const cleanId = id.trim();
+    const itemKey = this.getItemKey(sessionId, cleanId);
+    const publicKey = this.getPublicKey(cleanId);
     const indexKey = this.getIndexKey(sessionId);
-    const idToSessionKey = this.getIdToSessionKey(id);
+    const idToSessionKey = this.getIdToSessionKey(cleanId);
+    const tombstoneKey = this.getTombstoneKey(cleanId);
+    const tombstoneData = {
+      id: cleanId,
+      deletedAt: Date.now(),
+      reason: "USER_DELETED"
+    };
     const pipeline = this.redis.pipeline();
     pipeline.del(itemKey);
     pipeline.del(publicKey);
     pipeline.del(idToSessionKey);
-    pipeline.zrem(indexKey, id);
+    pipeline.del(`stats:media_obj:${cleanId}`);
+    pipeline.zrem(indexKey, cleanId);
+    pipeline.zrem("stats:recent_uploads", cleanId);
+    if (typeof pipeline.set === "function") {
+      pipeline.set(tombstoneKey, JSON.stringify(tombstoneData), { ex: 14 * 24 * 60 * 60 });
+    }
     const results = await pipeline.exec();
+    if (typeof pipeline.set !== "function") {
+      this.recordTombstone(cleanId, "USER_DELETED").catch(() => {
+      });
+    }
     const delCount = results[0];
     return typeof delCount === "number" && delCount > 0;
   }
@@ -506,10 +590,21 @@ var UpstashMediaRepository = class {
     const ids = await this.redis.zrange(indexKey, 0, -1);
     const pipeline = this.redis.pipeline();
     if (ids && ids.length > 0) {
+      const now = Date.now();
       ids.forEach((id) => {
-        pipeline.del(this.getItemKey(sessionId, id));
-        pipeline.del(this.getPublicKey(id));
-        pipeline.del(this.getIdToSessionKey(id));
+        const cleanId = id.trim();
+        pipeline.del(this.getItemKey(sessionId, cleanId));
+        pipeline.del(this.getPublicKey(cleanId));
+        pipeline.del(this.getIdToSessionKey(cleanId));
+        pipeline.del(`stats:media_obj:${cleanId}`);
+        pipeline.zrem("stats:recent_uploads", cleanId);
+        if (typeof pipeline.set === "function") {
+          pipeline.set(
+            this.getTombstoneKey(cleanId),
+            JSON.stringify({ id: cleanId, deletedAt: now, reason: "USER_CLEARED" }),
+            { ex: 14 * 24 * 60 * 60 }
+          );
+        }
       });
     }
     pipeline.del(indexKey);
@@ -577,16 +672,29 @@ var UpstashMediaRepository = class {
     const cleanId = id.trim();
     const idToSessionKey = this.getIdToSessionKey(cleanId);
     const sessionId = await this.redis.get(idToSessionKey);
+    const tombstoneKey = this.getTombstoneKey(cleanId);
+    const tombstoneData = {
+      id: cleanId,
+      deletedAt: Date.now(),
+      reason: "ADMIN_DELETED"
+    };
     const pipeline = this.redis.pipeline();
     pipeline.del(this.getPublicKey(cleanId));
     pipeline.del(idToSessionKey);
     pipeline.del(`stats:media_obj:${cleanId}`);
     pipeline.zrem("stats:recent_uploads", cleanId);
+    if (typeof pipeline.set === "function") {
+      pipeline.set(tombstoneKey, JSON.stringify(tombstoneData), { ex: 14 * 24 * 60 * 60 });
+    }
     if (sessionId) {
       pipeline.del(this.getItemKey(sessionId, cleanId));
       pipeline.zrem(this.getIndexKey(sessionId), cleanId);
     }
     const results = await pipeline.exec();
+    if (typeof pipeline.set !== "function") {
+      this.recordTombstone(cleanId, "ADMIN_DELETED").catch(() => {
+      });
+    }
     return results.some((r) => typeof r === "number" && r > 0);
   }
 };
@@ -670,9 +778,152 @@ function getMediaRepository() {
   return developmentMediaRepository;
 }
 
+// src/server/repository/deleted-files-repository.ts
+var DELETED_FILES_INDEX = "stats:deleted_files_index";
+var DELETED_FILE_PREFIX = "stats:deleted_file_obj:";
+var MAX_DELETED_RECORDS = 500;
+var RETENTION_SECONDS = 30 * 24 * 60 * 60;
+var InMemoryDeletedFilesStore = class {
+  constructor() {
+    this.records = [];
+  }
+  record(file) {
+    this.records = this.records.filter((r) => r.id !== file.id);
+    this.records.unshift(file);
+    if (this.records.length > MAX_DELETED_RECORDS) {
+      this.records = this.records.slice(0, MAX_DELETED_RECORDS);
+    }
+  }
+  get(limit = 100) {
+    return this.records.slice(0, limit);
+  }
+  clear() {
+    const count = this.records.length;
+    this.records = [];
+    return count;
+  }
+  isDeleted(id) {
+    return this.records.some((r) => r.id === id);
+  }
+};
+var inMemoryStore = new InMemoryDeletedFilesStore();
+var DeletedFilesRepository = class {
+  constructor(redisClient) {
+    this.redisClient = redisClient;
+  }
+  getRedis() {
+    if (this.redisClient !== void 0) {
+      return this.redisClient;
+    }
+    if (isUpstashConfigured()) {
+      return getRedisClient();
+    }
+    return null;
+  }
+  /**
+   * Records a deleted file in the isolated Deleted Files archive.
+   * Fail-safe: Any errors are caught and logged without disrupting callers.
+   */
+  async recordDeleted(file) {
+    try {
+      inMemoryStore.record(file);
+      const redis = this.getRedis();
+      if (!redis) return;
+      const pipeline = redis.pipeline();
+      const objKey = `${DELETED_FILE_PREFIX}${file.id}`;
+      pipeline.zadd(DELETED_FILES_INDEX, { score: file.deletedAt, member: file.id });
+      pipeline.set(objKey, JSON.stringify(file));
+      pipeline.expire(objKey, RETENTION_SECONDS);
+      await pipeline.exec();
+    } catch (err) {
+      console.warn("[DELETED_FILES_RECORD_ERROR] Fail-open:", err);
+    }
+  }
+  /**
+   * Retrieves the list of deleted files for the dedicated Admin "Berkas Terhapus" tab.
+   */
+  async getDeletedFiles(limit = 100) {
+    const redis = this.getRedis();
+    if (!redis) {
+      return inMemoryStore.get(limit);
+    }
+    try {
+      const ids = await redis.zrange(DELETED_FILES_INDEX, 0, limit - 1, { rev: true });
+      if (!ids || ids.length === 0) {
+        return inMemoryStore.get(limit);
+      }
+      const keys = ids.map((id) => `${DELETED_FILE_PREFIX}${id}`);
+      const rawObjects = await redis.mget(...keys);
+      const result = [];
+      rawObjects.forEach((raw, idx) => {
+        if (raw) {
+          try {
+            const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+            result.push(parsed);
+          } catch {
+          }
+        } else {
+          const mem = inMemoryStore.get(limit).find((r) => r.id === ids[idx]);
+          if (mem) result.push(mem);
+        }
+      });
+      return result;
+    } catch (err) {
+      console.warn("[DELETED_FILES_GET_ERROR] Fallback to in-memory:", err);
+      return inMemoryStore.get(limit);
+    }
+  }
+  /**
+   * Clears all deletion log records from the archive.
+   */
+  async clearAll() {
+    inMemoryStore.clear();
+    const redis = this.getRedis();
+    if (!redis) return 0;
+    try {
+      const ids = await redis.zrange(DELETED_FILES_INDEX, 0, -1);
+      if (ids && ids.length > 0) {
+        const keys = ids.map((id) => `${DELETED_FILE_PREFIX}${id}`);
+        const pipeline = redis.pipeline();
+        pipeline.del(DELETED_FILES_INDEX);
+        for (const k of keys) {
+          pipeline.del(k);
+        }
+        await pipeline.exec();
+        return ids.length;
+      }
+      return 0;
+    } catch (err) {
+      console.warn("[DELETED_FILES_CLEAR_ERROR]:", err);
+      return 0;
+    }
+  }
+  /**
+   * Checks whether a file ID is archived as deleted.
+   */
+  async isDeleted(id) {
+    if (!id) return false;
+    if (inMemoryStore.isDeleted(id)) return true;
+    const redis = this.getRedis();
+    if (!redis) return false;
+    try {
+      const score = await redis.zscore(DELETED_FILES_INDEX, id);
+      return score !== null && score !== void 0;
+    } catch {
+      return false;
+    }
+  }
+};
+var deletedFilesRepository = new DeletedFilesRepository();
+
 // src/server/repository/analytics-repository.ts
 var STATS_TTL_SECONDS = 90 * 24 * 60 * 60;
 var TOTAL_ITEMS_KEY = "stats:total_items_ever";
+function isTestArtifactId(id) {
+  if (!id || typeof id !== "string") return false;
+  const lower = id.toLowerCase().trim();
+  return lower.startsWith("test-") || lower.startsWith("mock-") || lower.startsWith("secret_") || lower.startsWith("img_test_") || lower.startsWith("audio_test_") || lower.startsWith("test_") || lower.includes("test-admin-file") || lower.includes("test-note") || lower.includes("test-del");
+}
 function formatBytes(bytes) {
   if (!bytes || bytes <= 0) return "0 B";
   const k = 1024;
@@ -738,6 +989,28 @@ var InMemoryAnalyticsStore = class {
   }
   removeRecentUpload(id) {
     this.recentUploads = this.recentUploads.filter((item) => item.id !== id);
+  }
+  removeFileFromAllStats(id) {
+    this.fileViews.delete(id);
+    this.recentUploads = this.recentUploads.filter((item) => item.id !== id);
+  }
+  resetStore() {
+    this.uploadsByDate.clear();
+    this.bytesByDate.clear();
+    this.viewsByDate.clear();
+    this.byTypeByDate.clear();
+    this.byCountryByDate.clear();
+    this.fileViews.clear();
+    this.recentUploads = [];
+    this.totalItemsEver = 0;
+  }
+  purgeTestAndOrphanItems() {
+    this.recentUploads = this.recentUploads.filter((item) => !isTestArtifactId(item.id));
+    for (const id of Array.from(this.fileViews.keys())) {
+      if (isTestArtifactId(id)) {
+        this.fileViews.delete(id);
+      }
+    }
   }
   getTotalItemsEver() {
     return this.totalItemsEver;
@@ -809,7 +1082,7 @@ var InMemoryAnalyticsStore = class {
     return this.recentUploads.slice(0, limit);
   }
 };
-var inMemoryStore = new InMemoryAnalyticsStore();
+var inMemoryStore2 = new InMemoryAnalyticsStore();
 var AnalyticsRepository = class {
   constructor(redisClient) {
     this.redisClient = redisClient;
@@ -830,7 +1103,7 @@ var AnalyticsRepository = class {
    */
   async recordUpload(item) {
     try {
-      inMemoryStore.recordUpload(item);
+      inMemoryStore2.recordUpload(item);
       const redis = this.getRedis();
       if (!redis) return;
       const today = getTodayDateString();
@@ -866,7 +1139,7 @@ var AnalyticsRepository = class {
    */
   async recordDeletion(count = 1) {
     try {
-      inMemoryStore.recordDeletion(count);
+      inMemoryStore2.recordDeletion(count);
       const redis = this.getRedis();
       if (!redis) return;
       const current = await redis.get(TOTAL_ITEMS_KEY);
@@ -881,16 +1154,24 @@ var AnalyticsRepository = class {
    * Immediately purges an item from recent uploads cache in Redis and memory.
    */
   async removeRecentUpload(id) {
+    await this.removeFileFromAllStats(id);
+  }
+  /**
+   * Completely purges a file from all analytics sets (recent uploads, popular files, cached media objects, views).
+   */
+  async removeFileFromAllStats(id) {
     try {
-      inMemoryStore.removeRecentUpload(id);
+      inMemoryStore2.removeFileFromAllStats(id);
       const redis = this.getRedis();
       if (!redis) return;
       const pipeline = redis.pipeline();
       pipeline.zrem("stats:recent_uploads", id);
+      pipeline.zrem("stats:popular_files", id);
       pipeline.del(`stats:media_obj:${id}`);
+      pipeline.del(`stats:views:${id}`);
       await pipeline.exec();
     } catch (err) {
-      console.warn("[ANALYTICS_REMOVE_RECENT_ERROR] Fail-open:", err);
+      console.warn("[ANALYTICS_REMOVE_ALL_STATS_ERROR] Fail-open:", err);
     }
   }
   /**
@@ -899,7 +1180,7 @@ var AnalyticsRepository = class {
   async getTotalItemsEver() {
     const redis = this.getRedis();
     if (!redis) {
-      return inMemoryStore.getTotalItemsEver();
+      return inMemoryStore2.getTotalItemsEver();
     }
     try {
       const val = await redis.get(TOTAL_ITEMS_KEY);
@@ -911,10 +1192,10 @@ var AnalyticsRepository = class {
         await redis.set(TOTAL_ITEMS_KEY, count);
         return count;
       }
-      return inMemoryStore.getTotalItemsEver();
+      return inMemoryStore2.getTotalItemsEver();
     } catch (err) {
       console.warn("[ANALYTICS_GET_TOTAL_ITEMS_ERROR] Gagal membaca total items ever:", err);
-      return inMemoryStore.getTotalItemsEver();
+      return inMemoryStore2.getTotalItemsEver();
     }
   }
   /**
@@ -923,7 +1204,7 @@ var AnalyticsRepository = class {
    */
   async recordShareView(id) {
     try {
-      inMemoryStore.recordShareView(id);
+      inMemoryStore2.recordShareView(id);
       const redis = this.getRedis();
       if (!redis) return;
       const today = getTodayDateString();
@@ -946,7 +1227,7 @@ var AnalyticsRepository = class {
   async getDailySummary(date) {
     const redis = this.getRedis();
     if (!redis) {
-      return inMemoryStore.getDailySummary(date);
+      return inMemoryStore2.getDailySummary(date);
     }
     try {
       const uploadKey = `stats:uploads:${date}`;
@@ -988,19 +1269,27 @@ var AnalyticsRepository = class {
       };
     } catch (err) {
       console.warn("[ANALYTICS_GET_DAILY_ERROR] Gagal membaca ringkasan harian Redis, fallback in-memory:", err);
-      return inMemoryStore.getDailySummary(date);
+      return inMemoryStore2.getDailySummary(date);
     }
   }
   /**
    * Retrieves top most viewed files from Redis sorted set.
+   * STRICT FILTER: Excludes test artifacts and deleted files.
    */
   async getTopFiles(limit = 10) {
     const redis = this.getRedis();
     if (!redis) {
-      return inMemoryStore.getTopFiles(limit);
+      const memFiles = inMemoryStore2.getTopFiles(limit);
+      const filtered = [];
+      for (const f of memFiles) {
+        if (!await deletedFilesRepository.isDeleted(f.id)) {
+          filtered.push(f);
+        }
+      }
+      return filtered;
     }
     try {
-      const rawResults = await redis.zrange("stats:popular_files", 0, limit - 1, {
+      const rawResults = await redis.zrange("stats:popular_files", 0, limit * 3 - 1, {
         rev: true,
         withScores: true
       });
@@ -1008,20 +1297,29 @@ var AnalyticsRepository = class {
       if (Array.isArray(rawResults)) {
         for (let i = 0; i < rawResults.length; i += 2) {
           const entry = rawResults[i];
+          let id = "";
+          let score = 0;
           if (typeof entry === "object" && entry !== null && "member" in entry) {
             const obj = entry;
-            items.push({ id: String(obj.member), views: Number(obj.score) || 0 });
+            id = String(obj.member);
+            score = Number(obj.score) || 0;
           } else {
-            const id = String(entry);
-            const score = Number(rawResults[i + 1]) || 0;
-            items.push({ id, views: score });
+            id = String(entry);
+            score = Number(rawResults[i + 1]) || 0;
+          }
+          if (id) {
+            const isDeleted = await deletedFilesRepository.isDeleted(id);
+            if (!isDeleted) {
+              items.push({ id, views: score });
+              if (items.length >= limit) break;
+            }
           }
         }
       }
       return items;
     } catch (err) {
       console.warn("[ANALYTICS_GET_TOP_FILES_ERROR] Gagal membaca top files dari Redis, fallback in-memory:", err);
-      return inMemoryStore.getTopFiles(limit);
+      return inMemoryStore2.getTopFiles(limit);
     }
   }
   /**
@@ -1030,7 +1328,7 @@ var AnalyticsRepository = class {
   async getWeeklyTrend() {
     const redis = this.getRedis();
     if (!redis) {
-      return inMemoryStore.getWeeklyTrend();
+      return inMemoryStore2.getWeeklyTrend();
     }
     try {
       const dates = [];
@@ -1063,7 +1361,7 @@ var AnalyticsRepository = class {
       return trend;
     } catch (err) {
       console.warn("[ANALYTICS_GET_WEEKLY_TREND_ERROR] Gagal membaca tren mingguan dari Redis, fallback in-memory:", err);
-      return inMemoryStore.getWeeklyTrend();
+      return inMemoryStore2.getWeeklyTrend();
     }
   }
   /**
@@ -1072,33 +1370,52 @@ var AnalyticsRepository = class {
   async getViewCount(id) {
     const redis = this.getRedis();
     if (!redis) {
-      return inMemoryStore.getViewCount(id);
+      return inMemoryStore2.getViewCount(id);
     }
     try {
       const val = await redis.get(`stats:views:${id}`);
       return Number(val) || 0;
     } catch (err) {
       console.warn("[ANALYTICS_GET_VIEW_COUNT_ERROR] Gagal membaca view count file:", err);
-      return inMemoryStore.getViewCount(id);
+      return inMemoryStore2.getViewCount(id);
     }
   }
   /**
    * Retrieves recent 50 uploads across all sessions for admin monitoring.
    * STRICT SECURITY: Returns only PublicMediaView objects (never exposes sessionId).
+   * STRICT FILTER: Excludes test artifacts and deleted files.
    */
   async getRecentUploads(limit = 50) {
     const redis = this.getRedis();
     if (!redis) {
-      return inMemoryStore.getRecentUploads(limit);
+      const memUploads = inMemoryStore2.getRecentUploads(limit);
+      const filtered = [];
+      for (const m of memUploads) {
+        if (!await deletedFilesRepository.isDeleted(m.id)) {
+          filtered.push(m);
+        }
+      }
+      return filtered;
     }
     try {
-      const recentIds = await redis.zrange("stats:recent_uploads", 0, limit - 1, {
+      const recentIds = await redis.zrange("stats:recent_uploads", 0, limit * 2 - 1, {
         rev: true
       });
       if (!recentIds || recentIds.length === 0) {
-        return inMemoryStore.getRecentUploads(limit);
+        return inMemoryStore2.getRecentUploads(limit);
       }
-      const keys = recentIds.map((id) => `stats:media_obj:${id}`);
+      const validIds = [];
+      for (const id of recentIds) {
+        const isDeleted = await deletedFilesRepository.isDeleted(id);
+        if (!isDeleted) {
+          validIds.push(id);
+          if (validIds.length >= limit) break;
+        }
+      }
+      if (validIds.length === 0) {
+        return [];
+      }
+      const keys = validIds.map((id) => `stats:media_obj:${id}`);
       const rawObjects = await redis.mget(...keys);
       const items = [];
       rawObjects.forEach((raw, idx) => {
@@ -1110,18 +1427,76 @@ var AnalyticsRepository = class {
           } catch {
           }
         } else {
-          const fallback = inMemoryStore.recentUploads.find((m) => m.id === recentIds[idx]);
+          const fallback = inMemoryStore2.recentUploads.find((m) => m.id === validIds[idx]);
           if (fallback) items.push(fallback);
         }
       });
       return items;
     } catch (err) {
       console.warn("[ANALYTICS_GET_RECENT_UPLOADS_ERROR] Gagal mengambil recent uploads:", err);
-      return inMemoryStore.getRecentUploads(limit);
+      return inMemoryStore2.getRecentUploads(limit);
+    }
+  }
+  /**
+   * Cleans all mock/test fixture artifacts so automated tests or stale test runs
+   * never pollute real production statistics, top files, or recent upload tables.
+   */
+  async purgeTestData() {
+    inMemoryStore2.purgeTestAndOrphanItems();
+    const redis = this.getRedis();
+    if (!redis) return;
+    try {
+      const recentIds = await redis.zrange("stats:recent_uploads", 0, 500);
+      if (recentIds && Array.isArray(recentIds)) {
+        for (const id of recentIds) {
+          if (isTestArtifactId(id)) {
+            await this.removeFileFromAllStats(id);
+          }
+        }
+      }
+      const popularIds = await redis.zrange("stats:popular_files", 0, 500);
+      if (popularIds && Array.isArray(popularIds)) {
+        for (const id of popularIds) {
+          if (isTestArtifactId(id)) {
+            await this.removeFileFromAllStats(id);
+          }
+        }
+      }
+      const explicitTestIds = [
+        "test-admin-file-01.png",
+        "test-note.txt",
+        "test-del.jpg",
+        "test-admin-del-123.jpg",
+        "img_test_1.png",
+        "test_sec_media_1.png",
+        "test_sec_media_2.png",
+        "test-file-1.png",
+        "test-file-2.png"
+      ];
+      for (const tid of explicitTestIds) {
+        await this.removeFileFromAllStats(tid);
+      }
+    } catch {
+    }
+  }
+  /**
+   * Complete test-only store reset for isolated integration test suites.
+   */
+  async resetForTesting() {
+    inMemoryStore2.resetStore();
+    const redis = this.getRedis();
+    if (!redis) return;
+    try {
+      await redis.del("stats:recent_uploads");
+      await redis.del("stats:popular_files");
+      await redis.del("stats:total_items_ever");
+    } catch {
     }
   }
 };
 var analyticsRepository = new AnalyticsRepository();
+analyticsRepository.purgeTestData().catch(() => {
+});
 
 // src/shared/banned-extensions.ts
 var BANNED_EXTENSIONS_LIST = [
@@ -1481,8 +1856,24 @@ async function getAnnouncement() {
     try {
       const raw = await redis.get("config:announcement");
       if (raw) {
-        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-        return parsed;
+        let parsed = raw;
+        while (typeof parsed === "string") {
+          try {
+            parsed = JSON.parse(parsed);
+          } catch {
+            break;
+          }
+        }
+        if (parsed && typeof parsed === "object") {
+          const announcement = {
+            message: String(parsed.message || ""),
+            type: ["info", "warning", "success"].includes(parsed.type) ? parsed.type : "info",
+            enabled: parsed.enabled === true || parsed.enabled === "true",
+            updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : Date.now()
+          };
+          inMemoryConfig.announcement = announcement;
+          return announcement;
+        }
       }
     } catch (err) {
       console.warn("[SYSTEM_CONFIG] Gagal membaca pengumuman dari Redis:", err);
@@ -1492,8 +1883,10 @@ async function getAnnouncement() {
 }
 async function setAnnouncement(announcement) {
   const finalAnnouncement = {
-    ...announcement,
-    updatedAt: announcement.updatedAt || Date.now()
+    message: String(announcement.message || "").trim(),
+    type: ["info", "warning", "success"].includes(announcement.type) ? announcement.type : "info",
+    enabled: announcement.enabled === true || announcement.enabled === "true",
+    updatedAt: Date.now()
   };
   inMemoryConfig.announcement = finalAnnouncement;
   const redis = isUpstashConfigured() ? getRedisClient() : null;
@@ -2513,8 +2906,23 @@ var mediaController = {
         return;
       }
       await mediaRepository.delete(id, req.sessionId);
+      deletedFilesRepository.recordDeleted({
+        id: item.id,
+        name: item.name || item.id,
+        formattedSize: item.formattedSize || "-",
+        type: item.type || "file",
+        shareUrl: item.shareUrl || "#",
+        deletedAt: Date.now(),
+        deletedBy: "user",
+        reason: "Dihapus oleh pengguna via sesi aplikasi"
+      }).catch((err) => {
+        console.warn("[DELETED_FILES_RECORD_WARN]:", err);
+      });
       analyticsRepository.recordDeletion(1).catch((err) => {
         console.warn("[ANALYTICS_RECORD_DELETION_WARN] Gagal memperbarui analitik deletion:", err);
+      });
+      analyticsRepository.removeFileFromAllStats(id).catch((err) => {
+        console.warn("[ANALYTICS_REMOVE_ALL_WARN] Gagal membersihkan jejak berkas:", err);
       });
       let providerResult = {
         success: false,
@@ -2556,6 +2964,21 @@ var mediaController = {
       if (count > 0) {
         analyticsRepository.recordDeletion(count).catch((err) => {
           console.warn("[ANALYTICS_RECORD_DELETION_WARN] Gagal memperbarui analitik clearAll:", err);
+        });
+        existingItems.forEach((item) => {
+          deletedFilesRepository.recordDeleted({
+            id: item.id,
+            name: item.name || item.id,
+            formattedSize: item.formattedSize || "-",
+            type: item.type || "file",
+            shareUrl: item.shareUrl || "#",
+            deletedAt: Date.now(),
+            deletedBy: "user",
+            reason: "Pengguna membersihkan seluruh riwayat sesi"
+          }).catch(() => {
+          });
+          analyticsRepository.removeFileFromAllStats(item.id).catch(() => {
+          });
         });
       }
       const response = {
@@ -2668,6 +3091,190 @@ router.route("/").get(standardRateLimiter2, mediaController.listMedia).delete(st
 
 // src/server/api/share-controller.ts
 import hljs from "highlight.js";
+
+// src/server/storage/catbox-health-check.ts
+var CACHE_TTL_MS = 30 * 1e3;
+var cachedHealth = null;
+var pendingCheckPromise = null;
+var inMemoryLastSyncCheck = null;
+async function checkCatboxHealth(forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && cachedHealth) {
+    const age = now - new Date(cachedHealth.lastChecked).getTime();
+    if (age < CACHE_TTL_MS) {
+      return cachedHealth;
+    }
+  }
+  if (pendingCheckPromise) {
+    return pendingCheckPromise;
+  }
+  pendingCheckPromise = (async () => {
+    const startTime = Date.now();
+    try {
+      const response = await fetch("https://catbox.moe", {
+        method: "HEAD",
+        signal: AbortSignal.timeout(3e3),
+        headers: {
+          "User-Agent": "AirSharePro-HealthCheck/1.0"
+        }
+      });
+      const isUp = response.status < 500;
+      const latency = Date.now() - startTime;
+      cachedHealth = {
+        available: isUp,
+        latencyMs: isUp ? latency : null,
+        lastChecked: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      return cachedHealth;
+    } catch (err) {
+      cachedHealth = {
+        available: false,
+        latencyMs: null,
+        lastChecked: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      return cachedHealth;
+    } finally {
+      pendingCheckPromise = null;
+    }
+  })();
+  return pendingCheckPromise;
+}
+var upstreamUrlCache = /* @__PURE__ */ new Map();
+function getCachedUpstreamStatus(url) {
+  const entry = upstreamUrlCache.get(url);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    upstreamUrlCache.delete(url);
+    return null;
+  }
+  return entry.result;
+}
+function setCachedUpstreamStatus(url, result, ttlMs = 6e4) {
+  if (upstreamUrlCache.size > 500) {
+    const firstKey = upstreamUrlCache.keys().next().value;
+    if (firstKey) upstreamUrlCache.delete(firstKey);
+  }
+  upstreamUrlCache.set(url, {
+    result,
+    expiresAt: Date.now() + ttlMs
+  });
+}
+async function checkUpstreamFileStatus(shareUrl) {
+  if (!shareUrl || typeof shareUrl !== "string" || !shareUrl.startsWith("http")) {
+    return { exists: false, isPurged: true, status: 400, error: "INVALID_URL" };
+  }
+  const cached = getCachedUpstreamStatus(shareUrl);
+  if (cached) {
+    return cached;
+  }
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3500);
+    const response = await fetch(shareUrl, {
+      method: "HEAD",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "AirSharePro-ShareVerifier/1.0"
+      }
+    });
+    clearTimeout(timeoutId);
+    const status = response.status;
+    const isPurged = status === 404 || status === 410;
+    const exists = status >= 200 && status < 300;
+    const result = {
+      exists,
+      isPurged,
+      status
+    };
+    if (exists) {
+      setCachedUpstreamStatus(shareUrl, result, 6e4);
+    } else if (isPurged) {
+      setCachedUpstreamStatus(shareUrl, result, 6e5);
+    }
+    return result;
+  } catch (err) {
+    return {
+      exists: true,
+      isPurged: false,
+      status: 0,
+      error: err instanceof Error ? err.message : "TIMEOUT_OR_NETWORK_ERROR"
+    };
+  }
+}
+async function verifyFileExistsOnCatbox(shareUrl) {
+  if (!shareUrl || typeof shareUrl !== "string" || !shareUrl.startsWith("http")) {
+    return false;
+  }
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5e3);
+    const response = await fetch(shareUrl, {
+      method: "HEAD",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "AirSharePro-SyncChecker/1.0"
+      }
+    });
+    clearTimeout(timeoutId);
+    return response.status === 200;
+  } catch {
+    return false;
+  }
+}
+async function verifyFilesBatch(items, concurrency = 10) {
+  const results = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = items.slice(i, i + concurrency);
+    const batchResults = await Promise.all(
+      batch.map(async (item) => {
+        const exists = await verifyFileExistsOnCatbox(item.shareUrl);
+        return { item, exists };
+      })
+    );
+    results.push(...batchResults);
+  }
+  return results;
+}
+async function getLastSyncCheck() {
+  if (isUpstashConfigured()) {
+    const redis = getRedisClient();
+    if (redis) {
+      try {
+        const raw = await redis.get("admin:last_sync_check");
+        if (raw) {
+          return typeof raw === "string" ? JSON.parse(raw) : raw;
+        }
+      } catch {
+      }
+    }
+  }
+  return inMemoryLastSyncCheck;
+}
+async function saveLastSyncCheck(summary) {
+  inMemoryLastSyncCheck = summary;
+  if (isUpstashConfigured()) {
+    const redis = getRedisClient();
+    if (redis) {
+      try {
+        await redis.set("admin:last_sync_check", JSON.stringify(summary), {
+          ex: 30 * 24 * 60 * 60
+        });
+      } catch {
+      }
+    }
+  }
+}
+async function removeSyncCheckItem(id) {
+  const current = await getLastSyncCheck();
+  if (!current) return;
+  const nextBroken = current.brokenItems.filter((item) => item.id !== id);
+  const updated = {
+    ...current,
+    brokenCount: nextBroken.length,
+    brokenItems: nextBroken
+  };
+  await saveLastSyncCheck(updated);
+}
 
 // src/shared/flags.ts
 var SUPPORTED_FLAG_CODES = /* @__PURE__ */ new Set([
@@ -2812,17 +3419,90 @@ function getFileCategoryIcon(mimeType, filename) {
 }
 var ShareController = class _ShareController {
   async renderShareLanding(req, res) {
-    const id = req.params.id;
-    if (!id || typeof id !== "string" || !id.trim()) {
-      res.status(400).send(_ShareController.renderNotFoundHtml("ID berkas tidak valid."));
+    const rawId = req.params.id;
+    const requestId = req.id || res.getHeader("X-Request-ID") || `req_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+    if (!rawId || typeof rawId !== "string" || !rawId.trim()) {
+      res.status(400).send(
+        _ShareController.renderThemedErrorHtml({
+          title: "Format Tautan Tidak Valid \u2014 AirShare Pro",
+          heading: "Format Tautan Tidak Dikenali",
+          message: "Tautan berkas yang Anda buka memiliki format yang salah, kosong, atau tidak lengkap.",
+          errorCode: "ERR_INVALID_ID",
+          httpStatus: 400,
+          requestId
+        })
+      );
       return;
     }
+    const cleanId = rawId.trim();
     try {
       const repo = getMediaRepository();
-      const item = await repo.getByIdPublic(id.trim());
-      if (!item) {
-        res.status(404).send(_ShareController.renderNotFoundHtml("Tautan berkas tidak ditemukan atau sudah kedaluwarsa."));
+      const tombstone = await repo.getTombstone(cleanId);
+      if (tombstone) {
+        const isUpstream = tombstone.reason === "UPSTREAM_PURGED";
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader("Cache-Control", "no-store, max-age=0");
+        res.status(410).send(
+          _ShareController.renderThemedErrorHtml({
+            title: isUpstream ? "Berkas Telah Terhapus dari Upstream \u2014 AirShare Pro" : "Berkas Telah Dihapus \u2014 AirShare Pro",
+            heading: isUpstream ? "Berkas Telah Dihapus dari Catbox" : "Berkas Telah Dihapus",
+            message: isUpstream ? "Media fisik pada server penyimpanan Catbox telah terhapus atau kedaluwarsa, sehingga tautan ini tidak dapat lagi diakses." : "Berkas ini telah dihapus permanen oleh pemilik unggahan atau administrator sistem dan tidak lagi tersedia di jaringan.",
+            errorCode: isUpstream ? "ERR_UPSTREAM_PURGED" : "ERR_MEDIA_DELETED",
+            httpStatus: 410,
+            itemId: cleanId,
+            deletedAt: tombstone.deletedAt,
+            reason: tombstone.reason,
+            requestId
+          })
+        );
         return;
+      }
+      const item = await repo.getByIdPublic(cleanId);
+      if (!item) {
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader("Cache-Control", "no-store, max-age=0");
+        res.status(404).send(
+          _ShareController.renderThemedErrorHtml({
+            title: "Berkas Tidak Ditemukan \u2014 AirShare Pro",
+            heading: "Berkas Tidak Ditemukan",
+            message: "Tautan berkas yang Anda akses tidak terdaftar di sistem atau masa berlakunya telah habis.",
+            errorCode: "ERR_MEDIA_NOT_FOUND",
+            httpStatus: 404,
+            itemId: cleanId,
+            requestId
+          })
+        );
+        return;
+      }
+      if (item.shareUrl) {
+        const upstreamStatus = await checkUpstreamFileStatus(item.shareUrl);
+        if (upstreamStatus.isPurged) {
+          repo.deleteForAdmin(item.id).catch(() => {
+          });
+          repo.recordTombstone(item.id, "UPSTREAM_PURGED").catch(() => {
+          });
+          analyticsRepository.removeRecentUpload(item.id).catch(() => {
+          });
+          console.warn(`[SHARE_SYNC] File ${item.id} detected as 404/410 on Catbox upstream. Tombstone recorded.`);
+          res.setHeader("Content-Type", "text/html; charset=utf-8");
+          res.setHeader("Cache-Control", "no-store, max-age=0");
+          res.status(410).send(
+            _ShareController.renderThemedErrorHtml({
+              title: "Berkas Telah Terhapus dari Catbox \u2014 AirShare Pro",
+              heading: "Berkas Telah Dihapus dari Catbox",
+              message: "Berkas ini sebelumnya tersinkronisasi, namun media fisik pada server Catbox telah dihapus atau kedaluwarsa.",
+              errorCode: "ERR_UPSTREAM_PURGED",
+              httpStatus: 410,
+              itemId: item.id,
+              deletedAt: Date.now(),
+              reason: "Media fisik telah terhapus dari server penyimpanan Catbox upstream (HTTP 404/410)",
+              upstreamUrl: item.shareUrl,
+              upstreamStatus: `HTTP ${upstreamStatus.status} (Purged Upstream)`,
+              requestId
+            })
+          );
+          return;
+        }
       }
       const host = req.get("host") || "localhost:3000";
       const protocol = req.protocol === "https" || req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
@@ -2836,44 +3516,504 @@ var ShareController = class _ShareController {
       res.status(200).send(html);
     } catch (err) {
       console.error("[SHARE_CONTROLLER_ERROR]", err);
-      res.status(500).send(_ShareController.renderNotFoundHtml("Terjadi kesalahan saat memuat berkas."));
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.status(500).send(
+        _ShareController.renderThemedErrorHtml({
+          title: "Terjadi Kesalahan Sistem \u2014 AirShare Pro",
+          heading: "Gagal Memuat Berkas",
+          message: "Terjadi kendala saat memproses permintaan berkas. Silakan coba beberapa saat lagi.",
+          errorCode: "ERR_INTERNAL_SERVER",
+          httpStatus: 500,
+          itemId: cleanId,
+          requestId
+        })
+      );
     }
   }
   static renderNotFoundHtml(message) {
+    return _ShareController.renderThemedErrorHtml({
+      title: "Berkas Tidak Ditemukan \u2014 AirShare Pro",
+      heading: "Berkas Tidak Ditemukan",
+      message,
+      errorCode: "ERR_MEDIA_NOT_FOUND",
+      httpStatus: 404
+    });
+  }
+  static renderThemedErrorHtml(options) {
+    const {
+      title,
+      heading,
+      message,
+      errorCode,
+      httpStatus,
+      itemId,
+      deletedAt,
+      reason,
+      upstreamUrl,
+      upstreamStatus,
+      requestId
+    } = options;
+    const isDeleted = httpStatus === 410 || errorCode.includes("DELETED") || errorCode.includes("PURGED");
+    const isNotFound = httpStatus === 404;
+    const statusBadgeLabel = isDeleted ? "410 GONE" : isNotFound ? "404 NOT FOUND" : `${httpStatus} ERROR`;
+    const accentColor = isDeleted ? "#ef4444" : isNotFound ? "#f59e0b" : "#6366f1";
+    const accentGlow = isDeleted ? "rgba(239, 68, 68, 0.15)" : isNotFound ? "rgba(245, 158, 11, 0.15)" : "rgba(99, 102, 241, 0.15)";
+    const heroIcon = isDeleted ? `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          <line x1="10" y1="11" x2="10" y2="17"></line>
+          <line x1="14" y1="11" x2="14" y2="17"></line>
+        </svg>` : isNotFound ? `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="9" y1="15" x2="15" y2="15"></line>
+        </svg>` : `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="8" x2="12" y2="12"></line>
+          <line x1="12" y1="16" x2="12.01" y2="16"></line>
+        </svg>`;
+    const exactDeletedTime = deletedAt ? formatExactDate(deletedAt) : null;
+    const relativeDeletedTime = deletedAt ? formatRelativeTime(deletedAt) : null;
+    const safeRequestId = requestId || `req_${Date.now().toString(36)}`;
+    const diagnosticPayload = {
+      service: "AirShare Pro Edge Network",
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      httpStatus,
+      errorCode,
+      message,
+      itemId: itemId || null,
+      deletedAt: exactDeletedTime ? `${exactDeletedTime} (${relativeDeletedTime})` : null,
+      reason: reason || (isDeleted ? "User or system permanent removal" : "Resource missing"),
+      upstreamStatus: upstreamStatus || "Checked / Synchronized",
+      upstreamUrl: upstreamUrl || null,
+      requestId: safeRequestId
+    };
+    const jsonString = JSON.stringify(diagnosticPayload, null, 2);
     return `<!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Berkas Tidak Ditemukan \u2014 AirShare Pro</title>
+  <meta name="robots" content="noindex, nofollow" />
+  <title>${escapeHtml(title)}</title>
   <style>
     :root {
       --bg: #09090b;
-      --card: #18181b;
-      --text: #f4f4f5;
-      --muted: #a1a1aa;
+      --card: #121216;
+      --card-inner: #181820;
       --border: #27272a;
-      --accent: #2563eb;
+      --border-subtle: #202025;
+      --text: #f4f4f5;
+      --text-muted: #a1a1aa;
+      --text-dim: #71717a;
+      --accent: ${accentColor};
+      --accent-glow: ${accentGlow};
+      --blue: #3b82f6;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background-color: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
-    .card { background-color: var(--card); border: 1px solid var(--border); border-radius: 1.5rem; padding: 2rem; max-width: 420px; width: 100%; text-align: center; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); }
-    .icon { width: 48px; height: 48px; margin: 0 auto 1.25rem; border-radius: 1rem; background: rgba(239, 68, 68, 0.15); color: #ef4444; display: flex; align-items: center; justify-content: center; }
-    h1 { font-size: 1.25rem; font-weight: 700; margin-bottom: 0.5rem; }
-    p { color: var(--muted); font-size: 0.875rem; line-height: 1.5; margin-bottom: 1.5rem; }
-    .btn { display: inline-block; background-color: var(--accent); color: #fff; text-decoration: none; padding: 0.75rem 1.5rem; border-radius: 0.75rem; font-weight: 600; font-size: 0.875rem; transition: opacity 0.2s; }
-    .btn:hover { opacity: 0.9; }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      position: relative;
+      overflow-x: hidden;
+    }
+    /* Subtle background grid */
+    body::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 360px;
+      background: radial-gradient(circle at 50% 10%, rgba(59, 130, 246, 0.08) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+    .wrapper {
+      position: relative;
+      z-index: 1;
+      max-width: 520px;
+      width: 100%;
+    }
+    /* Header Brand */
+    .brand {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.625rem;
+      margin-bottom: 1.5rem;
+      text-decoration: none;
+      color: var(--text);
+    }
+    .brand-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #2563eb, #3b82f6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+    }
+    .brand-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .brand-tag {
+      font-size: 0.7rem;
+      padding: 0.15rem 0.45rem;
+      border-radius: 9999px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      font-weight: 500;
+    }
+    /* Card Container */
+    .card {
+      background-color: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 1.25rem;
+      padding: 2rem;
+      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.03);
+    }
+    .status-badge-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1.25rem;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      background-color: var(--accent-glow);
+      color: var(--accent);
+      border: 1px solid rgba(239, 68, 68, 0.25);
+      border-radius: 9999px;
+      padding: 0.3rem 0.75rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background-color: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+    }
+    .req-id {
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    .hero-icon-container {
+      width: 60px;
+      height: 60px;
+      border-radius: 1rem;
+      background-color: var(--accent-glow);
+      color: var(--accent);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1.25rem;
+    }
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.6rem;
+      color: var(--text);
+      line-height: 1.3;
+    }
+    .desc {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      line-height: 1.6;
+      margin-bottom: 1.5rem;
+    }
+    /* Diagnostic Terminal Box */
+    .diagnostic-box {
+      background-color: var(--card-inner);
+      border: 1px solid var(--border-subtle);
+      border-radius: 0.85rem;
+      overflow: hidden;
+      margin-bottom: 1.75rem;
+      text-align: left;
+    }
+    .diagnostic-header {
+      background-color: rgba(255, 255, 255, 0.02);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 0.6rem 0.9rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .diagnostic-dots {
+      display: flex;
+      gap: 0.35rem;
+      align-items: center;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .dot-red { background: #ef4444; }
+    .dot-yellow { background: #f59e0b; }
+    .dot-green { background: #10b981; }
+    .diagnostic-title {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+    }
+    .btn-copy {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 0.4rem;
+      color: var(--text-muted);
+      font-size: 0.72rem;
+      padding: 0.25rem 0.55rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      transition: all 0.2s;
+    }
+    .btn-copy:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+      border-color: #3f3f46;
+    }
+    .diagnostic-body {
+      padding: 0.85rem 1rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.76rem;
+      line-height: 1.65;
+    }
+    .diag-row {
+      display: flex;
+      padding: 0.15rem 0;
+    }
+    .diag-label {
+      color: var(--text-dim);
+      width: 130px;
+      flex-shrink: 0;
+    }
+    .diag-value {
+      color: var(--text);
+      word-break: break-all;
+    }
+    .diag-value.highlight-red { color: #f87171; font-weight: 600; }
+    .diag-value.highlight-amber { color: #fbbf24; font-weight: 600; }
+    .diag-value.highlight-blue { color: #60a5fa; }
+    /* Action Buttons */
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+    @media (max-width: 440px) {
+      .actions { grid-template-columns: 1fr; }
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1rem;
+      border-radius: 0.75rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s;
+      cursor: pointer;
+      border: 1px solid transparent;
+    }
+    .btn-primary {
+      background-color: var(--blue);
+      color: #fff;
+    }
+    .btn-primary:hover {
+      background-color: #2563eb;
+    }
+    .btn-secondary {
+      background-color: var(--card-inner);
+      color: var(--text-muted);
+      border-color: var(--border);
+    }
+    .btn-secondary:hover {
+      background-color: #202028;
+      color: var(--text);
+    }
+    /* Footer */
+    .footer-note {
+      text-align: center;
+      margin-top: 1.5rem;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+    }
   </style>
 </head>
 <body>
-  <div class="card">
-    <div class="icon">
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+  <div class="wrapper">
+    <a href="/" class="brand" title="Beranda AirShare Pro">
+      <div class="brand-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
+          <path d="m16 16-4-4-4 4"></path>
+          <path d="M12 12v9"></path>
+        </svg>
+      </div>
+      <span class="brand-title">AirShare Pro</span>
+      <span class="brand-tag">Mesh Sync</span>
+    </a>
+
+    <div class="card">
+      <div class="status-badge-row">
+        <div class="status-badge">
+          <span class="status-dot"></span>
+          <span>${statusBadgeLabel}</span>
+        </div>
+        <span class="req-id">${escapeHtml(safeRequestId)}</span>
+      </div>
+
+      <div class="hero-icon-container">
+        ${heroIcon}
+      </div>
+
+      <h1>${escapeHtml(heading)}</h1>
+      <p class="desc">${escapeHtml(message)}</p>
+
+      <div class="diagnostic-box">
+        <div class="diagnostic-header">
+          <div class="diagnostic-dots">
+            <span class="dot dot-red"></span>
+            <span class="dot dot-yellow"></span>
+            <span class="dot dot-green"></span>
+          </div>
+          <span class="diagnostic-title">Audit Log Diagnostik</span>
+          <button type="button" class="btn-copy" id="btnCopyLog" onclick="copyDiagnosticLog()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            <span id="copyBtnText">Salin Log</span>
+          </button>
+        </div>
+        <div class="diagnostic-body">
+          <div class="diag-row">
+            <span class="diag-label">STATUS_CODE:</span>
+            <span class="diag-value ${isDeleted ? "highlight-red" : "highlight-amber"}">${httpStatus} (${isDeleted ? "Gone" : isNotFound ? "Not Found" : "Error"})</span>
+          </div>
+          <div class="diag-row">
+            <span class="diag-label">ERROR_CODE:</span>
+            <span class="diag-value highlight-blue">${escapeHtml(errorCode)}</span>
+          </div>
+          ${itemId ? `
+          <div class="diag-row">
+            <span class="diag-label">TARGET_ID:</span>
+            <span class="diag-value">${escapeHtml(itemId)}</span>
+          </div>
+          ` : ""}
+          ${exactDeletedTime ? `
+          <div class="diag-row">
+            <span class="diag-label">WAKTU_HAPUS:</span>
+            <span class="diag-value">${escapeHtml(exactDeletedTime)} (${escapeHtml(relativeDeletedTime || "")})</span>
+          </div>
+          ` : ""}
+          ${reason ? `
+          <div class="diag-row">
+            <span class="diag-label">ALASAN:</span>
+            <span class="diag-value">${escapeHtml(reason)}</span>
+          </div>
+          ` : ""}
+          <div class="diag-row">
+            <span class="diag-label">UPSTREAM_SYNC:</span>
+            <span class="diag-value">${escapeHtml(upstreamStatus || "Catbox Synchronized")}</span>
+          </div>
+          <div class="diag-row">
+            <span class="diag-label">DIAGNOSIS:</span>
+            <span class="diag-value">${isDeleted ? "Resource purged permanently from AirShare repository & upstream storage." : "Target resource does not exist or expired."}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <a href="/" class="btn btn-primary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="17 8 12 3 7 8"></polyline>
+            <line x1="12" y1="3" x2="12" y2="15"></line>
+          </svg>
+          Unggah Berkas Baru
+        </a>
+        <a href="/api/health" class="btn btn-secondary" target="_blank" rel="noopener noreferrer">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+          </svg>
+          Periksa Status Server
+        </a>
+      </div>
     </div>
-    <h1>Berkas Tidak Ditemukan</h1>
-    <p>${escapeHtml(message)}</p>
-    <a href="/" class="btn">Kembali ke Beranda</a>
+
+    <p class="footer-note">AirShare Pro Storage Network \u2022 Verifikasi Sinkronisasi Upstream Otomatis</p>
   </div>
+
+  <textarea id="diagJson" style="display:none;">${escapeHtml(jsonString)}</textarea>
+
+  <script>
+    function copyDiagnosticLog() {
+      var text = document.getElementById('diagJson').value;
+      var btn = document.getElementById('btnCopyLog');
+      var label = document.getElementById('copyBtnText');
+
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(onCopied, fallbackCopy);
+      } else {
+        fallbackCopy();
+      }
+
+      function fallbackCopy() {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+          document.execCommand('copy');
+          onCopied();
+        } catch(e) {
+          label.innerText = 'Gagal';
+        }
+        document.body.removeChild(ta);
+      }
+
+      function onCopied() {
+        label.innerText = 'Tersalin!';
+        btn.style.borderColor = '#10b981';
+        btn.style.color = '#10b981';
+        setTimeout(function() {
+          label.innerText = 'Salin Log';
+          btn.style.borderColor = '';
+          btn.style.color = '';
+        }, 2500);
+      }
+    }
+  </script>
 </body>
 </html>`;
   }
@@ -4210,24 +5350,22 @@ function cleanupMemorySessions() {
     }
   }
 }
+var ADMIN_PANEL_PATH = "admin";
 var cachedAdminSecretKey = null;
 var cachedAdminSecretHash = null;
 function getAdminConfig() {
-  const rawPath = process.env.ADMIN_PANEL_PATH?.trim() || "";
   const rawSecret = process.env.ADMIN_SECRET_KEY?.trim() || "";
-  const cleanPath = rawPath.replace(/^\/+|\/+$/g, "");
-  const isPathValid = cleanPath.length >= 3 && !cleanPath.includes("..") && !cleanPath.includes(" ");
   const isSecretValid = rawSecret.length >= 16;
-  if (!isPathValid || !isSecretValid) {
+  if (!isSecretValid) {
     return {
       enabled: false,
-      panelPath: "",
+      panelPath: ADMIN_PANEL_PATH,
       secretKey: ""
     };
   }
   return {
     enabled: true,
-    panelPath: cleanPath,
+    panelPath: ADMIN_PANEL_PATH,
     secretKey: rawSecret
   };
 }
@@ -4437,128 +5575,6 @@ async function requireAdminAuth(req, res, next) {
   next();
 }
 
-// src/server/storage/catbox-health-check.ts
-var CACHE_TTL_MS = 30 * 1e3;
-var cachedHealth = null;
-var pendingCheckPromise = null;
-var inMemoryLastSyncCheck = null;
-async function checkCatboxHealth(forceRefresh = false) {
-  const now = Date.now();
-  if (!forceRefresh && cachedHealth) {
-    const age = now - new Date(cachedHealth.lastChecked).getTime();
-    if (age < CACHE_TTL_MS) {
-      return cachedHealth;
-    }
-  }
-  if (pendingCheckPromise) {
-    return pendingCheckPromise;
-  }
-  pendingCheckPromise = (async () => {
-    const startTime = Date.now();
-    try {
-      const response = await fetch("https://catbox.moe", {
-        method: "HEAD",
-        signal: AbortSignal.timeout(3e3),
-        headers: {
-          "User-Agent": "AirSharePro-HealthCheck/1.0"
-        }
-      });
-      const isUp = response.status < 500;
-      const latency = Date.now() - startTime;
-      cachedHealth = {
-        available: isUp,
-        latencyMs: isUp ? latency : null,
-        lastChecked: (/* @__PURE__ */ new Date()).toISOString()
-      };
-      return cachedHealth;
-    } catch (err) {
-      cachedHealth = {
-        available: false,
-        latencyMs: null,
-        lastChecked: (/* @__PURE__ */ new Date()).toISOString()
-      };
-      return cachedHealth;
-    } finally {
-      pendingCheckPromise = null;
-    }
-  })();
-  return pendingCheckPromise;
-}
-async function verifyFileExistsOnCatbox(shareUrl) {
-  if (!shareUrl || typeof shareUrl !== "string" || !shareUrl.startsWith("http")) {
-    return false;
-  }
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5e3);
-    const response = await fetch(shareUrl, {
-      method: "HEAD",
-      signal: controller.signal,
-      headers: {
-        "User-Agent": "AirSharePro-SyncChecker/1.0"
-      }
-    });
-    clearTimeout(timeoutId);
-    return response.status === 200;
-  } catch {
-    return false;
-  }
-}
-async function verifyFilesBatch(items, concurrency = 10) {
-  const results = [];
-  for (let i = 0; i < items.length; i += concurrency) {
-    const batch = items.slice(i, i + concurrency);
-    const batchResults = await Promise.all(
-      batch.map(async (item) => {
-        const exists = await verifyFileExistsOnCatbox(item.shareUrl);
-        return { item, exists };
-      })
-    );
-    results.push(...batchResults);
-  }
-  return results;
-}
-async function getLastSyncCheck() {
-  if (isUpstashConfigured()) {
-    const redis = getRedisClient();
-    if (redis) {
-      try {
-        const raw = await redis.get("admin:last_sync_check");
-        if (raw) {
-          return typeof raw === "string" ? JSON.parse(raw) : raw;
-        }
-      } catch {
-      }
-    }
-  }
-  return inMemoryLastSyncCheck;
-}
-async function saveLastSyncCheck(summary) {
-  inMemoryLastSyncCheck = summary;
-  if (isUpstashConfigured()) {
-    const redis = getRedisClient();
-    if (redis) {
-      try {
-        await redis.set("admin:last_sync_check", JSON.stringify(summary), {
-          ex: 30 * 24 * 60 * 60
-        });
-      } catch {
-      }
-    }
-  }
-}
-async function removeSyncCheckItem(id) {
-  const current = await getLastSyncCheck();
-  if (!current) return;
-  const nextBroken = current.brokenItems.filter((item) => item.id !== id);
-  const updated = {
-    ...current,
-    brokenCount: nextBroken.length,
-    brokenItems: nextBroken
-  };
-  await saveLastSyncCheck(updated);
-}
-
 // src/server/api/admin-operational-panel.ts
 function escapeHtml2(str) {
   if (!str) return "";
@@ -4636,7 +5652,7 @@ function renderOperationalControlsHtml(config2) {
             <textarea id="announcement-message" rows="3" style="width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.6rem 0.75rem; font-size: 0.825rem; resize: vertical;" placeholder="Contoh: Pemeliharaan server dijadwalkan pukul 23:00 WIB...">${escapeHtml2(announcement.message || "")}</textarea>
           </div>
 
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+          <div class="config-form-grid">
             <div>
               <label style="font-size: 0.75rem; font-weight: 600; color: var(--muted); display: block; margin-bottom: 0.35rem;">Tipe Tampilan</label>
               <select id="announcement-type" style="width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.5rem 0.6rem; font-size: 0.825rem;">
@@ -4669,7 +5685,7 @@ function renderOperationalControlsHtml(config2) {
         </h3>
 
         <div style="display: flex; flex-direction: column; gap: 0.85rem;">
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+          <div class="config-form-grid">
             <div>
               <label style="font-size: 0.75rem; font-weight: 600; color: var(--muted); display: block; margin-bottom: 0.35rem;">Maksimal Ukuran (MB)</label>
               <input type="number" id="cfg-max-upload" min="1" max="500" value="${maxMb}" style="width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.5rem 0.6rem; font-size: 0.825rem;" />
@@ -4721,43 +5737,45 @@ function renderActiveSessionsHtml(sessions) {
       </h2>
       <div style="display: flex; align-items: center; gap: 0.75rem;">
         <span class="panel-badge">TTL: 1 Jam</span>
-        ${otherSessionsCount > 0 ? `<button type="button" id="btn-revoke-all-sessions" class="btn-revoke-all" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); padding: 0.35rem 0.75rem; border-radius: 6px; font-size: 0.75rem; font-weight: 700; cursor: pointer;">Cabut Semua Sesi Lain (${otherSessionsCount})</button>` : ""}
+        ${otherSessionsCount > 0 ? `<button type="button" id="btn-revoke-all-sessions" class="btn-revoke-all" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); padding: 0.35rem 0.75rem; border-radius: 6px; font-size: 0.75rem; font-weight: 700; cursor: pointer; transition: all 0.2s;">Cabut Semua Sesi Lain (${otherSessionsCount})</button>` : ""}
       </div>
     </div>
 
     <div class="table-container">
-      <table>
+      <table style="min-width: 660px;">
         <thead>
           <tr>
-            <th>Token Sesi</th>
-            <th>Waktu Login</th>
-            <th>IP Klien</th>
-            <th>User Agent</th>
-            <th>Status</th>
-            <th>Aksi</th>
+            <th style="width: 120px;">Token Sesi</th>
+            <th style="width: 140px;">Waktu Login</th>
+            <th style="width: 130px;">IP Klien</th>
+            <th style="min-width: 160px;">User Agent</th>
+            <th style="width: 100px;">Status</th>
+            <th style="width: 80px; text-align: center;">Aksi</th>
           </tr>
         </thead>
         <tbody>
-          ${sessions.length === 0 ? `<tr><td colspan="6" style="text-align: center; color: var(--muted); padding: 1.5rem;">Tidak ada sesi aktif.</td></tr>` : sessions.map((s) => `
+          ${sessions.length === 0 ? `<tr><td colspan="6" style="text-align: center; color: var(--muted); padding: 2rem;">Tidak ada sesi aktif.</td></tr>` : sessions.map((s) => `
             <tr id="session-row-${escapeHtml2(s.token)}">
               <td>
-                <code style="background: rgba(255,255,255,0.06); padding: 0.2rem 0.4rem; border-radius: 4px; font-size: 0.75rem; color: #a5b4fc;">
+                <code style="background: rgba(255,255,255,0.06); padding: 0.25rem 0.45rem; border-radius: 4px; font-size: 0.75rem; color: #a5b4fc; font-weight: 600; white-space: nowrap;">
                   ${escapeHtml2(s.tokenPreview)}
                 </code>
               </td>
               <td>
-                <div style="font-weight: 600; font-size: 0.8rem;">${formatRelativeTime2(s.loginAt)}</div>
-                <div style="font-size: 0.7rem; color: var(--muted);">${formatAbsoluteTime(s.loginAt)}</div>
+                <div style="font-weight: 600; font-size: 0.8rem; white-space: nowrap;">${formatRelativeTime2(s.loginAt)}</div>
+                <div style="font-size: 0.7rem; color: var(--muted); white-space: nowrap;">${formatAbsoluteTime(s.loginAt)}</div>
               </td>
-              <td style="font-weight: 600; font-size: 0.8rem;">${escapeHtml2(s.ip)}</td>
-              <td style="font-size: 0.75rem; color: var(--muted); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml2(s.userAgent)}">
-                ${escapeHtml2(s.userAgent)}
+              <td style="font-weight: 600; font-size: 0.8rem; white-space: nowrap;">${escapeHtml2(s.ip)}</td>
+              <td>
+                <div style="font-size: 0.75rem; color: var(--muted); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml2(s.userAgent)}">
+                  ${escapeHtml2(s.userAgent)}
+                </div>
               </td>
               <td>
-                ${s.isCurrent ? `<span style="background: rgba(16, 185, 129, 0.2); color: #34d399; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700;">Sesi Ini</span>` : `<span style="background: rgba(255, 255, 255, 0.08); color: var(--muted); padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600;">Perangkat Lain</span>`}
+                ${s.isCurrent ? `<span style="display: inline-block; background: rgba(16, 185, 129, 0.2); color: #34d399; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700; white-space: nowrap;">Sesi Ini</span>` : `<span style="display: inline-block; background: rgba(255, 255, 255, 0.08); color: var(--muted); padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; white-space: nowrap;">Perangkat Lain</span>`}
               </td>
-              <td>
-                ${s.isCurrent ? `<span style="font-size: 0.75rem; color: var(--muted);">-</span>` : `<button type="button" class="btn-revoke-single" data-token="${escapeHtml2(s.token)}" style="background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 700; cursor: pointer;">Cabut</button>`}
+              <td style="text-align: center;">
+                ${s.isCurrent ? `<span style="font-size: 0.75rem; color: var(--muted);">-</span>` : `<button type="button" class="btn-revoke-single" data-token="${escapeHtml2(s.token)}" style="background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); padding: 0.25rem 0.55rem; border-radius: 4px; font-size: 0.75rem; font-weight: 700; cursor: pointer; transition: all 0.2s;">Cabut</button>`}
               </td>
             </tr>`).join("")}
         </tbody>
@@ -4849,14 +5867,14 @@ function renderAuditLogsHtml(logs) {
       <span class="panel-badge">Retensi 90 Hari</span>
     </div>
 
-    <div class="table-container" style="max-height: 400px; overflow-y: auto;">
-      <table>
+    <div class="table-container" style="max-height: 420px; overflow-y: auto;">
+      <table style="min-width: 680px;">
         <thead>
           <tr>
-            <th>Waktu</th>
-            <th>Jenis Tindakan</th>
-            <th>Detail &amp; Dampak</th>
-            <th>IP Admin</th>
+            <th style="width: 140px; position: sticky; top: 0; background: var(--card); z-index: 2;">Waktu</th>
+            <th style="width: 150px; position: sticky; top: 0; background: var(--card); z-index: 2;">Jenis Tindakan</th>
+            <th style="min-width: 260px; position: sticky; top: 0; background: var(--card); z-index: 2;">Detail &amp; Dampak</th>
+            <th style="width: 120px; position: sticky; top: 0; background: var(--card); z-index: 2;">IP Admin</th>
           </tr>
         </thead>
         <tbody>
@@ -4875,19 +5893,19 @@ function renderAuditLogsHtml(logs) {
     }
     return `
             <tr>
-              <td>
+              <td style="white-space: nowrap;">
                 <div style="font-weight: 600; font-size: 0.78rem;">${formatRelativeTime2(log.timestamp)}</div>
                 <div style="font-size: 0.68rem; color: var(--muted);">${formatAbsoluteTime(log.timestamp)}</div>
               </td>
               <td>
-                <span style="display: inline-block; background: ${badgeBg}; color: ${badgeColor}; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase;">
+                <span style="display: inline-block; background: ${badgeBg}; color: ${badgeColor}; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; white-space: nowrap;">
                   ${escapeHtml2(log.type)}
                 </span>
               </td>
-              <td style="font-size: 0.8rem; line-height: 1.4;">
+              <td style="font-size: 0.8rem; line-height: 1.45; word-break: break-word;">
                 ${escapeHtml2(log.detail)}
               </td>
-              <td style="font-size: 0.78rem; font-weight: 600; color: var(--muted);">
+              <td style="font-size: 0.78rem; font-weight: 600; color: var(--muted); white-space: nowrap;">
                 ${escapeHtml2(log.ip || "-")}
               </td>
             </tr>`;
@@ -4899,6 +5917,16 @@ function renderAuditLogsHtml(logs) {
 }
 function getOperationalPanelStyles() {
   return `
+    .config-form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+    @media (max-width: 640px) {
+      .config-form-grid {
+        grid-template-columns: 1fr;
+      }
+    }
     .btn-maint-enable {
       background: rgba(239, 68, 68, 0.2);
       color: #f87171;
@@ -4957,8 +5985,26 @@ function getOperationalPanelScripts(panelPath) {
     (function() {
       const pPath = ${JSON.stringify(panelPath)};
 
-      function showNotice(msg, isError) {
-        alert(msg);
+      // Helper function for alerts/confirms (falls back to native if custom not ready)
+      async function alertIos(title, message, icon) {
+        if (typeof window.showIosAlert === 'function') {
+          return await window.showIosAlert({ title, message, icon: icon || 'info' });
+        } else {
+          alert(title + '\\n\\n' + message);
+        }
+      }
+
+      async function confirmIos(title, message, isDestructive, confirmText) {
+        if (typeof window.showIosConfirm === 'function') {
+          return await window.showIosConfirm({
+            title,
+            message,
+            isDestructive: isDestructive !== false,
+            confirmText: confirmText || (isDestructive ? 'Ya, Lanjutkan' : 'Konfirmasi')
+          });
+        } else {
+          return confirm(title + '\\n\\n' + message);
+        }
       }
 
       // 1. Toggle Maintenance Kill Switch
@@ -4967,10 +6013,16 @@ function getOperationalPanelScripts(panelPath) {
         btnMaint.addEventListener('click', async function() {
           const currentlyActive = btnMaint.getAttribute('data-active') === 'true';
           const newTarget = !currentlyActive;
-          const confirmMsg = newTarget
-            ? 'PERINGATAN: Mengaktifkan Kill Switch akan menutup seluruh fitur unggah berkas untuk semua pengguna publik (HTTP 503). Lanjutkan?'
-            : 'Aktifkan kembali layanan unggahan normal?';
-          if (!confirm(confirmMsg)) return;
+          
+          const confirmed = await confirmIos(
+            newTarget ? 'Aktifkan Kill Switch?' : 'Nonaktifkan Maintenance?',
+            newTarget
+              ? 'PERINGATAN: Mengaktifkan Kill Switch akan menutup seluruh akses upload publik (HTTP 503 Maintenance). Halaman admin tetap dapat diakses.'
+              : 'Layanan upload publik akan kembali dibuka secara normal untuk semua pengguna.',
+            newTarget,
+            newTarget ? 'Aktifkan Kill Switch' : 'Buka Layanan Normal'
+          );
+          if (!confirmed) return;
 
           try {
             btnMaint.disabled = true;
@@ -4984,11 +6036,11 @@ function getOperationalPanelScripts(panelPath) {
             if (data.success) {
               window.location.reload();
             } else {
-              alert('Gagal mengubah mode maintenance: ' + (data.error?.message || 'Unknown error'));
+              await alertIos('Gagal Mengubah Mode', data.error?.message || 'Terjadi kesalahan sistem.', 'danger');
               window.location.reload();
             }
           } catch (err) {
-            alert('Gagal menghubungi server.');
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
             window.location.reload();
           }
         });
@@ -5014,12 +6066,12 @@ function getOperationalPanelScripts(panelPath) {
             });
             const data = await res.json();
             if (data.success) {
-              alert('Banner pengumuman berhasil diperbarui.');
+              await alertIos('Pengumuman Disimpan', 'Banner pengumuman publik berhasil diperbarui.', 'success');
             } else {
-              alert('Gagal menyimpan pengumuman: ' + (data.error?.message || 'Error'));
+              await alertIos('Gagal Menyimpan', data.error?.message || 'Error', 'danger');
             }
           } catch (err) {
-            alert('Gagal menghubungi server.');
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
           } finally {
             btnSaveAnnounce.disabled = false;
             btnSaveAnnounce.textContent = 'Simpan Pengumuman';
@@ -5038,11 +6090,11 @@ function getOperationalPanelScripts(panelPath) {
           const pwaInstallPrompt = document.getElementById('flag-pwa').checked;
 
           if (isNaN(maxUploadMb) || maxUploadMb < 1 || maxUploadMb > 500) {
-            alert('Ukuran berkas harus antara 1 sampai 500 MB.');
+            await alertIos('Ukuran Berkas Tidak Valid', 'Batas ukuran berkas harus bernilai antara 1 sampai 500 MB.', 'warning');
             return;
           }
           if (isNaN(rateLimit) || rateLimit < 1 || rateLimit > 200) {
-            alert('Rate limit harus antara 1 sampai 200 upload/menit.');
+            await alertIos('Rate Limit Tidak Valid', 'Rate limit harus bernilai antara 1 sampai 200 upload/menit.', 'warning');
             return;
           }
 
@@ -5060,12 +6112,12 @@ function getOperationalPanelScripts(panelPath) {
             });
             const data = await res.json();
             if (data.success) {
-              alert('Konfigurasi dinamis & feature flags berhasil diperbarui.');
+              await alertIos('Konfigurasi Disimpan', 'Konfigurasi batas dinamis & feature flags berhasil diperbarui.', 'success');
             } else {
-              alert('Gagal menyimpan konfigurasi: ' + (data.error?.message || 'Error'));
+              await alertIos('Gagal Menyimpan', data.error?.message || 'Error', 'danger');
             }
           } catch (err) {
-            alert('Gagal menghubungi server.');
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
           } finally {
             btnSaveLimits.disabled = false;
             btnSaveLimits.textContent = 'Simpan Konfigurasi Dinamis';
@@ -5077,7 +6129,13 @@ function getOperationalPanelScripts(panelPath) {
       document.querySelectorAll('.btn-revoke-single').forEach(function(btn) {
         btn.addEventListener('click', async function() {
           const token = btn.getAttribute('data-token');
-          if (!confirm('Cabut sesi admin ini? Sesi tersebut akan langsung logout.')) return;
+          const confirmed = await confirmIos(
+            'Cabut Sesi Admin Ini?',
+            'Sesi pada perangkat tersebut akan langsung ditutup dan dipaksa logout.',
+            true,
+            'Cabut Sesi'
+          );
+          if (!confirmed) return;
 
           try {
             btn.disabled = true;
@@ -5091,15 +6149,16 @@ function getOperationalPanelScripts(panelPath) {
             if (data.success) {
               const row = document.getElementById('session-row-' + token);
               if (row) row.remove();
-              alert('Sesi berhasil dicabut.');
+              await alertIos('Sesi Dicabut', 'Sesi admin tersebut telah berhasil dinonaktifkan.', 'success');
             } else {
-              alert('Gagal mencabut sesi.');
+              await alertIos('Gagal Mencabut Sesi', data.error?.message || 'Gagal mencabut sesi.', 'danger');
               btn.disabled = false;
               btn.textContent = 'Cabut';
             }
           } catch (err) {
-            alert('Gagal menghubungi server.');
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
             btn.disabled = false;
+            btn.textContent = 'Cabut';
           }
         });
       });
@@ -5107,7 +6166,14 @@ function getOperationalPanelScripts(panelPath) {
       const btnRevokeAll = document.getElementById('btn-revoke-all-sessions');
       if (btnRevokeAll) {
         btnRevokeAll.addEventListener('click', async function() {
-          if (!confirm('Cabut SEMUA sesi admin lain? Hanya sesi Anda saat ini yang akan tetap aktif.')) return;
+          const confirmed = await confirmIos(
+            'Cabut Semua Sesi Lain?',
+            'Seluruh sesi admin pada perangkat lain akan langsung logout. Hanya sesi Anda saat ini yang akan tetap aktif.',
+            true,
+            'Cabut Semua Sesi Lain'
+          );
+          if (!confirmed) return;
+
           try {
             btnRevokeAll.disabled = true;
             btnRevokeAll.textContent = 'Memproses...';
@@ -5117,14 +6183,14 @@ function getOperationalPanelScripts(panelPath) {
             });
             const data = await res.json();
             if (data.success) {
-              alert('Berhasil mencabut ' + data.revokedCount + ' sesi lain.');
+              await alertIos('Berhasil', 'Berhasil mencabut ' + data.revokedCount + ' sesi admin lainnya.', 'success');
               window.location.reload();
             } else {
-              alert('Gagal mencabut semua sesi.');
+              await alertIos('Gagal', 'Gagal mencabut sesi admin lainnya.', 'danger');
               btnRevokeAll.disabled = false;
             }
           } catch (err) {
-            alert('Gagal menghubungi server.');
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
             btnRevokeAll.disabled = false;
           }
         });
@@ -5171,16 +6237,16 @@ function getOperationalPanelScripts(panelPath) {
 
                 previewItems.innerHTML = cachedCandidates.map(function(item) {
                   return '<div style="display: flex; justify-content: space-between; font-size: 0.75rem; padding: 0.3rem 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.05);">' +
-                    '<span style="font-weight: 600; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + (item.name || item.id) + '</span>' +
+                    '<span style="font-weight: 600; max-width: clamp(120px, 40vw, 250px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + (item.name || item.id) + '</span>' +
                     '<span style="color: var(--muted);">' + (item.formattedSize || '0 B') + ' | ' + (item.views || 0) + ' views</span>' +
                   '</div>';
                 }).join('');
               }
             } else {
-              alert('Gagal memuat pratinjau: ' + (data.error?.message || 'Error'));
+              await alertIos('Gagal Memuat Pratinjau', data.error?.message || 'Error', 'danger');
             }
           } catch (err) {
-            alert('Gagal menghubungi server.');
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
           } finally {
             btnPreviewCleanup.disabled = false;
             btnPreviewCleanup.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg> Pratinjau Berkas Terdampak';
@@ -5204,6 +6270,15 @@ function getOperationalPanelScripts(panelPath) {
 
         btnExecuteCleanup.addEventListener('click', async function() {
           if (confirmInput.value.trim() !== 'KONFIRMASI HAPUS MASSAL') return;
+          
+          const confirmed = await confirmIos(
+            'Hapus ' + cachedCandidates.length + ' Berkas Massal?',
+            'PERINGATAN: Tindakan ini bersifat PERMANEN dan akan menghapus seluruh berkas terpilih dari server penyimpanan Catbox.',
+            true,
+            'Hapus Massal Sekarang'
+          );
+          if (!confirmed) return;
+
           const olderThanDays = parseInt(document.getElementById('cleanup-older-than').value, 10);
           const maxViews = parseInt(document.getElementById('cleanup-max-views').value, 10);
 
@@ -5217,15 +6292,15 @@ function getOperationalPanelScripts(panelPath) {
             });
             const data = await res.json();
             if (data.success) {
-              alert('Pembersihan massal selesai! ' + data.data.succeeded + ' berkas berhasil dihapus permanen. Total storage dibebaskan: ' + data.data.formattedFreedBytes);
+              await alertIos('Pembersihan Selesai', data.data.succeeded + ' berkas berhasil dihapus permanen. Total storage dibebaskan: ' + data.data.formattedFreedBytes, 'success');
               window.location.reload();
             } else {
-              alert('Gagal menjalankan pembersihan massal: ' + (data.error?.message || 'Error'));
+              await alertIos('Gagal Eksekusi', data.error?.message || 'Error', 'danger');
               btnExecuteCleanup.disabled = false;
               btnExecuteCleanup.textContent = 'Jalankan Hapus Massal Permanen';
             }
           } catch (err) {
-            alert('Gagal menghubungi server.');
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
             btnExecuteCleanup.disabled = false;
           }
         });
@@ -5271,7 +6346,7 @@ function getOperationalPanelScripts(panelPath) {
         btnSearchDb.addEventListener('click', async function() {
           const q = searchInput.value.trim();
           if (!q) {
-            alert('Masukkan kata kunci pencarian.');
+            await alertIos('Pencarian', 'Masukkan kata kunci pencarian terlebih dahulu.', 'warning');
             return;
           }
           try {
@@ -5281,13 +6356,13 @@ function getOperationalPanelScripts(panelPath) {
             const data = await res.json();
             if (data.success) {
               const items = data.data.items || [];
-              alert('Ditemukan ' + items.length + ' berkas di seluruh database yang cocok dengan "' + q + '".');
+              await alertIos('Hasil Pencarian', 'Ditemukan ' + items.length + ' berkas di database yang cocok dengan "' + q + '".', 'info');
               filterTableLocally(q);
             } else {
-              alert('Pencarian gagal: ' + (data.error?.message || 'Error'));
+              await alertIos('Pencarian Gagal', data.error?.message || 'Error', 'danger');
             }
           } catch (err) {
-            alert('Gagal menghubungi server.');
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
           } finally {
             btnSearchDb.disabled = false;
             btnSearchDb.textContent = 'Cari di Seluruh DB';
@@ -5355,11 +6430,14 @@ function renderSyncSummaryHtml(check) {
       </div>`;
   }
   return `
-    <div class="sync-banner sync-banner-warn">
+    <div class="sync-banner sync-banner-warn" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
       <div>
         <strong>Ditemukan Berkas Bermasalah: ${check.brokenCount} Berkas Rusak / Yatim!</strong>
         <div style="font-size: 0.8rem; margin-top: 0.25rem;">${check.healthyCount} dari ${check.totalChecked} berkas aktif. Terdapat <strong>${check.brokenCount} tautan berkas</strong> yang sudah tidak ditemukan di Catbox (404/Error). Anda dapat membersihkannya dari riwayat di bawah.</div>
       </div>
+      <button type="button" id="btn-purge-all-broken" style="background: #ef4444; color: #fff; border: none; padding: 0.45rem 1rem; border-radius: 6px; font-size: 0.8rem; font-weight: 700; cursor: pointer; white-space: nowrap;">
+        Bersihkan Semua ${check.brokenCount} Berkas Rusak (404)
+      </button>
     </div>
     <div class="table-container" style="margin-top: 1rem;">
       <table>
@@ -5377,7 +6455,7 @@ function renderSyncSummaryHtml(check) {
     (item) => `
             <tr id="sync-row-${escapeHtml3(item.id)}">
               <td>
-                <div style="font-weight: 700; color: #f87171; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml3(
+                <div style="font-weight: 700; color: #f87171; max-width: clamp(120px, 40vw, 220px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml3(
       item.name
     )}">
                   ${escapeHtml3(item.name)}
@@ -5388,7 +6466,7 @@ function renderSyncSummaryHtml(check) {
               <td>
                 <a href="${escapeHtml3(
       item.shareUrl
-    )}" target="_blank" class="link-view" style="font-size: 0.75rem; color: var(--muted); max-width: 200px; display: inline-block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+    )}" target="_blank" class="link-view" style="font-size: 0.75rem; color: var(--muted); max-width: clamp(120px, 40vw, 220px); display: inline-block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                   ${escapeHtml3(item.shareUrl)}
                 </a>
               </td>
@@ -5460,14 +6538,14 @@ var adminController = {
    * GET /{ADMIN_PANEL_PATH}/login
    */
   async renderLoginPage(req, res) {
-    const { enabled, panelPath } = getAdminConfig();
+    const { enabled, panelPath: fullAdminPath } = getAdminConfig();
     if (!enabled) {
       res.status(404).send("<!DOCTYPE html><html><body>404 Not Found</body></html>");
       return;
     }
     const token = req.cookies?.[ADMIN_COOKIE_NAME];
     if (token && await verifyAdminSession(token)) {
-      res.redirect(`/${panelPath}/dashboard`);
+      res.redirect(`/${fullAdminPath}/dashboard`);
       return;
     }
     const errorParam = req.query.error;
@@ -5606,7 +6684,7 @@ var adminController = {
             <span>${escapeHtml3(errorMessage)}</span>
           </div>` : ""}
 
-    <form method="POST" action="/${escapeHtml3(panelPath)}/login">
+    <form method="POST" action="/${escapeHtml3(fullAdminPath)}/login">
       <div class="form-group">
         <label for="password">Kunci Sandi Admin (ADMIN_SECRET_KEY)</label>
         <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" autofocus />
@@ -5626,7 +6704,7 @@ var adminController = {
    * POST /{ADMIN_PANEL_PATH}/login
    */
   async handleLogin(req, res) {
-    const { enabled, panelPath } = getAdminConfig();
+    const { enabled, panelPath: fullAdminPath } = getAdminConfig();
     if (!enabled) {
       res.status(404).send("<!DOCTYPE html><html><body>404 Not Found</body></html>");
       return;
@@ -5643,12 +6721,12 @@ var adminController = {
       alertAdminLoginFailed(clientIp).catch((alertErr) => {
         console.warn("[TELEGRAM_ALERT_WARN] Gagal mengirim alert login admin gagal:", alertErr);
       });
-      res.redirect(`/${panelPath}/login?error=rate_limited&retryAfter=${rateLimit.retryAfterSeconds}`);
+      res.redirect(`/${fullAdminPath}/login?error=rate_limited&retryAfter=${rateLimit.retryAfterSeconds}`);
       return;
     }
     const password = req.body?.password;
     if (!password || typeof password !== "string") {
-      res.redirect(`/${panelPath}/login?error=invalid`);
+      res.redirect(`/${fullAdminPath}/login?error=invalid`);
       return;
     }
     const isValid = await verifyAdminPassword(password);
@@ -5659,7 +6737,7 @@ var adminController = {
         detail: "Percobaan login admin gagal dengan sandi tidak valid",
         ip: clientIp
       });
-      res.redirect(`/${panelPath}/login?error=invalid`);
+      res.redirect(`/${fullAdminPath}/login?error=invalid`);
       return;
     }
     const sessionToken = await createAdminSession(req);
@@ -5678,13 +6756,13 @@ var adminController = {
       // 1 hour
       path: "/"
     });
-    res.redirect(`/${panelPath}/dashboard`);
+    res.redirect(`/${fullAdminPath}/dashboard`);
   },
   /**
    * POST / GET /{ADMIN_PANEL_PATH}/logout
    */
   async handleLogout(req, res) {
-    const { enabled, panelPath } = getAdminConfig();
+    const { enabled, panelPath: fullAdminPath } = getAdminConfig();
     if (!enabled) {
       res.status(404).send("<!DOCTYPE html><html><body>404 Not Found</body></html>");
       return;
@@ -5705,13 +6783,13 @@ var adminController = {
       httpOnly: true,
       sameSite: "strict"
     });
-    res.redirect(`/${panelPath}/login`);
+    res.redirect(`/${fullAdminPath}/login`);
   },
   /**
    * GET /{ADMIN_PANEL_PATH}/dashboard
    */
   async renderDashboard(req, res) {
-    const { enabled, panelPath } = getAdminConfig();
+    const { enabled, panelPath: fullAdminPath } = getAdminConfig();
     if (!enabled) {
       res.status(404).send("<!DOCTYPE html><html><body>404 Not Found</body></html>");
       return;
@@ -5729,7 +6807,8 @@ var adminController = {
       lastSyncCheck,
       systemConfig,
       activeSessions,
-      auditLogs
+      auditLogs,
+      deletedFiles
     ] = await Promise.all([
       analyticsRepository.getDailySummary(todayStr),
       analyticsRepository.getWeeklyTrend(),
@@ -5741,7 +6820,8 @@ var adminController = {
       getLastSyncCheck(),
       getAllSystemConfig(),
       getAllActiveSessions(currentToken),
-      auditLogRepository.getRecentActions(50)
+      auditLogRepository.getRecentActions(50),
+      deletedFilesRepository.getDeletedFiles(100)
     ]);
     const mediaRepo = getMediaRepository();
     const topFiles = await Promise.all(
@@ -5798,23 +6878,34 @@ var adminController = {
   <title>AirShare Pro \u2014 Analytics &amp; Admin Dashboard</title>
   <style>
     :root {
-      --bg: #09090b;
-      --card: #141417;
-      --card-elevated: #1c1c21;
+      --bg: #0e0e11;
+      --surface-primary: rgba(22, 22, 26, 0.94);
+      --card: #16161a;
+      --card-elevated: #1e1e24;
       --border: rgba(255, 255, 255, 0.08);
-      --border-accent: rgba(37, 99, 235, 0.3);
-      --text: #f4f4f5;
-      --muted: #a1a1aa;
+      --border-subtle: rgba(255, 255, 255, 0.06);
+      --border-hover: rgba(255, 255, 255, 0.16);
+      --border-accent: rgba(59, 130, 246, 0.35);
+      --text: #f5f5f7;
+      --fg: #f5f5f7;
+      --muted: #94949b;
       --accent: #3b82f6;
       --accent-dark: #1d4ed8;
+      --accent-soft: rgba(59, 130, 246, 0.12);
+      --accent-soft-hover: rgba(59, 130, 246, 0.2);
       --success: #10b981;
+      --success-soft: rgba(16, 185, 129, 0.12);
       --warning: #f59e0b;
+      --warning-soft: rgba(245, 158, 11, 0.15);
       --danger: #ef4444;
-      --surface-glass: rgba(20, 20, 23, 0.7);
+      --danger-soft: rgba(239, 68, 68, 0.15);
+      --surface-glass: rgba(22, 22, 26, 0.85);
+      --shadow-subtle: 0 4px 16px -2px rgba(0, 0, 0, 0.35);
+      --shadow-elevated: 0 16px 36px -4px rgba(0, 0, 0, 0.55);
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     body { background-color: var(--bg); color: var(--text); padding: 1.25rem; min-height: 100vh; }
-    .container { max-width: 1240px; margin: 0 auto; }
+    .container { max-width: 1280px; margin: 0 auto; }
 
     /* Header & Navigation */
     .top-nav {
@@ -5828,7 +6919,7 @@ var adminController = {
       backdrop-filter: blur(12px);
       border: 1px solid var(--border);
       border-radius: 1.25rem;
-      margin-bottom: 1.5rem;
+      margin-bottom: 1.25rem;
     }
     .brand { display: flex; align-items: center; gap: 0.75rem; }
     .brand-logo {
@@ -5874,6 +6965,186 @@ var adminController = {
     }
     .btn-logout:hover { background: rgba(239, 68, 68, 0.2); color: #f87171; border-color: rgba(239, 68, 68, 0.3); }
 
+    /* Layout & Sidebar Nav */
+    .admin-layout {
+      display: flex;
+      gap: 1.5rem;
+      align-items: flex-start;
+    }
+    .admin-sidebar {
+      width: 240px;
+      flex-shrink: 0;
+      position: sticky;
+      top: 1.25rem;
+      max-height: calc(100vh - 2.5rem);
+      overflow-y: auto;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 1.25rem;
+      padding: 0.85rem;
+      box-shadow: var(--shadow-subtle);
+    }
+    .sidebar-title {
+      font-size: 0.7rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      padding: 0.45rem 0.65rem 0.65rem;
+      border-bottom: 1px solid var(--border-subtle);
+      margin-bottom: 0.5rem;
+    }
+    .sidebar-nav {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+    .admin-sidebar-btn {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      width: 100%;
+      text-align: left;
+      padding: 0.65rem 0.75rem;
+      border-radius: 0.75rem;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .admin-sidebar-btn:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+    }
+    .admin-sidebar-btn.active {
+      background: var(--accent-soft);
+      border-color: var(--border-accent);
+      color: #60a5fa;
+    }
+    .admin-sidebar-btn.active .sidebar-btn-title {
+      color: #60a5fa;
+    }
+    .sidebar-btn-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 0.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.04);
+      flex-shrink: 0;
+      color: inherit;
+      transition: background 0.15s ease;
+    }
+    .admin-sidebar-btn.active .sidebar-btn-icon {
+      background: rgba(59, 130, 246, 0.2);
+      color: #60a5fa;
+    }
+    .sidebar-btn-content {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .sidebar-btn-title {
+      font-size: 0.825rem;
+      font-weight: 700;
+      line-height: 1.25;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .sidebar-btn-desc {
+      font-size: 0.675rem;
+      color: var(--muted);
+      line-height: 1.2;
+      margin-top: 0.15rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .admin-main {
+      flex: 1;
+      min-width: 0;
+    }
+
+    /* Mobile Category Tabs */
+    .admin-mobile-tabs {
+      display: none;
+      gap: 0.5rem;
+      overflow-x: auto;
+      padding-bottom: 0.75rem;
+      margin-bottom: 1rem;
+      -webkit-overflow-scrolling: touch;
+      touch-action: pan-x;
+      scrollbar-width: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .admin-mobile-tabs::-webkit-scrollbar {
+      display: none;
+    }
+    .admin-tab-btn {
+      flex-shrink: 0;
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.55rem 0.95rem;
+      border-radius: 9999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .admin-tab-btn:hover {
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text);
+    }
+    .admin-tab-btn:active {
+      transform: scale(0.96);
+      background: rgba(255, 255, 255, 0.1);
+    }
+    .admin-tab-btn.active {
+      background: var(--accent);
+      color: #ffffff;
+      border-color: var(--accent);
+      font-weight: 700;
+      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.35);
+    }
+    .admin-sidebar-btn {
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      -webkit-user-select: none;
+      cursor: pointer;
+    }
+    .admin-sidebar-btn:active {
+      transform: scale(0.98);
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    /* Category Panel Toggle */
+    .category-panel {
+      display: none;
+    }
+    .category-panel.active {
+      display: block;
+      animation: fadeIn 0.2s ease-in-out;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
     /* Summary Metric Grid */
     .metrics-grid {
       display: grid;
@@ -5888,6 +7159,7 @@ var adminController = {
       padding: 1.25rem 1.5rem;
       position: relative;
       overflow: hidden;
+      box-shadow: var(--shadow-subtle);
     }
     .metric-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
     .metric-label { font-size: 0.8rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
@@ -5902,15 +7174,13 @@ var adminController = {
       gap: 1.25rem;
       margin-bottom: 1.5rem;
     }
-    @media (max-width: 900px) {
-      .section-grid { grid-template-columns: 1fr; }
-    }
 
     .panel {
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 1.25rem;
       padding: 1.5rem;
+      box-shadow: var(--shadow-subtle);
     }
     .panel-header {
       display: flex;
@@ -5942,25 +7212,369 @@ var adminController = {
     .country-info { display: flex; align-items: center; gap: 0.6rem; }
     .country-flag { width: 20px; height: 14px; object-fit: cover; border-radius: 2px; }
 
-    /* Recommendations */
-    .rec-box {
-      background: rgba(37, 99, 235, 0.08);
-      border: 1px solid rgba(37, 99, 235, 0.2);
-      border-radius: 1rem;
-      padding: 1.25rem;
+    /* Gemini AI Recommendations & Real-Time Summary Box */
+    .ai-rec-box {
+      background: linear-gradient(180deg, rgba(37, 99, 235, 0.1) 0%, rgba(30, 58, 138, 0.04) 100%);
+      border: 1px solid rgba(59, 130, 246, 0.28);
+      border-radius: 1.25rem;
+      padding: 1.35rem 1.5rem;
       margin-bottom: 1.5rem;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 0 15px rgba(59, 130, 246, 0.08);
+      position: relative;
+      overflow: hidden;
     }
-    .rec-header { display: flex; align-items: center; gap: 0.5rem; font-size: 0.95rem; font-weight: 800; color: #93c5fd; margin-bottom: 0.75rem; }
-    .rec-list { list-style: none; display: flex; flex-direction: column; gap: 0.65rem; }
-    .rec-item { display: flex; align-items: flex-start; gap: 0.6rem; font-size: 0.85rem; line-height: 1.5; color: var(--text); }
-    .rec-bullet { color: #60a5fa; flex-shrink: 0; margin-top: 0.15rem; }
+    .ai-rec-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid rgba(59, 130, 246, 0.15);
+    }
+    .ai-rec-title-group {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+    }
+    .ai-rec-sparkle-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #ffffff;
+      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+      flex-shrink: 0;
+    }
+    .ai-rec-title {
+      font-size: 0.975rem;
+      font-weight: 800;
+      color: #e0f2fe;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .ai-rec-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .ai-badge-model {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.7rem;
+      font-weight: 700;
+      background: rgba(59, 130, 246, 0.15);
+      border: 1px solid rgba(59, 130, 246, 0.35);
+      color: #93c5fd;
+      padding: 0.2rem 0.55rem;
+      border-radius: 9999px;
+      letter-spacing: 0.02em;
+    }
+    .ai-badge-pulse {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #60a5fa;
+      box-shadow: 0 0 6px #60a5fa;
+      animation: pulseDot 2s infinite ease-in-out;
+    }
+    @keyframes pulseDot {
+      0%, 100% { opacity: 0.4; transform: scale(0.9); }
+      50% { opacity: 1; transform: scale(1.2); }
+    }
+    .btn-ai-refresh {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 0.35rem 0.75rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      transition: all 0.2s ease;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+    .btn-ai-refresh:hover {
+      background: rgba(59, 130, 246, 0.2);
+      border-color: rgba(59, 130, 246, 0.4);
+      color: #ffffff;
+    }
+    .btn-ai-refresh:active {
+      transform: scale(0.95);
+    }
+    .btn-ai-refresh:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    /* AI Executive Summary Card */
+    .ai-summary-card {
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-left: 3px solid #3b82f6;
+      border-radius: 10px;
+      padding: 0.95rem 1.15rem;
+      margin-bottom: 1rem;
+      font-size: 0.85rem;
+      line-height: 1.6;
+      color: #f1f5f9;
+    }
+    .ai-summary-label {
+      font-size: 0.725rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #60a5fa;
+      margin-bottom: 0.35rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    /* Recommendations List */
+    .ai-recs-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      padding: 0;
+      margin: 0;
+    }
+    .ai-list-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.65rem;
+      font-size: 0.85rem;
+      line-height: 1.55;
+      color: #e2e8f0;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      padding: 0.65rem 0.85rem;
+      border-radius: 8px;
+    }
+    .ai-bullet {
+      color: #60a5fa;
+      flex-shrink: 0;
+      font-size: 0.85rem;
+      margin-top: 0.15rem;
+    }
+    .ai-num-badge {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: rgba(59, 130, 246, 0.2);
+      color: #93c5fd;
+      font-size: 0.7rem;
+      font-weight: 800;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: 0.15rem;
+    }
+    .ai-item-body {
+      flex: 1;
+      min-width: 0;
+    }
+    .ai-bold {
+      font-weight: 700;
+      color: #ffffff;
+    }
+    .ai-italic {
+      font-style: italic;
+      color: #93c5fd;
+    }
+    .ai-code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.75rem;
+      background: rgba(255, 255, 255, 0.08);
+      color: #fde047;
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .ai-heading-3 {
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: #93c5fd;
+      margin: 0.5rem 0 0.25rem;
+    }
+    .ai-meta-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 0.9rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      font-size: 0.725rem;
+      color: var(--muted);
+    }
+
+    /* Custom Loading Skeleton */
+    .ai-skeleton-container {
+      display: none;
+      flex-direction: column;
+      gap: 0.85rem;
+    }
+    .ai-skeleton-status {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 0.8rem;
+      color: #93c5fd;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+    }
+    .ai-skeleton-pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #3b82f6;
+      box-shadow: 0 0 8px #3b82f6;
+      animation: pulseDot 1.2s infinite ease-in-out;
+    }
+    .skeleton-shimmer {
+      background: linear-gradient(90deg, rgba(255, 255, 255, 0.03) 25%, rgba(255, 255, 255, 0.09) 50%, rgba(255, 255, 255, 0.03) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite linear;
+      border-radius: 6px;
+    }
+    @keyframes shimmer {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .skeleton-card {
+      height: 74px;
+      border-radius: 10px;
+      width: 100%;
+    }
+    .skeleton-row {
+      height: 44px;
+      border-radius: 8px;
+      width: 100%;
+    }
+
+    /* Error Notification Container */
+    .ai-error-box {
+      display: none;
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.28);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      margin-top: 0.5rem;
+    }
+    .ai-error-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: #f87171;
+      font-size: 0.85rem;
+      font-weight: 700;
+      margin-bottom: 0.4rem;
+    }
+    .ai-error-desc {
+      font-size: 0.8rem;
+      color: #fca5a5;
+      line-height: 1.5;
+      margin-bottom: 0.85rem;
+    }
+    .ai-error-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+    }
+    .btn-ai-retry {
+      background: #ef4444;
+      color: #ffffff;
+      border: none;
+      border-radius: 6px;
+      padding: 0.35rem 0.85rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      touch-action: manipulation;
+    }
+    .btn-ai-fallback {
+      background: rgba(255, 255, 255, 0.06);
+      color: #e2e8f0;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 6px;
+      padding: 0.35rem 0.85rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
 
     /* Tables */
-    .table-container { overflow-x: auto; margin-top: 0.5rem; }
-    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.85rem; }
-    th { padding: 0.75rem 1rem; font-size: 0.725rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1px solid var(--border); }
-    td { padding: 0.75rem 1rem; border-bottom: 1px solid rgba(255, 255, 255, 0.04); vertical-align: middle; }
-    tr:hover td { background: rgba(255, 255, 255, 0.02); }
+    .table-container {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      margin-top: 0.5rem;
+      border-radius: 0.75rem;
+      border: 1px solid var(--border);
+      background: rgba(0, 0, 0, 0.18);
+      position: relative;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+    }
+    .table-container::-webkit-scrollbar {
+      height: 6px;
+      width: 6px;
+    }
+    .table-container::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .table-container::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 9999px;
+    }
+    table {
+      width: 100%;
+      min-width: 600px;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.85rem;
+    }
+    th {
+      padding: 0.75rem 0.9rem;
+      font-size: 0.725rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    td {
+      padding: 0.75rem 0.9rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      vertical-align: middle;
+    }
+    tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
     .badge-type { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 6px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; }
     .badge-image { background: rgba(16, 185, 129, 0.15); color: #34d399; }
     .badge-video { background: rgba(139, 92, 246, 0.15); color: #a78bfa; }
@@ -5969,6 +7583,124 @@ var adminController = {
     .session-tag { font-family: monospace; font-size: 0.75rem; color: var(--muted); background: rgba(255, 255, 255, 0.05); padding: 0.15rem 0.4rem; border-radius: 4px; }
     .link-view { color: var(--accent); text-decoration: none; font-weight: 600; }
     .link-view:hover { text-decoration: underline; }
+
+    /* iOS Alert & Confirmation Modal (Super Lightweight, No Backdrop-Blur) */
+    .ios-modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.75);
+      z-index: 99999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.25rem;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none; /* CRITICAL FIX: prevents touch blocking when modal is not active */
+      transition: opacity 0.18s ease, visibility 0.18s ease;
+    }
+    .ios-modal-overlay.active {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+    }
+    .ios-modal-box {
+      background: #18181b;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 14px;
+      width: 100%;
+      max-width: 320px;
+      box-shadow: 0 20px 40px -8px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.04);
+      text-align: center;
+      overflow: hidden;
+      transform: scale(0.92);
+      transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .ios-modal-overlay.active .ios-modal-box {
+      transform: scale(1);
+    }
+    .ios-modal-body-content {
+      padding: 1.35rem 1.15rem 1.15rem;
+    }
+    .ios-modal-icon-badge {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      margin: 0 auto 0.85rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .ios-modal-icon-danger {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    .ios-modal-icon-warning {
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+    .ios-modal-icon-info {
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+    .ios-modal-icon-success {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .ios-modal-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: #ffffff;
+      line-height: 1.3;
+      margin-bottom: 0.45rem;
+    }
+    .ios-modal-desc {
+      font-size: 0.825rem;
+      color: #a1a1aa;
+      line-height: 1.45;
+      word-break: break-word;
+      white-space: pre-line;
+    }
+    .ios-modal-actions-row {
+      display: flex;
+      border-top: 1px solid rgba(255, 255, 255, 0.12);
+    }
+    .ios-modal-btn {
+      flex: 1;
+      background: transparent;
+      border: none;
+      font-size: 0.95rem;
+      padding: 0.85rem 0.5rem;
+      cursor: pointer;
+      transition: background 0.15s ease;
+      outline: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      font-family: inherit;
+    }
+    .ios-modal-btn:active, .ios-modal-btn:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .ios-modal-btn-cancel {
+      color: #94a3b8;
+      font-weight: 500;
+      border-right: 1px solid rgba(255, 255, 255, 0.12);
+    }
+    .ios-modal-btn-danger {
+      color: #f87171;
+      font-weight: 700;
+    }
+    .ios-modal-btn-primary {
+      color: #60a5fa;
+      font-weight: 700;
+    }
 
     /* Action buttons & Sync UI */
     .btn-delete-perm {
@@ -6075,11 +7807,56 @@ var adminController = {
       font-size: 0.775rem;
       color: var(--muted);
       margin-top: 1.5rem;
+      box-shadow: var(--shadow-subtle);
     }
     .health-item { display: flex; align-items: center; gap: 0.5rem; }
     .status-indicator { width: 8px; height: 8px; border-radius: 50%; }
     .status-ok { background: var(--success); box-shadow: 0 0 6px var(--success); }
     .status-warn { background: var(--warning); box-shadow: 0 0 6px var(--warning); }
+
+    /* Media Queries */
+    @media (max-width: 900px) {
+      .admin-layout {
+        display: block;
+      }
+      .admin-sidebar {
+        display: none;
+      }
+      .admin-mobile-tabs {
+        display: flex;
+      }
+      .section-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      body {
+        padding: 0.75rem;
+      }
+      .top-nav {
+        padding: 0.85rem 1rem;
+        border-radius: 1rem;
+        margin-bottom: 1rem;
+      }
+      .panel {
+        padding: 1rem;
+        border-radius: 1rem;
+      }
+      .metric-card {
+        padding: 1rem 1.1rem;
+        border-radius: 1rem;
+      }
+      .rec-box {
+        padding: 1rem;
+        border-radius: 1rem;
+      }
+      .health-bar {
+        padding: 0.85rem 1rem;
+        border-radius: 1rem;
+      }
+    }
+
     ${getOperationalPanelStyles()}
   </style>
 </head>
@@ -6104,7 +7881,7 @@ var adminController = {
             <span class="live-sync-time" id="live-sync-time">Terakhir sinkron: ${escapeHtml3(initialTimeFormatted)}</span>
           </div>
         </div>
-        <form method="POST" action="/${escapeHtml3(panelPath)}/logout" style="margin:0;">
+        <form id="form-logout" method="POST" action="/${escapeHtml3(fullAdminPath)}/logout" style="margin:0;">
           <button type="submit" class="btn-logout">Keluar (Logout)</button>
         </form>
       </div>
@@ -6113,322 +7890,602 @@ var adminController = {
     <!-- Admin Notification Toast / Banner -->
     <div id="admin-toast-banner" style="display:none; margin-bottom: 1.5rem; padding: 0.85rem 1.25rem; border-radius: 0.75rem; font-size: 0.85rem; font-weight: 600; align-items: center; justify-content: space-between;"></div>
 
-    <!-- 4 Big Number Summaries for Today -->
-    <section class="metrics-grid">
-      <div class="metric-card">
-        <div class="metric-header">
-          <span class="metric-label">Unggahan Hari Ini</span>
-          <div class="metric-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          </div>
-        </div>
-        <div class="metric-value" id="stat-uploads">${todayStats.uploads.toLocaleString("id-ID")}</div>
-        <div class="metric-sub">Total berkas baru diproses</div>
-      </div>
+    <!-- Mobile Category Tabs -->
+    <nav class="admin-mobile-tabs" aria-label="Kategori Panel Mobile">
+      <button type="button" class="admin-tab-btn active" data-category="ringkasan">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+        <span>Ringkasan</span>
+      </button>
+      <button type="button" class="admin-tab-btn" data-category="analitik">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        <span>Analitik</span>
+      </button>
+      <button type="button" class="admin-tab-btn" data-category="kontrol">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span>Kontrol Sistem</span>
+      </button>
+      <button type="button" class="admin-tab-btn" data-category="keamanan">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        <span>Keamanan &amp; Sesi</span>
+      </button>
+      <button type="button" class="admin-tab-btn" data-category="data">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span>Pengelolaan Data</span>
+      </button>
+      <button type="button" class="admin-tab-btn" data-category="terhapus" id="tab-btn-terhapus">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+        <span>Berkas Terhapus (${deletedFiles.length})</span>
+      </button>
+    </nav>
 
-      <div class="metric-card">
-        <div class="metric-header">
-          <span class="metric-label">Volume Data Hari Ini</span>
-          <div class="metric-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18h12"/><path d="M6 14h12"/><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/></svg>
-          </div>
-        </div>
-        <div class="metric-value" id="stat-bytes">${escapeHtml3(todayStats.formattedBytes)}</div>
-        <div class="metric-sub">Total throughput data unggahan</div>
-      </div>
+    <!-- Main Layout with Desktop Sidebar -->
+    <div class="admin-layout">
+      <!-- Desktop Sidebar Sticky Nav -->
+      <aside class="admin-sidebar" aria-label="Navigasi Kategori Admin">
+        <div class="sidebar-title">Menu Utama</div>
+        <nav class="sidebar-nav">
+          <button type="button" class="admin-sidebar-btn active" data-category="ringkasan">
+            <div class="sidebar-btn-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+            </div>
+            <div class="sidebar-btn-content">
+              <span class="sidebar-btn-title">Ringkasan</span>
+              <span class="sidebar-btn-desc">Metrik &amp; Rekomendasi</span>
+            </div>
+          </button>
+          <button type="button" class="admin-sidebar-btn" data-category="analitik">
+            <div class="sidebar-btn-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+            </div>
+            <div class="sidebar-btn-content">
+              <span class="sidebar-btn-title">Analitik</span>
+              <span class="sidebar-btn-desc">Tren, Media &amp; Geolokasi</span>
+            </div>
+          </button>
+          <button type="button" class="admin-sidebar-btn" data-category="kontrol">
+            <div class="sidebar-btn-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </div>
+            <div class="sidebar-btn-content">
+              <span class="sidebar-btn-title">Kontrol Sistem</span>
+              <span class="sidebar-btn-desc">Kill Switch &amp; Sinkronisasi</span>
+            </div>
+          </button>
+          <button type="button" class="admin-sidebar-btn" data-category="keamanan">
+            <div class="sidebar-btn-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            </div>
+            <div class="sidebar-btn-content">
+              <span class="sidebar-btn-title">Keamanan &amp; Sesi</span>
+              <span class="sidebar-btn-desc">Sesi Aktif &amp; Log Audit</span>
+            </div>
+          </button>
+          <button type="button" class="admin-sidebar-btn" data-category="data">
+            <div class="sidebar-btn-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </div>
+            <div class="sidebar-btn-content">
+              <span class="sidebar-btn-title">Pengelolaan Data</span>
+              <span class="sidebar-btn-desc">Riwayat Unggahan &amp; Cleanup</span>
+            </div>
+          </button>
+          <button type="button" class="admin-sidebar-btn" data-category="terhapus" id="sidebar-btn-terhapus">
+            <div class="sidebar-btn-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+            </div>
+            <div class="sidebar-btn-content">
+              <span class="sidebar-btn-title">Berkas Terhapus</span>
+              <span class="sidebar-btn-desc">Arsip Terhapus (${deletedFiles.length})</span>
+            </div>
+          </button>
+        </nav>
+      </aside>
 
-      <div class="metric-card">
-        <div class="metric-header">
-          <span class="metric-label">Kunjungan Berkas Hari Ini</span>
-          <div class="metric-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
-          </div>
-        </div>
-        <div class="metric-value" id="stat-views">${todayStats.totalViews.toLocaleString("id-ID")}</div>
-        <div class="metric-sub">Akses laman share publik (/s/:id)</div>
-      </div>
+      <!-- Main Categorized Content Panels -->
+      <main class="admin-main">
+        <!-- 1. Kategori: Ringkasan -->
+        <div class="category-panel active" data-category-panel="ringkasan">
+          <!-- 4 Big Number Summaries for Today -->
+          <section class="metrics-grid">
+            <div class="metric-card">
+              <div class="metric-header">
+                <span class="metric-label">Unggahan Hari Ini</span>
+                <div class="metric-icon">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                </div>
+              </div>
+              <div class="metric-value" id="stat-uploads">${todayStats.uploads.toLocaleString("id-ID")}</div>
+              <div class="metric-sub">Total berkas baru diproses</div>
+            </div>
 
-      <div class="metric-card">
-        <div class="metric-header">
-          <span class="metric-label">Rata-rata Ukuran Berkas</span>
-          <div class="metric-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 4.24 4.24"/><path d="m14.83 9.17 4.24-4.24"/><path d="m14.83 14.83 4.24 4.24"/><path d="m9.17 14.83-4.24 4.24"/></svg>
-          </div>
-        </div>
-        <div class="metric-value" id="stat-avg">${escapeHtml3(todayStats.formattedAverageSize)}</div>
-        <div class="metric-sub">Ukuran rata-rata per berkas</div>
-      </div>
-    </section>
+            <div class="metric-card">
+              <div class="metric-header">
+                <span class="metric-label">Volume Data Hari Ini</span>
+                <div class="metric-icon">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18h12"/><path d="M6 14h12"/><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/></svg>
+                </div>
+              </div>
+              <div class="metric-value" id="stat-bytes">${escapeHtml3(todayStats.formattedBytes)}</div>
+              <div class="metric-sub">Total throughput data unggahan</div>
+            </div>
 
-    <!-- Automated Recommendations Section -->
-    <section class="rec-box">
-      <div class="rec-header">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
-        Rekomendasi Sistem Otomatis
-      </div>
-      <ul class="rec-list">
-        ${recommendations.map(
-      (r) => `<li class="rec-item"><span class="rec-bullet">\u2726</span><span>${escapeHtml3(
+            <div class="metric-card">
+              <div class="metric-header">
+                <span class="metric-label">Kunjungan Berkas Hari Ini</span>
+                <div class="metric-icon">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+                </div>
+              </div>
+              <div class="metric-value" id="stat-views">${todayStats.totalViews.toLocaleString("id-ID")}</div>
+              <div class="metric-sub">Akses laman share publik (/s/:id)</div>
+            </div>
+
+            <div class="metric-card">
+              <div class="metric-header">
+                <span class="metric-label">Rata-rata Ukuran Berkas</span>
+                <div class="metric-icon">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 4.24 4.24"/><path d="m14.83 9.17 4.24-4.24"/><path d="m14.83 14.83 4.24 4.24"/><path d="m9.17 14.83-4.24 4.24"/></svg>
+                </div>
+              </div>
+              <div class="metric-value" id="stat-avg">${escapeHtml3(todayStats.formattedAverageSize)}</div>
+              <div class="metric-sub">Ukuran rata-rata per berkas</div>
+            </div>
+          </section>
+
+          <!-- Automated Recommendations & Gemini AI Real-Time Analysis Section -->
+          <section class="ai-rec-box" id="ai-rec-section">
+            <div class="ai-rec-header">
+              <div class="ai-rec-title-group">
+                <div class="ai-rec-sparkle-icon">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+                </div>
+                <div>
+                  <div class="ai-rec-title">
+                    Rekomendasi Sistem Otomatis &amp; Analisis Real-Time
+                  </div>
+                  <div style="font-size: 0.725rem; color: var(--muted); margin-top: 0.15rem;">
+                    Insight prediktif kapasitas &amp; arsitektur bertenaga Google Gemini
+                  </div>
+                </div>
+              </div>
+
+              <div class="ai-rec-actions">
+                <span class="ai-badge-model" id="ai-rec-model-badge">
+                  <span class="ai-badge-pulse"></span>
+                  <span id="ai-rec-model-label">Gemini 3.8 Flash</span>
+                </span>
+                <button type="button" class="btn-ai-refresh" id="btn-refresh-ai-rec" title="Minta Gemini AI menganalisis data metrik sistem terkini">
+                  <svg id="ai-refresh-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                  <span id="ai-refresh-text">Analisis AI</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Custom Loading Skeleton (Shown during Gemini AI generation) -->
+            <div class="ai-skeleton-container" id="ai-rec-skeleton">
+              <div class="ai-skeleton-status">
+                <span class="ai-skeleton-pulse-dot"></span>
+                <span>Gemini sedang memproses data metrik sistem dan tren berkas secara real-time...</span>
+              </div>
+              <div class="skeleton-shimmer skeleton-card"></div>
+              <div class="skeleton-shimmer skeleton-row"></div>
+              <div class="skeleton-shimmer skeleton-row"></div>
+              <div class="skeleton-shimmer skeleton-row" style="width: 85%;"></div>
+            </div>
+
+            <!-- AI Content Container -->
+            <div id="ai-rec-content">
+              <!-- Executive Summary -->
+              <div class="ai-summary-card" id="ai-rec-summary-card">
+                <div class="ai-summary-label">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                  Ringkasan Eksekutif Real-Time
+                </div>
+                <div id="ai-rec-summary-text">
+                  Infrastruktur AirShare Pro beroperasi pada mode ${escapeHtml3(storageMode)} dengan ${todayStats.uploads} unggahan (${escapeHtml3(todayStats.formattedBytes)}) dan ${todayStats.totalViews} tayangan hari ini.
+                </div>
+              </div>
+
+              <!-- Recommendation List -->
+              <ul class="ai-recs-list" id="ai-rec-list">
+                ${recommendations.map(
+      (r) => `<li class="ai-list-item"><span class="ai-bullet">\u2726</span><div class="ai-item-body">${escapeHtml3(
         r
-      )}</span></li>`
+      )}</div></li>`
     ).join("")}
-      </ul>
-    </section>
+              </ul>
 
-    <!-- 7-Day Trend & Media Type Distribution -->
-    <div class="section-grid">
-      <!-- 7-Day Trend Chart -->
-      <section class="panel">
-        <div class="panel-header">
-          <h2 class="panel-title">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-            Tren Unggahan 7 Hari Terakhir
-          </h2>
-          <span class="panel-badge">Aktivitas Harian</span>
+              <div class="ai-meta-footer">
+                <span id="ai-rec-timestamp">Status data terkini: ${initialTimeFormatted}</span>
+                <span style="color: var(--muted);">Dianalisis langsung dari metrik analitik &amp; penyimpanan hulu</span>
+              </div>
+            </div>
+
+            <!-- Error Notification Container -->
+            <div class="ai-error-box" id="ai-rec-error">
+              <div class="ai-error-header">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                <span>Gagal Memuat Analisis Gemini AI</span>
+              </div>
+              <div class="ai-error-desc" id="ai-rec-error-msg">
+                Terjadi kendala saat menghubungi Gemini AI.
+              </div>
+              <div class="ai-error-actions">
+                <button type="button" class="btn-ai-retry" id="btn-ai-retry">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                  Coba Lagi
+                </button>
+                <button type="button" class="btn-ai-fallback" id="btn-ai-use-fallback">
+                  Gunakan Rekomendasi Heuristik
+                </button>
+              </div>
+            </div>
+          </section>
         </div>
-        <div class="chart-container">
-          <div class="chart-bars">
-            ${weeklyTrend.map((d) => {
+
+        <!-- 2. Kategori: Analitik -->
+        <div class="category-panel" data-category-panel="analitik">
+          <!-- 7-Day Trend & Media Type Distribution -->
+          <div class="section-grid">
+            <!-- 7-Day Trend Chart -->
+            <section class="panel">
+              <div class="panel-header">
+                <h2 class="panel-title">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                  Tren Unggahan 7 Hari Terakhir
+                </h2>
+                <span class="panel-badge">Aktivitas Harian</span>
+              </div>
+              <div class="chart-container">
+                <div class="chart-bars">
+                  ${weeklyTrend.map((d) => {
       const heightPercent = Math.max(8, Math.round(d.uploads / maxDailyUploads * 100));
       return `
-                <div class="chart-col">
-                  <div class="chart-tooltip-label">${d.uploads}</div>
-                  <div class="chart-bar" style="height: ${heightPercent}%;" title="${d.date}: ${d.uploads} uploads (${d.formattedBytes})"></div>
-                  <div class="chart-date">${d.date.slice(5)}</div>
-                </div>`;
+                      <div class="chart-col">
+                        <div class="chart-tooltip-label">${d.uploads}</div>
+                        <div class="chart-bar" style="height: ${heightPercent}%;" title="${d.date}: ${d.uploads} uploads (${d.formattedBytes})"></div>
+                        <div class="chart-date">${d.date.slice(5)}</div>
+                      </div>`;
     }).join("")}
-          </div>
-        </div>
-      </section>
+                </div>
+              </div>
+            </section>
 
-      <!-- Distribution by Media Type -->
-      <section class="panel">
-        <div class="panel-header">
-          <h2 class="panel-title">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>
-            Distribusi Media Hari Ini
-          </h2>
-          <span class="panel-badge">${totalUploadedToday} berkas</span>
-        </div>
+            <!-- Distribution by Media Type -->
+            <section class="panel">
+              <div class="panel-header">
+                <h2 class="panel-title">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>
+                  Distribusi Media Hari Ini
+                </h2>
+                <span class="panel-badge">${totalUploadedToday} berkas</span>
+              </div>
 
-        <div class="dist-item">
-          <div class="dist-header">
-            <span>Foto / Gambar</span>
-            <span>${typeCounts.image} (${totalUploadedToday > 0 ? Math.round(typeCounts.image / totalUploadedToday * 100) : 0}%)</span>
-          </div>
-          <div class="dist-bar-track">
-            <div class="dist-bar-fill" style="width: ${totalUploadedToday > 0 ? typeCounts.image / totalUploadedToday * 100 : 0}%; background: #10b981;"></div>
-          </div>
-        </div>
+              <div class="dist-item">
+                <div class="dist-header">
+                  <span>Foto / Gambar</span>
+                  <span>${typeCounts.image} (${totalUploadedToday > 0 ? Math.round(typeCounts.image / totalUploadedToday * 100) : 0}%)</span>
+                </div>
+                <div class="dist-bar-track">
+                  <div class="dist-bar-fill" style="width: ${totalUploadedToday > 0 ? typeCounts.image / totalUploadedToday * 100 : 0}%; background: #10b981;"></div>
+                </div>
+              </div>
 
-        <div class="dist-item">
-          <div class="dist-header">
-            <span>Video</span>
-            <span>${typeCounts.video} (${totalUploadedToday > 0 ? Math.round(typeCounts.video / totalUploadedToday * 100) : 0}%)</span>
-          </div>
-          <div class="dist-bar-track">
-            <div class="dist-bar-fill" style="width: ${totalUploadedToday > 0 ? typeCounts.video / totalUploadedToday * 100 : 0}%; background: #8b5cf6;"></div>
-          </div>
-        </div>
+              <div class="dist-item">
+                <div class="dist-header">
+                  <span>Video</span>
+                  <span>${typeCounts.video} (${totalUploadedToday > 0 ? Math.round(typeCounts.video / totalUploadedToday * 100) : 0}%)</span>
+                </div>
+                <div class="dist-bar-track">
+                  <div class="dist-bar-fill" style="width: ${totalUploadedToday > 0 ? typeCounts.video / totalUploadedToday * 100 : 0}%; background: #8b5cf6;"></div>
+                </div>
+              </div>
 
-        <div class="dist-item">
-          <div class="dist-header">
-            <span>Audio / Musik</span>
-            <span>${typeCounts.audio} (${totalUploadedToday > 0 ? Math.round(typeCounts.audio / totalUploadedToday * 100) : 0}%)</span>
-          </div>
-          <div class="dist-bar-track">
-            <div class="dist-bar-fill" style="width: ${totalUploadedToday > 0 ? typeCounts.audio / totalUploadedToday * 100 : 0}%; background: #ec4899;"></div>
-          </div>
-        </div>
+              <div class="dist-item">
+                <div class="dist-header">
+                  <span>Audio / Musik</span>
+                  <span>${typeCounts.audio} (${totalUploadedToday > 0 ? Math.round(typeCounts.audio / totalUploadedToday * 100) : 0}%)</span>
+                </div>
+                <div class="dist-bar-track">
+                  <div class="dist-bar-fill" style="width: ${totalUploadedToday > 0 ? typeCounts.audio / totalUploadedToday * 100 : 0}%; background: #ec4899;"></div>
+                </div>
+              </div>
 
-        <div class="dist-item">
-          <div class="dist-header">
-            <span>Dokumen &amp; Arsip</span>
-            <span>${typeCounts.file} (${totalUploadedToday > 0 ? Math.round(typeCounts.file / totalUploadedToday * 100) : 0}%)</span>
+              <div class="dist-item">
+                <div class="dist-header">
+                  <span>Dokumen &amp; Arsip</span>
+                  <span>${typeCounts.file} (${totalUploadedToday > 0 ? Math.round(typeCounts.file / totalUploadedToday * 100) : 0}%)</span>
+                </div>
+                <div class="dist-bar-track">
+                  <div class="dist-bar-fill" style="width: ${totalUploadedToday > 0 ? typeCounts.file / totalUploadedToday * 100 : 0}%; background: #f59e0b;"></div>
+                </div>
+              </div>
+            </section>
           </div>
-          <div class="dist-bar-track">
-            <div class="dist-bar-fill" style="width: ${totalUploadedToday > 0 ? typeCounts.file / totalUploadedToday * 100 : 0}%; background: #f59e0b;"></div>
-          </div>
-        </div>
-      </section>
-    </div>
 
-    <!-- Country Geolocation & Top Files Grid -->
-    <div class="section-grid">
-      <!-- Country Distribution -->
-      <section class="panel">
-        <div class="panel-header">
-          <h2 class="panel-title">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
-            Asal Negara Pengunggah Hari Ini
-          </h2>
-          <span class="panel-badge">IP Geolocation</span>
-        </div>
+          <!-- Country Geolocation & Top Files Grid -->
+          <div class="section-grid">
+            <!-- Country Distribution -->
+            <section class="panel">
+              <div class="panel-header">
+                <h2 class="panel-title">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+                  Asal Negara Pengunggah Hari Ini
+                </h2>
+                <span class="panel-badge">IP Geolocation</span>
+              </div>
 
-        ${sortedCountries.length === 0 ? `<p style="color: var(--muted); font-size: 0.85rem; padding: 1rem 0;">Belum ada data geolokasi hari ini.</p>` : sortedCountries.slice(0, 8).map(([code, count]) => {
+              ${sortedCountries.length === 0 ? `<p style="color: var(--muted); font-size: 0.85rem; padding: 1rem 0;">Belum ada data geolokasi hari ini.</p>` : sortedCountries.slice(0, 8).map(([code, count]) => {
       const flagPath = getFlagAssetPath(code);
       return `
-            <div class="country-row">
-              <div class="country-info">
-                <img src="${escapeHtml3(flagPath)}" alt="${escapeHtml3(code)}" class="country-flag" onerror="this.src='/flags/globe.svg';" />
-                <span style="font-weight: 600;">${escapeHtml3(code)}</span>
-              </div>
-              <span style="font-weight: 700; color: var(--accent);">${count} unggahan</span>
-            </div>`;
+                  <div class="country-row">
+                    <div class="country-info">
+                      <img src="${escapeHtml3(flagPath)}" alt="${escapeHtml3(code)}" class="country-flag" onerror="this.src='/flags/globe.svg';" />
+                      <span style="font-weight: 600;">${escapeHtml3(code)}</span>
+                    </div>
+                    <span style="font-weight: 700; color: var(--accent);">${count} unggahan</span>
+                  </div>`;
     }).join("")}
-      </section>
+            </section>
 
-      <!-- Top 10 Popular Files -->
-      <section class="panel">
-        <div class="panel-header">
-          <h2 class="panel-title">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-            Berkas Terpopuler
-          </h2>
-          <span class="panel-badge">Total Views</span>
-        </div>
+            <!-- Top 10 Popular Files -->
+            <section class="panel">
+              <div class="panel-header">
+                <h2 class="panel-title">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                  Berkas Terpopuler
+                </h2>
+                <span class="panel-badge">Total Views</span>
+              </div>
 
-        ${topFiles.length === 0 ? `<p style="color: var(--muted); font-size: 0.85rem; padding: 1rem 0;">Belum ada riwayat tayangan berkas.</p>` : topFiles.map(
+              ${topFiles.length === 0 ? `<p style="color: var(--muted); font-size: 0.85rem; padding: 1rem 0;">Belum ada riwayat tayangan berkas.</p>` : topFiles.map(
       (f, idx) => `
-            <div class="country-row">
-              <div class="country-info" style="min-width: 0; flex: 1;">
-                <span style="font-size: 0.75rem; font-weight: 800; color: var(--muted); width: 18px;">#${idx + 1}</span>
-                <a href="/s/${encodeURIComponent(
+                  <div class="country-row">
+                    <div class="country-info" style="min-width: 0; flex: 1;">
+                      <span style="font-size: 0.75rem; font-weight: 800; color: var(--muted); width: 18px;">#${idx + 1}</span>
+                      <a href="/s/${encodeURIComponent(
         f.id
-      )}" target="_blank" class="link-view" style="max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.825rem;" title="${escapeHtml3(
+      )}" target="_blank" class="link-view" style="max-width: clamp(120px, 40vw, 220px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.825rem;" title="${escapeHtml3(
         f.name
       )}">
-                  ${escapeHtml3(f.name)}
-                </a>
-              </div>
-              <span style="font-weight: 700; color: #60a5fa; font-size: 0.85rem;">${f.views} tayangan</span>
-            </div>`
+                        ${escapeHtml3(f.name)}
+                      </a>
+                    </div>
+                    <span style="font-weight: 700; color: #60a5fa; font-size: 0.85rem;">${f.views} tayangan</span>
+                  </div>`
     ).join("")}
-      </section>
-    </div>
-
-    <!-- Kontrol Operasional & Konfigurasi Dinamis (Kill Switch & Dynamic Config) -->
-    ${renderOperationalControlsHtml(systemConfig)}
-
-    <!-- Sinkronisasi Data Catbox & Redis Panel -->
-    <section class="panel" style="margin-bottom: 1.5rem;" id="sync-panel">
-      <div class="panel-header">
-        <h2 class="panel-title">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
-          Sinkronisasi Data (Redis &harr; Catbox)
-        </h2>
-        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
-          <span class="panel-badge" id="sync-last-checked-label">
-            ${lastSyncCheck ? `Terakhir diperiksa: ${formatRelativeTime3(lastSyncCheck.timestamp)} (${formatAbsoluteTime2(lastSyncCheck.timestamp)})` : "Belum pernah diperiksa"}
-          </span>
-          <button type="button" id="btn-run-sync" class="btn-sync-action">
-            <svg id="sync-spinner-icon" style="display:none; width: 14px; height: 14px; animation: spin 1s linear infinite;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
-            <span id="sync-btn-text">Jalankan Pemeriksaan Sinkronisasi</span>
-          </button>
+            </section>
+          </div>
         </div>
-      </div>
 
-      <div id="sync-summary-container">
-        ${renderSyncSummaryHtml(lastSyncCheck)}
-      </div>
-    </section>
+        <!-- 3. Kategori: Kontrol Sistem -->
+        <div class="category-panel" data-category-panel="kontrol">
+          <!-- Kontrol Operasional & Konfigurasi Dinamis (Kill Switch & Dynamic Config) -->
+          ${renderOperationalControlsHtml(systemConfig)}
 
-    <!-- Manajemen Sesi Admin Aktif -->
-    ${renderActiveSessionsHtml(activeSessions)}
+          <!-- Sinkronisasi Data Catbox & Redis Panel -->
+          <section class="panel" style="margin-bottom: 1.5rem;" id="sync-panel">
+            <div class="panel-header">
+              <h2 class="panel-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                Sinkronisasi Data (Redis &harr; Catbox)
+              </h2>
+              <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                <span class="panel-badge" id="sync-last-checked-label">
+                  ${lastSyncCheck ? `Terakhir diperiksa: ${formatRelativeTime3(lastSyncCheck.timestamp)} (${formatAbsoluteTime2(lastSyncCheck.timestamp)})` : "Belum pernah diperiksa"}
+                </span>
+                <button type="button" id="btn-run-sync" class="btn-sync-action">
+                  <svg id="sync-spinner-icon" style="display:none; width: 14px; height: 14px; animation: spin 1s linear infinite;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+                  <span id="sync-btn-text">Jalankan Pemeriksaan Sinkronisasi</span>
+                </button>
+              </div>
+            </div>
 
-    <!-- 50 Most Recent Uploads Across All Sessions -->
-    <section class="panel" style="margin-bottom: 1.5rem;">
-      <div class="panel-header">
-        <h2 class="panel-title">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-          50 Unggahan Terakhir (Lintas Semua Sesi)
-        </h2>
-        <span class="panel-badge" id="stat-total-stored">Total Tersimpan: ${totalItemsInRepo.toLocaleString("id-ID")} item (${enhancedRecentUploads.length} termonitor)</span>
-      </div>
-
-      <!-- Search & Quick Filter Bar -->
-      <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; padding: 0.25rem 0;">
-        <div style="display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 260px;">
-          <input type="text" id="search-files-input" placeholder="Filter nama berkas atau ID di bawah..." style="flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.45rem 0.75rem; font-size: 0.825rem;" />
-          <button type="button" id="btn-search-db" style="background: rgba(255,255,255,0.06); border: 1px solid var(--border); color: var(--fg); padding: 0.45rem 0.85rem; border-radius: 6px; font-size: 0.8rem; font-weight: 600; cursor: pointer; white-space: nowrap;">Cari di Seluruh DB</button>
-          <button type="button" id="btn-reset-search" style="background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 0.45rem 0.65rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer;">Reset</button>
+            <div id="sync-summary-container">
+              ${renderSyncSummaryHtml(lastSyncCheck)}
+            </div>
+          </section>
         </div>
-        <span id="search-count-label" style="font-size: 0.75rem; color: #60a5fa; font-weight: 600;"></span>
-      </div>
 
-      <div class="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th>Berkas</th>
-              <th>Tipe</th>
-              <th>Ukuran</th>
-              <th>Negara</th>
-              <th>Waktu Unggah</th>
-              <th>Tayangan</th>
-              <th>Aksi</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${enhancedRecentUploads.length === 0 ? `<tr><td colspan="7" style="text-align: center; color: var(--muted); padding: 2rem;">Belum ada unggahan yang tercatat di repositori.</td></tr>` : enhancedRecentUploads.map((item) => {
+        <!-- 4. Kategori: Keamanan & Sesi -->
+        <div class="category-panel" data-category-panel="keamanan">
+          <!-- Manajemen Sesi Admin Aktif -->
+          ${renderActiveSessionsHtml(activeSessions)}
+
+          <!-- Log Aktivitas Keamanan & Audit Admin -->
+          ${renderAuditLogsHtml(auditLogs)}
+        </div>
+
+        <!-- 5. Kategori: Pengelolaan Data -->
+        <div class="category-panel" data-category-panel="data">
+          <!-- 50 Most Recent Uploads Across All Sessions -->
+          <section class="panel" style="margin-bottom: 1.5rem;">
+            <div class="panel-header">
+              <h2 class="panel-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                50 Unggahan Terakhir (Lintas Semua Sesi)
+              </h2>
+              <span class="panel-badge" id="stat-total-stored">Total Tersimpan: ${totalItemsInRepo.toLocaleString("id-ID")} item (${enhancedRecentUploads.length} termonitor)</span>
+            </div>
+
+            <!-- Search & Quick Filter Bar -->
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; padding: 0.25rem 0;">
+              <div style="display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 260px;">
+                <input type="text" id="search-files-input" placeholder="Filter nama berkas atau ID di bawah..." style="flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.45rem 0.75rem; font-size: 0.825rem;" />
+                <button type="button" id="btn-search-db" style="background: rgba(255,255,255,0.06); border: 1px solid var(--border); color: var(--fg); padding: 0.45rem 0.85rem; border-radius: 6px; font-size: 0.8rem; font-weight: 600; cursor: pointer; white-space: nowrap;">Cari di Seluruh DB</button>
+                <button type="button" id="btn-reset-search" style="background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 0.45rem 0.65rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer;">Reset</button>
+              </div>
+              <span id="search-count-label" style="font-size: 0.75rem; color: #60a5fa; font-weight: 600;"></span>
+            </div>
+
+            <div class="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Berkas</th>
+                    <th>Tipe</th>
+                    <th>Ukuran</th>
+                    <th>Negara</th>
+                    <th>Waktu Unggah</th>
+                    <th>Tayangan</th>
+                    <th>Aksi</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${enhancedRecentUploads.length === 0 ? `<tr><td colspan="7" style="text-align: center; color: var(--muted); padding: 2rem;">Belum ada unggahan yang tercatat di repositori.</td></tr>` : enhancedRecentUploads.map((item) => {
       const flagPath = getFlagAssetPath(item.uploaderCountryCode);
       return `
-              <tr id="upload-row-${escapeHtml3(item.id)}">
-                <td>
-                  <div style="font-weight: 700; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml3(
+                    <tr id="upload-row-${escapeHtml3(item.id)}">
+                      <td>
+                        <div style="font-weight: 700; max-width: clamp(120px, 40vw, 220px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml3(
         item.name
       )}">
-                    ${escapeHtml3(item.name)}
-                  </div>
-                  <div style="font-size: 0.7rem; color: var(--muted);">${escapeHtml3(
+                          ${escapeHtml3(item.name)}
+                        </div>
+                        <div style="font-size: 0.7rem; color: var(--muted);">${escapeHtml3(
         item.id
       )}</div>
-                </td>
-                <td>
-                  <span class="badge-type badge-${escapeHtml3(item.type)}">${escapeHtml3(
+                      </td>
+                      <td>
+                        <span class="badge-type badge-${escapeHtml3(item.type)}">${escapeHtml3(
         item.type
       )}</span>
-                </td>
-                <td style="font-weight: 600;">${escapeHtml3(item.formattedSize)}</td>
-                <td>
-                  <div style="display: flex; align-items: center; gap: 0.4rem;">
-                    <img src="${escapeHtml3(
+                      </td>
+                      <td style="font-weight: 600;">${escapeHtml3(item.formattedSize)}</td>
+                      <td>
+                        <div style="display: flex; align-items: center; gap: 0.4rem;">
+                          <img src="${escapeHtml3(
         flagPath
       )}" alt="${escapeHtml3(item.uploaderCountryCode || "Globe")}" class="country-flag" onerror="this.src='/flags/globe.svg';" />
-                    <span style="font-size: 0.8rem;">${escapeHtml3(
+                          <span style="font-size: 0.8rem;">${escapeHtml3(
         item.uploaderCountryCode || "-"
       )}</span>
-                  </div>
-                </td>
-                <td>
-                  <div style="font-weight: 600;">${formatRelativeTime3(item.createdAt)}</div>
-                  <div style="font-size: 0.7rem; color: var(--muted);">${formatAbsoluteTime2(
+                        </div>
+                      </td>
+                      <td>
+                        <div style="font-weight: 600;">${formatRelativeTime3(item.createdAt)}</div>
+                        <div style="font-size: 0.7rem; color: var(--muted);">${formatAbsoluteTime2(
         item.createdAt
       )}</div>
-                </td>
-                <td style="font-weight: 700; color: #60a5fa;">${item.views}</td>
-                <td>
-                  <div style="display: inline-flex; align-items: center; gap: 0.6rem;">
-                    <a href="/s/${encodeURIComponent(
+                      </td>
+                      <td style="font-weight: 700; color: #60a5fa;">${item.views}</td>
+                      <td>
+                        <div style="display: inline-flex; align-items: center; gap: 0.6rem;">
+                          <a href="/s/${encodeURIComponent(
         item.id
       )}" target="_blank" class="link-view">Buka</a>
-                    <button type="button" class="btn-delete-perm" data-id="${escapeHtml3(
+                          <button type="button" class="btn-delete-perm" data-id="${escapeHtml3(
         item.id
       )}" data-name="${escapeHtml3(item.name)}">Hapus Permanen</button>
-                  </div>
-                </td>
-              </tr>`;
+                        </div>
+                      </td>
+                    </tr>`;
     }).join("")}
-          </tbody>
-        </table>
-      </div>
-    </section>
+                </tbody>
+              </table>
+            </div>
+          </section>
 
-    <!-- Pembersihan Massal (Bulk Cleanup Berdasarkan Kriteria) -->
-    ${renderBulkCleanupHtml()}
+          <!-- Pembersihan Massal (Bulk Cleanup Berdasarkan Kriteria) -->
+          ${renderBulkCleanupHtml()}
+        </div>
 
-    <!-- Log Aktivitas Keamanan & Audit Admin -->
-    ${renderAuditLogsHtml(auditLogs)}
+        <!-- 6. Kategori: Berkas Terhapus -->
+        <div class="category-panel" data-category-panel="terhapus">
+          <section class="panel" style="margin-bottom: 1.5rem;">
+            <div class="panel-header">
+              <h2 class="panel-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                Arsip &amp; Riwayat Berkas Terhapus
+              </h2>
+              <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                <span class="panel-badge" id="deleted-count-badge">${deletedFiles.length} Berkas Tercatat</span>
+                ${deletedFiles.length > 0 ? `<button type="button" id="btn-clear-deleted-history" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; padding: 0.4rem 0.85rem; border-radius: 6px; font-size: 0.8rem; font-weight: 700; cursor: pointer; transition: all 0.2s;">Bersihkan Seluruh Riwayat Terhapus</button>` : ""}
+              </div>
+            </div>
+
+            <!-- Search Deleted Files Filter -->
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; padding: 0.25rem 0;">
+              <div style="display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 260px;">
+                <input type="text" id="search-deleted-input" placeholder="Filter berkas terhapus berdasarkan nama, ID, atau alasan..." style="flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.45rem 0.75rem; font-size: 0.825rem;" />
+                <button type="button" id="btn-reset-deleted-search" style="background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 0.45rem 0.65rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer;">Reset</button>
+              </div>
+              <span id="deleted-search-count-label" style="font-size: 0.75rem; color: #f87171; font-weight: 600;"></span>
+            </div>
+
+            <div class="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Berkas Terhapus</th>
+                    <th>Tipe &amp; Ukuran</th>
+                    <th>Tautan Catbox Asal</th>
+                    <th>Waktu Dihapus</th>
+                    <th>Dihapus Oleh</th>
+                    <th>Alasan / Keterangan</th>
+                  </tr>
+                </thead>
+                <tbody id="deleted-files-tbody">
+                  ${deletedFiles.length === 0 ? `<tr><td colspan="6" style="text-align: center; color: var(--muted); padding: 2.5rem 1rem;">
+                          <div style="font-size: 1.1rem; font-weight: 700; margin-bottom: 0.35rem; color: var(--text);">Tidak ada riwayat berkas terhapus</div>
+                          <div style="font-size: 0.8rem;">Ketika berkas dihapus oleh pengguna atau admin, riwayat auditnya akan dipisahkan secara aman ke dalam tab ini.</div>
+                        </td></tr>` : deletedFiles.map((df) => {
+      let byBadge = "";
+      if (df.deletedBy === "admin") {
+        byBadge = '<span style="display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 700; border-radius: 4px; background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3);">Admin</span>';
+      } else if (df.deletedBy === "user") {
+        byBadge = '<span style="display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 700; border-radius: 4px; background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3);">Pengguna</span>';
+      } else if (df.deletedBy === "sync_purge") {
+        byBadge = '<span style="display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 700; border-radius: 4px; background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3);">Sync Purge (404)</span>';
+      } else if (df.deletedBy === "bulk_cleanup") {
+        byBadge = '<span style="display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 700; border-radius: 4px; background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3);">Bulk Cleanup</span>';
+      } else {
+        byBadge = '<span style="display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 700; border-radius: 4px; background: rgba(255, 255, 255, 0.1); color: var(--muted);">' + escapeHtml3(df.deletedBy || "System") + "</span>";
+      }
+      return `
+                    <tr id="deleted-row-${escapeHtml3(df.id)}">
+                      <td>
+                        <div style="font-weight: 700; color: #f87171; max-width: clamp(140px, 20vw, 240px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml3(
+        df.name
+      )}">
+                          ${escapeHtml3(df.name)}
+                        </div>
+                        <div style="font-size: 0.7rem; color: var(--muted);">${escapeHtml3(df.id)}</div>
+                      </td>
+                      <td>
+                        <div style="font-size: 0.8rem; font-weight: 600;">${escapeHtml3(df.formattedSize || "-")}</div>
+                        <div style="font-size: 0.7rem; color: var(--muted); text-transform: uppercase;">${escapeHtml3(df.type || "file")}</div>
+                      </td>
+                      <td>
+                        <a href="${escapeHtml3(
+        df.shareUrl
+      )}" target="_blank" class="link-view" style="font-size: 0.75rem; color: var(--muted); max-width: clamp(120px, 20vw, 200px); display: inline-block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                          ${escapeHtml3(df.shareUrl)}
+                        </a>
+                      </td>
+                      <td>
+                        <div style="font-size: 0.8rem; font-weight: 600;">${formatRelativeTime3(
+        df.deletedAt
+      )}</div>
+                        <div style="font-size: 0.7rem; color: var(--muted);">${formatAbsoluteTime2(
+        df.deletedAt
+      )}</div>
+                      </td>
+                      <td>${byBadge}</td>
+                      <td>
+                        <div style="font-size: 0.775rem; color: var(--muted); max-width: 240px; line-height: 1.3;">
+                          ${escapeHtml3(df.reason || "Dihapus dari penyimpanan")}
+                        </div>
+                      </td>
+                    </tr>`;
+    }).join("")}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
 
     <!-- System Health Status Bar -->
     <footer class="health-bar">
@@ -6449,12 +8506,165 @@ var adminController = {
     </footer>
   </div>
 
+  <!-- Global iOS-Style Alert/Confirm Modal Dialog -->
+  <div id="ios-modal-container" class="ios-modal-overlay" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="ios-modal-box">
+      <div class="ios-modal-body-content">
+        <div id="ios-modal-icon" class="ios-modal-icon-badge" style="display:none;"></div>
+        <div id="ios-modal-title" class="ios-modal-title"></div>
+        <div id="ios-modal-message" class="ios-modal-desc"></div>
+      </div>
+      <div id="ios-modal-actions" class="ios-modal-actions-row"></div>
+    </div>
+  </div>
+
   <script>
+    // Global iOS-style confirmation modal handler
+    window.showIosConfirm = function(options) {
+      return new Promise(function(resolve) {
+        options = options || {};
+        const container = document.getElementById('ios-modal-container');
+        const iconEl = document.getElementById('ios-modal-icon');
+        const titleEl = document.getElementById('ios-modal-title');
+        const msgEl = document.getElementById('ios-modal-message');
+        const actionsEl = document.getElementById('ios-modal-actions');
+
+        if (!container || !titleEl || !msgEl || !actionsEl) {
+          resolve(confirm((options.title ? options.title + '\\n\\n' : '') + (options.message || '')));
+          return;
+        }
+
+        titleEl.textContent = options.title || 'Konfirmasi Tindakan';
+        msgEl.textContent = options.message || '';
+
+        const isDestructive = options.isDestructive !== false;
+        const iconType = options.icon || (isDestructive ? 'danger' : 'warning');
+        
+        let iconSvg = '';
+        if (iconType === 'danger') {
+          iconSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+        } else if (iconType === 'warning') {
+          iconSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+        } else if (iconType === 'success') {
+          iconSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+        } else {
+          iconSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
+        }
+
+        if (iconEl) {
+          iconEl.className = 'ios-modal-icon-badge ios-modal-icon-' + iconType;
+          iconEl.innerHTML = iconSvg;
+          iconEl.style.display = 'flex';
+        }
+
+        actionsEl.innerHTML = '<button type="button" class="ios-modal-btn ios-modal-btn-cancel" id="ios-btn-cancel">' + (options.cancelText || 'Batal') + '</button>' +
+          '<button type="button" class="ios-modal-btn ' + (isDestructive ? 'ios-modal-btn-danger' : 'ios-modal-btn-primary') + '" id="ios-btn-confirm">' + (options.confirmText || (isDestructive ? 'Ya, Lanjutkan' : 'Konfirmasi')) + '</button>';
+
+        function cleanup(result) {
+          container.classList.remove('active');
+          container.setAttribute('aria-hidden', 'true');
+          document.removeEventListener('keydown', handleKey);
+          resolve(result);
+        }
+
+        function handleKey(e) {
+          if (e.key === 'Escape') cleanup(false);
+        }
+
+        const btnCancel = document.getElementById('ios-btn-cancel');
+        const btnConfirm = document.getElementById('ios-btn-confirm');
+        if (btnCancel) btnCancel.onclick = function() { cleanup(false); };
+        if (btnConfirm) btnConfirm.onclick = function() { cleanup(true); };
+        document.addEventListener('keydown', handleKey);
+
+        container.classList.add('active');
+        container.setAttribute('aria-hidden', 'false');
+      });
+    };
+
+    // Global iOS-style statement/alert modal handler
+    window.showIosAlert = function(options) {
+      return new Promise(function(resolve) {
+        options = options || {};
+        const container = document.getElementById('ios-modal-container');
+        const iconEl = document.getElementById('ios-modal-icon');
+        const titleEl = document.getElementById('ios-modal-title');
+        const msgEl = document.getElementById('ios-modal-message');
+        const actionsEl = document.getElementById('ios-modal-actions');
+
+        if (!container || !titleEl || !msgEl || !actionsEl) {
+          alert((options.title ? options.title + '\\n\\n' : '') + (options.message || ''));
+          resolve();
+          return;
+        }
+
+        titleEl.textContent = options.title || 'Pemberitahuan';
+        msgEl.textContent = options.message || '';
+
+        const iconType = options.icon || 'info';
+        let iconSvg = '';
+        if (iconType === 'danger') {
+          iconSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
+        } else if (iconType === 'success') {
+          iconSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+        } else if (iconType === 'warning') {
+          iconSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+        } else {
+          iconSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
+        }
+
+        if (iconEl) {
+          iconEl.className = 'ios-modal-icon-badge ios-modal-icon-' + iconType;
+          iconEl.innerHTML = iconSvg;
+          iconEl.style.display = 'flex';
+        }
+
+        actionsEl.innerHTML = '<button type="button" class="ios-modal-btn ios-modal-btn-primary" id="ios-btn-ok">' + (options.buttonText || 'Mengerti') + '</button>';
+
+        function cleanup() {
+          container.classList.remove('active');
+          container.setAttribute('aria-hidden', 'true');
+          document.removeEventListener('keydown', handleKey);
+          resolve();
+        }
+
+        function handleKey(e) {
+          if (e.key === 'Escape' || e.key === 'Enter') cleanup();
+        }
+
+        const btnOk = document.getElementById('ios-btn-ok');
+        if (btnOk) btnOk.onclick = function() { cleanup(); };
+        document.addEventListener('keydown', handleKey);
+
+        container.classList.add('active');
+        container.setAttribute('aria-hidden', 'false');
+      });
+    };
+
     (function() {
-      const panelPath = ${JSON.stringify(panelPath)};
+      const panelPath = ${JSON.stringify(fullAdminPath)};
       const badgeDot = document.getElementById('live-sync-dot');
       const badgeTitle = document.getElementById('live-sync-title');
       const badgeTime = document.getElementById('live-sync-time');
+
+      // Intercept Logout Form with iOS Modal Confirmation
+      const formLogout = document.getElementById('form-logout');
+      if (formLogout) {
+        formLogout.addEventListener('submit', async function(e) {
+          e.preventDefault();
+          const confirmed = await window.showIosConfirm({
+            title: 'Keluar dari Panel Admin?',
+            message: 'Sesi administrasi Anda akan diakhiri dan Anda harus memasukkan PIN kembali untuk masuk.',
+            confirmText: 'Keluar',
+            cancelText: 'Batal',
+            isDestructive: true,
+            icon: 'warning'
+          });
+          if (confirmed) {
+            formLogout.submit();
+          }
+        });
+      }
 
       function showToast(msg, isError, isWarn) {
         const toast = document.getElementById('admin-toast-banner');
@@ -6477,18 +8687,343 @@ var adminController = {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
 
-      // 1. Permanent Deletion handler (with browser confirm dialog)
+      // 0. Category Switching & High-Performance Touch Navigation Handler
+      const categoryPanels = document.querySelectorAll('.category-panel');
+      const sidebarBtns = document.querySelectorAll('.admin-sidebar-btn');
+      const tabBtns = document.querySelectorAll('.admin-tab-btn');
+
+      function switchCategory(catName) {
+        if (!catName) return;
+        categoryPanels.forEach(function(panel) {
+          if (panel.getAttribute('data-category-panel') === catName) {
+            panel.classList.add('active');
+          } else {
+            panel.classList.remove('active');
+          }
+        });
+
+        sidebarBtns.forEach(function(btn) {
+          if (btn.getAttribute('data-category') === catName) {
+            btn.classList.add('active');
+          } else {
+            btn.classList.remove('active');
+          }
+        });
+
+        tabBtns.forEach(function(btn) {
+          if (btn.getAttribute('data-category') === catName) {
+            btn.classList.add('active');
+            // Smoothly scroll active tab into view in mobile tabs container
+            try {
+              btn.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+            } catch (e) {}
+          } else {
+            btn.classList.remove('active');
+          }
+        });
+
+        try {
+          localStorage.setItem('airshare_admin_active_cat', catName);
+        } catch (e) {}
+      }
+
+      // High-precision touch event handling for mobile devices (eliminates tap lag & accidental scroll clicks)
+      function initTouchNavigation() {
+        const allNavTriggers = document.querySelectorAll('.admin-sidebar-btn, .admin-tab-btn');
+        allNavTriggers.forEach(function(btn) {
+          let touchStartX = 0;
+          let touchStartY = 0;
+          let hasMoved = false;
+
+          btn.addEventListener('touchstart', function(e) {
+            if (e.touches && e.touches[0]) {
+              touchStartX = e.touches[0].clientX;
+              touchStartY = e.touches[0].clientY;
+              hasMoved = false;
+            }
+          }, { passive: true });
+
+          btn.addEventListener('touchmove', function(e) {
+            if (e.touches && e.touches[0]) {
+              const dx = Math.abs(e.touches[0].clientX - touchStartX);
+              const dy = Math.abs(e.touches[0].clientY - touchStartY);
+              if (dx > 8 || dy > 8) {
+                hasMoved = true;
+              }
+            }
+          }, { passive: true });
+
+          btn.addEventListener('touchend', function(e) {
+            if (!hasMoved) {
+              const cat = btn.getAttribute('data-category');
+              if (cat) {
+                e.preventDefault();
+                switchCategory(cat);
+              }
+            }
+          });
+
+          btn.addEventListener('click', function(e) {
+            const cat = btn.getAttribute('data-category');
+            if (cat) {
+              e.preventDefault();
+              switchCategory(cat);
+            }
+          });
+        });
+
+        // Global fallback delegation for any dynamically inserted buttons
+        document.addEventListener('click', function(e) {
+          const navBtn = e.target.closest('.admin-sidebar-btn, .admin-tab-btn');
+          if (navBtn) {
+            const cat = navBtn.getAttribute('data-category');
+            if (cat) switchCategory(cat);
+          }
+        });
+      }
+      initTouchNavigation();
+
+      // Restore category from localStorage if available
+      try {
+        const savedCat = localStorage.getItem('airshare_admin_active_cat');
+        if (savedCat && document.querySelector('[data-category-panel="' + savedCat + '"]')) {
+          switchCategory(savedCat);
+        }
+      } catch (e) {}
+
+      // 0.0 Gemini AI Real-Time System Recommendations Engine
+      function renderGeminiMarkup(raw) {
+        if (!raw) return '';
+        // 1. Escape HTML special characters for strict XSS prevention
+        let str = String(raw)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+
+        // 2. Headings
+        str = str.replace(/^### (.*?)$/gm, '<h4 class="ai-heading-3">$1</h4>');
+        str = str.replace(/^## (.*?)$/gm, '<h3 class="ai-heading-3">$1</h3>');
+
+        // 3. Bold text
+        str = str.replace(/**(.*?)**/g, '<strong class="ai-bold">$1</strong>');
+        str = str.replace(/__(.*?)__/g, '<strong class="ai-bold">$1</strong>');
+
+        // 4. Italic text
+        str = str.replace(/(^|[^*])*([^*]+)*([^*]|$)/g, '$1<em class="ai-italic">$2</em>$3');
+
+        // 5. Code blocks / inline code (using safe char code to prevent template backtick clash)
+        const tick = String.fromCharCode(96);
+        str = str.split(tick).map(function(part, idx) {
+          return idx % 2 === 1 ? '<code class="ai-code">' + part + '</code>' : part;
+        }).join('');
+
+        return str;
+      }
+
+      const recSkeleton = document.getElementById('ai-rec-skeleton');
+      const recContent = document.getElementById('ai-rec-content');
+      const recError = document.getElementById('ai-rec-error');
+      const recErrorMsg = document.getElementById('ai-rec-error-msg');
+      const recSummaryText = document.getElementById('ai-rec-summary-text');
+      const recList = document.getElementById('ai-rec-list');
+      const recModelLabel = document.getElementById('ai-rec-model-label');
+      const recTimestamp = document.getElementById('ai-rec-timestamp');
+      const btnRefreshAi = document.getElementById('btn-refresh-ai-rec');
+      const aiRefreshIcon = document.getElementById('ai-refresh-icon');
+      const aiRefreshText = document.getElementById('ai-refresh-text');
+      const btnAiRetry = document.getElementById('btn-ai-retry');
+      const btnAiFallback = document.getElementById('btn-ai-use-fallback');
+
+      function setAiLoading(isLoading) {
+        if (isLoading) {
+          if (recSkeleton) recSkeleton.style.display = 'flex';
+          if (recContent) recContent.style.display = 'none';
+          if (recError) recError.style.display = 'none';
+          if (btnRefreshAi) btnRefreshAi.disabled = true;
+          if (aiRefreshIcon) aiRefreshIcon.style.animation = 'spin 1s infinite linear';
+          if (aiRefreshText) aiRefreshText.textContent = 'Menganalisis...';
+        } else {
+          if (recSkeleton) recSkeleton.style.display = 'none';
+          if (btnRefreshAi) btnRefreshAi.disabled = false;
+          if (aiRefreshIcon) aiRefreshIcon.style.animation = '';
+          if (aiRefreshText) aiRefreshText.textContent = 'Analisis AI';
+        }
+      }
+
+      async function fetchAiRecommendations() {
+        setAiLoading(true);
+        try {
+          const res = await fetch('/${fullAdminPath}/api/ai-recommendations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          });
+
+          if (!res.ok) {
+            throw new Error('Server mengembalikan HTTP ' + res.status);
+          }
+
+          const data = await res.json();
+
+          if (!data || (!data.summary && (!data.recommendations || data.recommendations.length === 0))) {
+            throw new Error(data && data.error ? data.error : 'Respon rekomendasi kosong.');
+          }
+
+          // Render Executive Summary
+          if (recSummaryText && data.summary) {
+            recSummaryText.innerHTML = renderGeminiMarkup(data.summary);
+          }
+
+          // Render Recommendations List
+          if (recList && Array.isArray(data.recommendations)) {
+            recList.innerHTML = data.recommendations
+              .map(function(item) {
+                const formatted = renderGeminiMarkup(item);
+                return '<li class="ai-list-item"><span class="ai-bullet">\u2726</span><div class="ai-item-body">' + formatted + '</div></li>';
+              })
+              .join('');
+          }
+
+          // Update Model Badge
+          if (recModelLabel) {
+            recModelLabel.textContent = data.isAi ? 'Gemini 3.8 Flash \u2022 Real-Time AI' : 'Mesin Heuristik Sistem';
+          }
+
+          // Update Timestamp
+          if (recTimestamp) {
+            const now = new Date();
+            const timeFormatted = String(now.getHours()).padStart(2, '0') + ':' +
+                                  String(now.getMinutes()).padStart(2, '0') + ':' +
+                                  String(now.getSeconds()).padStart(2, '0');
+            recTimestamp.textContent = (data.isAi ? 'Dianalisis secara real-time oleh Gemini: ' : 'Status heuristik lokal: ') + timeFormatted;
+          }
+
+          if (recContent) recContent.style.display = 'block';
+          if (recError) recError.style.display = 'none';
+
+          if (data.error && !data.isAi) {
+            showToast(data.error, false, true);
+          }
+        } catch (err) {
+          console.error('[AI_RECOMMENDATION_ERROR]', err);
+          if (recContent) recContent.style.display = 'none';
+          if (recError) {
+            recError.style.display = 'block';
+            if (recErrorMsg) {
+              recErrorMsg.textContent = 'Kendala: ' + (err.message || 'Gagal terhubung ke layanan AI Gemini.');
+            }
+          }
+        } finally {
+          setAiLoading(false);
+        }
+      }
+
+      if (btnRefreshAi) {
+        btnRefreshAi.addEventListener('click', function() {
+          fetchAiRecommendations();
+        });
+      }
+
+      if (btnAiRetry) {
+        btnAiRetry.addEventListener('click', function() {
+          fetchAiRecommendations();
+        });
+      }
+
+      if (btnAiFallback) {
+        btnAiFallback.addEventListener('click', function() {
+          if (recError) recError.style.display = 'none';
+          if (recContent) recContent.style.display = 'block';
+          if (recModelLabel) recModelLabel.textContent = 'Mesin Heuristik Bawaan';
+        });
+      }
+
+      // Automatically trigger initial AI analysis in background on page load
+      setTimeout(function() {
+        fetchAiRecommendations();
+      }, 400);
+
+      // 0.1 Quick Table Search & Filter for Uploads
+      const searchInput = document.getElementById('search-files-input');
+      const btnResetSearch = document.getElementById('btn-reset-search');
+      const searchCountLabel = document.getElementById('search-count-label');
+      const btnSearchDb = document.getElementById('btn-search-db');
+
+      function filterUploadRows() {
+        if (!searchInput) return;
+        const query = searchInput.value.toLowerCase().trim();
+        const rows = document.querySelectorAll('tr[id^="upload-row-"]');
+        let visibleCount = 0;
+
+        rows.forEach(function(row) {
+          if (!query) {
+            row.style.display = '';
+            visibleCount++;
+          } else {
+            const text = row.textContent.toLowerCase();
+            if (text.includes(query)) {
+              row.style.display = '';
+              visibleCount++;
+            } else {
+              row.style.display = 'none';
+            }
+          }
+        });
+
+        if (searchCountLabel) {
+          if (query) {
+            searchCountLabel.textContent = visibleCount + ' berkas cocok';
+          } else {
+            searchCountLabel.textContent = '';
+          }
+        }
+      }
+
+      if (searchInput) {
+        searchInput.addEventListener('input', filterUploadRows);
+      }
+
+      if (btnResetSearch) {
+        btnResetSearch.addEventListener('click', function() {
+          if (searchInput) {
+            searchInput.value = '';
+            filterUploadRows();
+            searchInput.focus();
+          }
+        });
+      }
+
+      if (btnSearchDb) {
+        btnSearchDb.addEventListener('click', function() {
+          const q = searchInput ? searchInput.value.trim() : '';
+          if (!q) {
+            showToast('Silakan masukkan kata kunci pencarian.', false, true);
+            return;
+          }
+          filterUploadRows();
+        });
+      }
+
+      // 1. Permanent Deletion handler (with iOS confirm dialog)
       document.addEventListener('click', async function(e) {
         const btn = e.target.closest('.btn-delete-perm');
         if (!btn) return;
         const id = btn.getAttribute('data-id');
         const name = btn.getAttribute('data-name') || id;
 
-        const confirmText = 'PERINGATAN: Penghapusan dari Catbox bersifat PERMANEN dan TIDAK DAPAT DIBATALKAN!\\n\\n' +
-          'Berkas "' + name + '" (' + id + ') akan dihapus selamanya dari server Catbox dan tautan tidak akan bisa diakses lagi oleh siapapun.\\n\\n' +
-          'Apakah Anda yakin ingin menghapus permanen?';
+        const confirmed = await window.showIosConfirm({
+          title: 'Hapus Permanen dari Catbox?',
+          message: 'Penghapusan dari server Catbox bersifat PERMANEN dan TIDAK DAPAT DIBATALKAN.
 
-        if (!confirm(confirmText)) {
+Berkas "' + name + '" (' + id + ') akan dihapus selamanya dan tautan tidak akan bisa diakses lagi oleh siapapun.',
+          confirmText: 'Hapus Permanen',
+          cancelText: 'Batal',
+          isDestructive: true,
+          icon: 'danger'
+        });
+
+        if (!confirmed) {
           return;
         }
 
@@ -6595,7 +9130,18 @@ var adminController = {
         const id = btn.getAttribute('data-id');
         const name = btn.getAttribute('data-name') || id;
 
-        if (!confirm('Hapus entri berkas "' + name + '" (' + id + ') dari riwayat repositori AirShare?\\n\\nFile ini memang sudah tidak ada di Catbox, aksi ini hanya membersihkan sisa riwayat di database.')) {
+        const confirmed = await window.showIosConfirm({
+          title: 'Bersihkan dari Riwayat?',
+          message: 'Hapus entri berkas "' + name + '" (' + id + ') dari riwayat repositori AirShare?
+
+File ini memang sudah tidak ada di Catbox, aksi ini hanya membersihkan sisa riwayat di database.',
+          confirmText: 'Bersihkan Entri',
+          cancelText: 'Batal',
+          isDestructive: false,
+          icon: 'warning'
+        });
+
+        if (!confirmed) {
           return;
         }
 
@@ -6641,6 +9187,163 @@ var adminController = {
           btn.textContent = 'Hapus dari Riwayat';
         }
       });
+
+      // 4. Purge All Broken 404 files handler
+      document.addEventListener('click', async function(e) {
+        const btnPurgeAll = e.target.closest('#btn-purge-all-broken');
+        if (!btnPurgeAll) return;
+
+        const confirmed = await window.showIosConfirm({
+          title: 'Bersihkan Seluruh Berkas Rusak (404)?',
+          message: 'Bersihkan SEMUA berkas rusak (404) dan sisa data uji dari riwayat database & analitik?
+
+Berkas aktif yang valid akan tetap aman tersimpan.',
+          confirmText: 'Bersihkan Semua (404)',
+          cancelText: 'Batal',
+          isDestructive: true,
+          icon: 'danger'
+        });
+
+        if (!confirmed) {
+          return;
+        }
+
+        btnPurgeAll.disabled = true;
+        btnPurgeAll.textContent = 'Membersihkan Semua...';
+
+        try {
+          const res = await fetch('/' + panelPath + '/api/purge-broken', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+          });
+
+          if (res.status === 401) {
+            window.location.href = '/' + panelPath + '/login';
+            return;
+          }
+
+          const data = await res.json();
+          if (data.success) {
+            showToast('Pembersihan selesai: ' + data.data.purgedCount + ' berkas 404/orphan dibersihkan.', false);
+            syncSummaryContainer.innerHTML = '<div class="sync-banner sync-banner-ok"><div><strong>Semua Berkas Tersinkronisasi Aktif!</strong><div style="font-size: 0.8rem; margin-top: 0.25rem;">Pembersihan selesai. ' + data.data.healthyCount + ' berkas valid dipertahankan dan ' + data.data.purgedCount + ' berkas 404 dibersihkan.</div></div></div>';
+            setTimeout(function() { window.location.reload(); }, 1200);
+          } else {
+            showToast(data.error?.message || 'Gagal membersihkan berkas rusak.', true);
+            btnPurgeAll.disabled = false;
+            btnPurgeAll.textContent = 'Bersihkan Semua Berkas Rusak (404)';
+          }
+        } catch (err) {
+          showToast('Terjadi kesalahan koneksi saat membersihkan berkas rusak.', true);
+          btnPurgeAll.disabled = false;
+          btnPurgeAll.textContent = 'Bersihkan Semua Berkas Rusak (404)';
+        }
+      });
+
+      // 5. Deleted Files Tab Handlers (Filter & Clear History)
+      const searchDeletedInput = document.getElementById('search-deleted-input');
+      const btnResetDeletedSearch = document.getElementById('btn-reset-deleted-search');
+      const deletedSearchCountLabel = document.getElementById('deleted-search-count-label');
+      const btnClearDeleted = document.getElementById('btn-clear-deleted-history');
+
+      function filterDeletedRows() {
+        if (!searchDeletedInput) return;
+        const query = searchDeletedInput.value.toLowerCase().trim();
+        const rows = document.querySelectorAll('tr[id^="deleted-row-"]');
+        let visibleCount = 0;
+
+        rows.forEach(function(row) {
+          if (!query) {
+            row.style.display = '';
+            visibleCount++;
+          } else {
+            const text = row.textContent.toLowerCase();
+            if (text.includes(query)) {
+              row.style.display = '';
+              visibleCount++;
+            } else {
+              row.style.display = 'none';
+            }
+          }
+        });
+
+        if (deletedSearchCountLabel) {
+          if (query) {
+            deletedSearchCountLabel.textContent = visibleCount + ' berkas cocok';
+          } else {
+            deletedSearchCountLabel.textContent = '';
+          }
+        }
+      }
+
+      if (searchDeletedInput) {
+        searchDeletedInput.addEventListener('input', filterDeletedRows);
+      }
+
+      if (btnResetDeletedSearch) {
+        btnResetDeletedSearch.addEventListener('click', function() {
+          if (searchDeletedInput) {
+            searchDeletedInput.value = '';
+            filterDeletedRows();
+            searchDeletedInput.focus();
+          }
+        });
+      }
+
+      if (btnClearDeleted) {
+        btnClearDeleted.addEventListener('click', async function() {
+          const confirmed = await window.showIosConfirm({
+            title: 'Bersihkan Seluruh Riwayat Terhapus?',
+            message: 'Seluruh arsip riwayat berkas terhapus akan dibersihkan dari database admin.',
+            confirmText: 'Bersihkan Riwayat',
+            cancelText: 'Batal',
+            isDestructive: true,
+            icon: 'danger'
+          });
+
+          if (!confirmed) {
+            return;
+          }
+
+          btnClearDeleted.disabled = true;
+          btnClearDeleted.textContent = 'Membersihkan...';
+
+          try {
+            const res = await fetch('/' + panelPath + '/api/clear-deleted-history', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+            });
+
+            if (res.status === 401) {
+              window.location.href = '/' + panelPath + '/login';
+              return;
+            }
+
+            const data = await res.json();
+            if (data.success) {
+              showToast(data.message, false);
+              const tbody = document.getElementById('deleted-files-tbody');
+              if (tbody) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--muted); padding: 2.5rem 1rem;"><div style="font-size: 1.1rem; font-weight: 700; margin-bottom: 0.35rem; color: var(--text);">Tidak ada riwayat berkas terhapus</div><div style="font-size: 0.8rem;">Riwayat arsip berkas terhapus telah dibersihkan secara penuh.</div></td></tr>';
+              }
+              const countBadge = document.getElementById('deleted-count-badge');
+              if (countBadge) countBadge.textContent = '0 Berkas Tercatat';
+              btnClearDeleted.style.display = 'none';
+              const tabBtn = document.getElementById('tab-btn-terhapus');
+              if (tabBtn) tabBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg><span>Berkas Terhapus (0)</span>';
+              const sidebarBtnDesc = document.querySelector('#sidebar-btn-terhapus .sidebar-btn-desc');
+              if (sidebarBtnDesc) sidebarBtnDesc.textContent = 'Arsip Terhapus (0)';
+            } else {
+              showToast(data.error?.message || 'Gagal membersihkan riwayat.', true);
+              btnClearDeleted.disabled = false;
+              btnClearDeleted.textContent = 'Bersihkan Seluruh Riwayat Terhapus';
+            }
+          } catch (err) {
+            showToast('Terjadi kesalahan koneksi saat membersihkan riwayat.', true);
+            btnClearDeleted.disabled = false;
+            btnClearDeleted.textContent = 'Bersihkan Seluruh Riwayat Terhapus';
+          }
+        });
+      }
 
       async function fetchLiveStats() {
         try {
@@ -6729,7 +9432,7 @@ var adminController = {
       setInterval(fetchLiveStats, 20000);
     })();
 
-    ${getOperationalPanelScripts(panelPath)}
+    ${getOperationalPanelScripts(fullAdminPath)}
   </script>
 </body>
 </html>`;
@@ -6821,7 +9524,19 @@ var adminController = {
     const catboxResult = await storageProvider2.delete(targetUrlOrId);
     await mediaRepo.deleteForAdmin(id);
     await analyticsRepository.removeRecentUpload(id);
+    await analyticsRepository.removeFileFromAllStats(id);
+    await analyticsRepository.recordDeletion(1);
     await removeSyncCheckItem(id);
+    await deletedFilesRepository.recordDeleted({
+      id,
+      name: itemName,
+      formattedSize: item?.formattedSize || "-",
+      type: item?.type || "file",
+      shareUrl: item?.shareUrl || targetUrlOrId,
+      deletedAt: Date.now(),
+      deletedBy: "admin",
+      reason: "Admin menghapus berkas permanen dari dashboard"
+    });
     const clientIp = getClientIp(req);
     await auditLogRepository.recordAction({
       type: "PERMANENT_DELETE",
@@ -6854,9 +9569,22 @@ var adminController = {
     }
     const clientIp = getClientIp(req);
     const mediaRepo = getMediaRepository();
+    const item = await mediaRepo.getByIdForAdmin(id);
     await mediaRepo.deleteForAdmin(id);
     await analyticsRepository.removeRecentUpload(id);
+    await analyticsRepository.removeFileFromAllStats(id);
+    await analyticsRepository.recordDeletion(1);
     await removeSyncCheckItem(id);
+    await deletedFilesRepository.recordDeleted({
+      id,
+      name: item?.name || id,
+      formattedSize: item?.formattedSize || "-",
+      type: item?.type || "file",
+      shareUrl: item?.shareUrl || "#",
+      deletedAt: Date.now(),
+      deletedBy: "admin",
+      reason: "Admin membersihkan riwayat database lokal"
+    });
     await auditLogRepository.recordAction({
       type: "HISTORY_DELETE",
       detail: `Pembersihan riwayat database lokal untuk berkas ID: ${id}`,
@@ -6924,6 +9652,73 @@ var adminController = {
       healthyCount: summary.healthyCount,
       brokenCount: summary.brokenCount,
       brokenItems: summary.brokenItems
+    });
+  },
+  /**
+   * POST /{ADMIN_PANEL_PATH}/api/purge-broken
+   * Verifies upstream Catbox files and immediately purges all 404/broken/orphan entries
+   * from both MediaRepository and Analytics history.
+   */
+  async purgeBrokenFiles(req, res) {
+    const clientIp = getClientIp(req);
+    const mediaRepo = getMediaRepository();
+    const recentUploads = await analyticsRepository.getRecentUploads(100);
+    const filesToCheck = recentUploads.map((u) => ({
+      id: u.id,
+      shareUrl: u.shareUrl,
+      name: u.name,
+      formattedSize: u.formattedSize,
+      createdAt: u.createdAt
+    }));
+    const batchResults = await verifyFilesBatch(filesToCheck, 5);
+    let purgedCount = 0;
+    for (const resItem of batchResults) {
+      if (!resItem.exists) {
+        await mediaRepo.deleteForAdmin(resItem.item.id);
+        await analyticsRepository.removeRecentUpload(resItem.item.id);
+        await analyticsRepository.removeFileFromAllStats(resItem.item.id);
+        await removeSyncCheckItem(resItem.item.id);
+        await deletedFilesRepository.recordDeleted({
+          id: resItem.item.id,
+          name: resItem.item.name || resItem.item.id,
+          formattedSize: resItem.item.formattedSize || "-",
+          type: "file",
+          shareUrl: resItem.item.shareUrl || "#",
+          deletedAt: Date.now(),
+          deletedBy: "sync_purge",
+          reason: "Pembersihan otomatis berkas 404 / broken link di server Catbox"
+        });
+        purgedCount++;
+      }
+    }
+    if (purgedCount > 0) {
+      await analyticsRepository.recordDeletion(purgedCount);
+    }
+    await analyticsRepository.purgeTestData();
+    if ("clearTestData" in mediaRepo && typeof mediaRepo.clearTestData === "function") {
+      mediaRepo.clearTestData();
+    }
+    const healthyCount = batchResults.filter((r) => r.exists).length;
+    const summary = {
+      timestamp: Date.now(),
+      totalChecked: batchResults.length,
+      healthyCount,
+      brokenCount: 0,
+      brokenItems: []
+    };
+    await saveLastSyncCheck(summary);
+    await auditLogRepository.recordAction({
+      type: "SYNC_CHECK",
+      detail: `Pembersihan berkas rusak (404) selesai: ${purgedCount} berkas 404/orphan dihapus dari database & analitik, ${healthyCount} berkas valid dipertahankan.`,
+      ip: clientIp
+    });
+    res.json({
+      success: true,
+      data: {
+        purgedCount,
+        healthyCount,
+        totalChecked: batchResults.length
+      }
     });
   },
   /**
@@ -7148,13 +9943,27 @@ var adminController = {
           await storageProvider2.delete(item.shareUrl || item.id);
           await mediaRepo.deleteForAdmin(item.id);
           await analyticsRepository.removeRecentUpload(item.id);
+          await analyticsRepository.removeFileFromAllStats(item.id);
           await removeSyncCheckItem(item.id);
+          await deletedFilesRepository.recordDeleted({
+            id: item.id,
+            name: item.name || item.id,
+            formattedSize: item.formattedSize || "-",
+            type: item.type || "file",
+            shareUrl: item.shareUrl || "#",
+            deletedAt: Date.now(),
+            deletedBy: "bulk_cleanup",
+            reason: `Pembersihan massal (kriteria usia > ${days} hari, views <= ${viewsLimit})`
+          });
           succeeded++;
           freedBytes += item.size || 0;
         } catch (err) {
           failed++;
         }
       }
+    }
+    if (succeeded > 0) {
+      await analyticsRepository.recordDeletion(succeeded);
     }
     await auditLogRepository.recordAction({
       type: "BULK_CLEANUP",
@@ -7170,6 +9979,137 @@ var adminController = {
         formattedFreedBytes: formatBytes4(freedBytes)
       }
     });
+  },
+  /**
+   * POST /{ADMIN_PANEL_PATH}/api/clear-deleted-history
+   * Clears all deleted files archive history.
+   * Strictly protected by requireAdminAuth.
+   */
+  async clearDeletedHistory(req, res) {
+    const clientIp = getClientIp(req);
+    const count = await deletedFilesRepository.clearAll();
+    await auditLogRepository.recordAction({
+      type: "HISTORY_DELETE",
+      detail: `Admin membersihkan seluruh arsip riwayat berkas terhapus (${count} arsip dibersihkan)`,
+      ip: clientIp
+    });
+    res.json({
+      success: true,
+      clearedCount: count,
+      message: `Berhasil membersihkan ${count} riwayat berkas terhapus.`
+    });
+  },
+  /**
+   * GET /{ADMIN_PANEL_PATH}/api/deleted-files
+   * Returns list of recently deleted files for admin audit.
+   * Strictly protected by requireAdminAuth.
+   */
+  async getDeletedFiles(req, res) {
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
+    const items = await deletedFilesRepository.getDeletedFiles(limit);
+    res.json({
+      success: true,
+      data: {
+        items,
+        total: items.length
+      }
+    });
+  },
+  /**
+   * POST /{ADMIN_PANEL_PATH}/api/ai-recommendations
+   * Real-time executive summary and strategic recommendations generated by Gemini 3.8 Flash.
+   * Includes automated graceful fallback to heuristic engine if API key is not configured or fails.
+   */
+  async getAiRecommendations(req, res) {
+    const todayStr = getTodayDateString();
+    try {
+      const [todayStats, weeklyTrend, topFiles, catboxHealth, redisHealth, totalItems] = await Promise.all([
+        analyticsRepository.getDailySummary(todayStr),
+        analyticsRepository.getWeeklyTrend(),
+        analyticsRepository.getTopFiles(10),
+        checkCatboxHealth(),
+        checkRedisHealth(),
+        analyticsRepository.getTotalItemsEver()
+      ]);
+      const heuristicRecs = generateRecommendations(todayStats, weeklyTrend, topFiles);
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (apiKey && apiKey.trim().length > 0) {
+        try {
+          const { GoogleGenAI } = await import("@google/genai");
+          const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
+          const prompt = `Anda adalah asisten AI Analitik Sistem dan Infrastruktur untuk AirShare Pro (platform berbagi berkas media berkinerja tinggi).
+Analisis metrik sistem real-time berikut ini dan berikan ringkasan eksekutif beserta rekomendasi strategis dalam format JSON:
+
+DATA SISTEM REAL-TIME:
+- Tanggal: ${todayStats.date}
+- Unggahan Hari Ini: ${todayStats.uploads} berkas (${todayStats.formattedBytes})
+- Rata-rata Ukuran Berkas: ${todayStats.formattedAverageSize}
+- Total Berkas Tersimpan Aktif: ${totalItems} berkas
+- Total Kunjungan Share Hari Ini: ${todayStats.totalViews} kali
+- Distribusi Tipe Media: ${JSON.stringify(todayStats.byType)}
+- Distribusi Negara Pengunggah: ${JSON.stringify(todayStats.byCountry)}
+- Berkas Paling Sering Dilihat: ${JSON.stringify(topFiles.map((f) => ({ id: f.id, views: f.views })))}
+- Status Catbox Storage: ${catboxHealth.available ? "TERSEDIA" : "TERGANGGU"} (${catboxHealth.latencyMs !== null ? `${catboxHealth.latencyMs}ms` : "N/A"})
+- Status Upstash Redis: ${redisHealth.connected ? "TERHUBUNG" : redisHealth.configured ? "DISCONNECTED" : "LOCAL IN-MEMORY"} (${redisHealth.latencyMs !== null ? `${redisHealth.latencyMs}ms` : "N/A"})
+- Tren 7 Hari Terakhir: ${weeklyTrend.map((w) => `${w.date}: ${w.uploads} unggahan (${w.formattedBytes})`).join(", ")}
+
+INSTRUKSI OUTPUT:
+Hasilkan respons JSON valid dengan struktur:
+{
+  "summary": "Ringkasan eksekutif 2-3 kalimat mengenai status sistem, tren volume beban, dan efisiensi penyimpanan saat ini. Boleh menggunakan format Markdown (seperti **bold** atau \`code\`).",
+  "recommendations": [
+    "Rekomendasi 1 yang terarah (boleh gunakan **bold** dan \`code\`)",
+    "Rekomendasi 2",
+    "Rekomendasi 3",
+    "Rekomendasi 4"
+  ]
+}
+Pastikan rekomendasi berfokus pada optimasi bandwidth, proteksi kuota penyimpanan, retensi data, dan keamanan operasional.`;
+          const response = await ai.models.generateContent({
+            model: "gemini-3.8-flash",
+            contents: prompt,
+            config: {
+              responseMimeType: "application/json"
+            }
+          });
+          const rawText = response.text?.trim() || "";
+          let parsedResponse = null;
+          try {
+            parsedResponse = JSON.parse(rawText);
+          } catch {
+            const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              parsedResponse = JSON.parse(jsonMatch[0]);
+            }
+          }
+          if (parsedResponse && (parsedResponse.summary || Array.isArray(parsedResponse.recommendations) && parsedResponse.recommendations.length > 0)) {
+            res.json({
+              success: true,
+              model: "gemini-3.8-flash",
+              summary: parsedResponse.summary || "Sistem beroperasi normal dengan parameter kapasitas optimal.",
+              recommendations: Array.isArray(parsedResponse.recommendations) && parsedResponse.recommendations.length > 0 ? parsedResponse.recommendations : heuristicRecs,
+              generatedAt: Date.now()
+            });
+            return;
+          }
+        } catch (geminiErr) {
+          console.warn("[GEMINI_RECOMMENDATION_WARN] Gagal menghubungi Gemini API, fallback ke heuristik:", geminiErr?.message || geminiErr);
+        }
+      }
+      res.json({
+        success: true,
+        model: "heuristic-engine",
+        summary: `Sistem mencatat total **${todayStats.uploads} unggahan** (${todayStats.formattedBytes}) dengan **${todayStats.totalViews} kunjungan** pada hari ini. Status penyimpanan Catbox saat ini: \`${catboxHealth.available ? "TERSEDIA" : "TERGANGGU"}\`.`,
+        recommendations: heuristicRecs,
+        generatedAt: Date.now()
+      });
+    } catch (err) {
+      console.error("[AI_RECOMMENDATIONS_ERROR]", err);
+      res.status(500).json({
+        success: false,
+        error: "Gagal menghasilkan analisis rekomendasi AI. Silakan coba beberapa saat lagi."
+      });
+    }
   }
 };
 
@@ -8045,18 +10985,28 @@ function createExpressApp() {
   };
   app2.route("/api/health").get(healthHandler).all(healthMethodNotAllowed);
   app2.route("/health").get(healthHandler).all(healthMethodNotAllowed);
+  app2.get(["/api", "/api/"], (req, res) => {
+    res.json({
+      success: true,
+      service: "AirShare Pro API",
+      status: "operational",
+      version: "1.0.0",
+      endpoints: {
+        health: "/api/health",
+        systemStatus: "/api/system-status",
+        config: "/api/media/config",
+        upload: "/api/media/upload",
+        media: "/api/media"
+      }
+    });
+  });
   app2.get("/robots.txt", (req, res) => {
-    const adminConfig2 = getAdminConfig();
     let content = `User-agent: *
 Allow: /
 Disallow: /api/
 Disallow: /s/
-`;
-    if (adminConfig2.enabled && adminConfig2.panelPath) {
-      content += `Disallow: /${adminConfig2.panelPath}/
-`;
-    }
-    content += `
+Disallow: /admin/
+
 Sitemap: https://airshare-pro.vercel.app/sitemap.xml
 `;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -8064,57 +11014,60 @@ Sitemap: https://airshare-pro.vercel.app/sitemap.xml
     res.send(content);
   });
   const adminConfig = getAdminConfig();
-  if (adminConfig.enabled && adminConfig.panelPath) {
-    const adminBase = `/${adminConfig.panelPath}`;
-    app2.get(adminBase, (req, res) => {
-      res.redirect(`${adminBase}/dashboard`);
+  if (adminConfig.enabled) {
+    const basePath = "/admin";
+    app2.get([basePath, `${basePath}/`], (req, res) => {
+      res.redirect(`${basePath}/dashboard`);
     });
-    app2.get(`${adminBase}/login`, (req, res) => {
+    app2.get(`${basePath}/login`, (req, res) => {
       return adminController.renderLoginPage(req, res);
     });
-    app2.post(`${adminBase}/login`, (req, res) => {
+    app2.post(`${basePath}/login`, (req, res) => {
       return adminController.handleLogin(req, res);
     });
-    app2.all(`${adminBase}/logout`, (req, res) => {
+    app2.all(`${basePath}/logout`, (req, res) => {
       return adminController.handleLogout(req, res);
     });
-    app2.get(`${adminBase}/dashboard`, requireAdminAuth, (req, res) => {
+    app2.get(`${basePath}/dashboard`, requireAdminAuth, (req, res) => {
       return adminController.renderDashboard(req, res);
     });
-    app2.get(`${adminBase}/api/live-stats`, requireAdminAuth, (req, res) => {
+    app2.get(`${basePath}/api/live-stats`, requireAdminAuth, (req, res) => {
       return adminController.getLiveStats(req, res);
     });
-    app2.post(`${adminBase}/api/delete-permanent`, requireAdminAuth, (req, res) => {
+    app2.post(`${basePath}/api/delete-permanent`, requireAdminAuth, (req, res) => {
       return adminController.deletePermanent(req, res);
     });
-    app2.post(`${adminBase}/api/delete-history-only`, requireAdminAuth, (req, res) => {
+    app2.post(`${basePath}/api/delete-history-only`, requireAdminAuth, (req, res) => {
       return adminController.deleteHistoryOnly(req, res);
     });
-    app2.post(`${adminBase}/api/sync-check`, requireAdminAuth, (req, res) => {
+    app2.post(`${basePath}/api/sync-check`, requireAdminAuth, (req, res) => {
       return adminController.runSyncCheck(req, res);
     });
-    app2.post(`${adminBase}/api/config`, requireAdminAuth, (req, res) => {
+    app2.post(`${basePath}/api/purge-broken`, requireAdminAuth, (req, res) => {
+      return adminController.purgeBrokenFiles(req, res);
+    });
+    app2.post(`${basePath}/api/config`, requireAdminAuth, (req, res) => {
       return adminController.updateConfig(req, res);
     });
-    app2.post(`${adminBase}/api/maintenance`, requireAdminAuth, (req, res) => {
+    app2.post(`${basePath}/api/maintenance`, requireAdminAuth, (req, res) => {
       return adminController.toggleMaintenance(req, res);
     });
-    app2.post(`${adminBase}/api/revoke-session`, requireAdminAuth, (req, res) => {
+    app2.post(`${basePath}/api/revoke-session`, requireAdminAuth, (req, res) => {
       return adminController.revokeSession(req, res);
     });
-    app2.post(`${adminBase}/api/revoke-all-sessions`, requireAdminAuth, (req, res) => {
+    app2.post(`${basePath}/api/revoke-all-sessions`, requireAdminAuth, (req, res) => {
       return adminController.revokeAllSessions(req, res);
     });
-    app2.get(`${adminBase}/api/search`, requireAdminAuth, (req, res) => {
+    app2.get(`${basePath}/api/search`, requireAdminAuth, (req, res) => {
       return adminController.searchFiles(req, res);
     });
-    app2.post(`${adminBase}/api/bulk-cleanup/preview`, requireAdminAuth, (req, res) => {
+    app2.post(`${basePath}/api/bulk-cleanup/preview`, requireAdminAuth, (req, res) => {
       return adminController.previewBulkCleanup(req, res);
     });
-    app2.post(`${adminBase}/api/bulk-cleanup`, requireAdminAuth, (req, res) => {
+    app2.post(`${basePath}/api/bulk-cleanup`, requireAdminAuth, (req, res) => {
       return adminController.executeBulkCleanup(req, res);
     });
-    app2.get(`${adminBase}/api/telegram-status`, requireAdminAuth, (req, res) => {
+    app2.get(`${basePath}/api/telegram-status`, requireAdminAuth, (req, res) => {
       const config2 = getTelegramConfig();
       res.json({
         success: true,
@@ -8125,8 +11078,50 @@ Sitemap: https://airshare-pro.vercel.app/sitemap.xml
         }
       });
     });
-    app2.all(`${adminBase}/*`, requireAdminAuth, (req, res) => {
+    app2.get(`${basePath}/api/deleted-files`, requireAdminAuth, (req, res) => {
+      return adminController.getDeletedFiles(req, res);
+    });
+    app2.post(`${basePath}/api/clear-deleted-history`, requireAdminAuth, (req, res) => {
+      return adminController.clearDeletedHistory(req, res);
+    });
+    app2.all(`${basePath}/api/ai-recommendations`, requireAdminAuth, (req, res) => {
+      return adminController.getAiRecommendations(req, res);
+    });
+    app2.all(`${basePath}/*`, requireAdminAuth, (req, res) => {
       res.status(404).send("<!DOCTYPE html><html><body>404 Not Found</body></html>");
+    });
+  } else {
+    app2.all(["/admin", "/admin/*"], (req, res) => {
+      res.status(503).send(`<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Panel \u2014 Konfigurasi Diperlukan</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b101b; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 1.5rem; box-sizing: border-box; }
+    .card { background: #131c2e; border: 1px solid #23324d; border-radius: 16px; max-width: 520px; width: 100%; padding: 2.25rem; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.7); text-align: center; }
+    h1 { font-size: 1.35rem; font-weight: 700; margin-bottom: 0.75rem; color: #38bdf8; }
+    p { font-size: 0.9rem; line-height: 1.6; color: #94a3b8; margin-bottom: 1.5rem; }
+    .code-box { background: #080c14; border: 1px solid #1e293b; border-radius: 10px; padding: 1rem; text-align: left; font-family: monospace; font-size: 0.85rem; color: #e2e8f0; margin-bottom: 1.5rem; line-height: 1.6; }
+    .code-box .key { color: #38bdf8; font-weight: 600; }
+    .code-box .val { color: #34d399; }
+    a { display: inline-block; background: #0284c7; color: #fff; text-decoration: none; padding: 0.7rem 1.5rem; border-radius: 8px; font-weight: 600; font-size: 0.9rem; }
+    a:hover { background: #0369a1; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Admin Panel Memerlukan Konfigurasi</h1>
+    <p>Panel Admin dinonaktifkan secara aman karena kunci rahasia belum disetel di Environment Variables hosting / Vercel Anda. Panel admin selalu diakses di path <code>/admin</code>.</p>
+    <div class="code-box">
+      <span class="key">ADMIN_SECRET_KEY</span>=<span class="val">kunci-rahasia-minimal-16-karakter</span>
+    </div>
+    <p style="font-size: 0.8rem; margin-bottom: 1.5rem; color: #64748b;">Tambahkan di Settings &gt; Environment Variables Vercel, lalu redeploy project Anda.</p>
+    <a href="/">Kembali ke Halaman Utama</a>
+  </div>
+</body>
+</html>`);
     });
   }
   app2.get(["/api/system-status", "/system-status"], standardRateLimiter, async (req, res) => {
@@ -8146,6 +11141,9 @@ Sitemap: https://airshare-pro.vercel.app/sitemap.xml
       }
     });
   });
+  app2.get(["/s", "/s/"], (req, res) => {
+    res.redirect("/");
+  });
   app2.get("/s/:id", (req, res) => {
     return shareController.renderShareLanding(req, res);
   });
@@ -8154,7 +11152,7 @@ Sitemap: https://airshare-pro.vercel.app/sitemap.xml
   });
   app2.use("/api/media", router);
   app2.use("/media", router);
-  app2.all(["/api/*", "/media/*"], (req, res) => {
+  app2.all(["/api", "/api/*", "/media", "/media/*"], (req, res) => {
     const errorResp = {
       success: false,
       error: {
@@ -8194,6 +11192,50 @@ var config = {
   }
 };
 function handler(req, res) {
+  let queryVPath;
+  if (req.query && typeof req.query.__vpath === "string") {
+    queryVPath = req.query.__vpath;
+  } else if (req.url && req.url.includes("__vpath=")) {
+    try {
+      const parsedUrl = new URL(req.url, "http://localhost");
+      queryVPath = parsedUrl.searchParams.get("__vpath") || void 0;
+    } catch {
+      const match = req.url.match(/[?&]__vpath=([^&]+)/);
+      if (match) {
+        queryVPath = decodeURIComponent(match[1]);
+      }
+    }
+  }
+  const forwardedUri = req.headers["x-forwarded-uri"] || req.headers["x-matched-path"];
+  let targetPath = queryVPath;
+  if (!targetPath && forwardedUri) {
+    targetPath = forwardedUri;
+  }
+  if (!targetPath && (!req.url || req.url === "/" || req.url === "/api" || req.url.startsWith("/api?"))) {
+    targetPath = "/api";
+  }
+  if (targetPath) {
+    const normalizedPath = targetPath.startsWith("/") ? targetPath : `/${targetPath}`;
+    if (req.query && "__vpath" in req.query) {
+      delete req.query.__vpath;
+    }
+    const currentUrl = req.url || "";
+    const queryIdx = currentUrl.indexOf("?");
+    if (queryIdx !== -1) {
+      try {
+        const dummyUrl = new URL(currentUrl, "http://localhost");
+        dummyUrl.searchParams.delete("__vpath");
+        const remainingQuery = dummyUrl.search;
+        req.url = normalizedPath + remainingQuery;
+      } catch {
+        const qs = currentUrl.slice(queryIdx);
+        const cleanQs = qs.replace(/[?&]__vpath=[^&]*/g, "").replace(/^[?&]+/, "?");
+        req.url = normalizedPath + (cleanQs !== "?" ? cleanQs : "");
+      }
+    } else {
+      req.url = normalizedPath;
+    }
+  }
   return app_default(req, res);
 }
 export {

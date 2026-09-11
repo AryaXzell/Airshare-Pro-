@@ -3,12 +3,14 @@ import { Header } from './components/header/Header';
 import { UploadCard } from './components/upload/UploadCard';
 import { MediaLibrary } from './components/media-library/MediaLibrary';
 import { Toast } from './components/ui/Toast';
+import { AnnouncementBanner } from './components/announcement/AnnouncementBanner';
 import { useTheme } from './hooks/useTheme';
 import { useToast } from './hooks/useToast';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useMediaLibrary } from './hooks/useMediaLibrary';
 import { useUpload } from './hooks/useUpload';
 import { usePasteUpload } from './hooks/usePasteUpload';
+import { useSystemStatus } from './hooks/useSystemStatus';
 import { MediaItem, MediaType } from './types';
 
 // Lazy-load non-critical interactive overlays to reduce initial bundle size & execution time
@@ -55,6 +57,9 @@ export default function App() {
 
   const [isActionSheetOpen, setIsActionSheetOpen] = useState(false);
   const [previewItem, setPreviewItem] = useState<MediaItem | null>(null);
+
+  // Real-time system status & announcement synchronization
+  const { announcement, isDismissed, dismissAnnouncement, featureFlags } = useSystemStatus();
 
   // Connection status & persistent toast tracking
   const prevOnlineRef = useRef<boolean>(isOnline);
@@ -131,7 +136,7 @@ export default function App() {
 
   // Enable clipboard paste-to-upload (Ctrl+V / Cmd+V anywhere on the page)
   usePasteUpload({
-    isEnabled: isOnline && !isStateUploading,
+    isEnabled: isOnline && !isStateUploading && featureFlags.pasteToUpload,
     onFilePasted: handlePastedFile,
   });
 
@@ -238,6 +243,13 @@ export default function App() {
 
       {/* Main App Content Container */}
       <main className="flex-grow max-w-2xl w-full mx-auto px-4 pt-7 pb-20">
+        {/* Real-time System Announcement Banner */}
+        <AnnouncementBanner
+          announcement={announcement}
+          isDismissed={isDismissed}
+          onDismiss={dismissAnnouncement}
+        />
+
         {/* Hero Title */}
         <div className="text-center mb-7 sm:mb-9 space-y-2">
           <h2

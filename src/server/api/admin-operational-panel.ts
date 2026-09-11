@@ -87,7 +87,7 @@ export function renderOperationalControlsHtml(config: SystemConfig): string {
             <textarea id="announcement-message" rows="3" style="width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.6rem 0.75rem; font-size: 0.825rem; resize: vertical;" placeholder="Contoh: Pemeliharaan server dijadwalkan pukul 23:00 WIB...">${escapeHtml(announcement.message || '')}</textarea>
           </div>
 
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+          <div class="config-form-grid">
             <div>
               <label style="font-size: 0.75rem; font-weight: 600; color: var(--muted); display: block; margin-bottom: 0.35rem;">Tipe Tampilan</label>
               <select id="announcement-type" style="width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.5rem 0.6rem; font-size: 0.825rem;">
@@ -120,7 +120,7 @@ export function renderOperationalControlsHtml(config: SystemConfig): string {
         </h3>
 
         <div style="display: flex; flex-direction: column; gap: 0.85rem;">
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+          <div class="config-form-grid">
             <div>
               <label style="font-size: 0.75rem; font-weight: 600; color: var(--muted); display: block; margin-bottom: 0.35rem;">Maksimal Ukuran (MB)</label>
               <input type="number" id="cfg-max-upload" min="1" max="500" value="${maxMb}" style="width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.5rem 0.6rem; font-size: 0.825rem;" />
@@ -176,56 +176,58 @@ export function renderActiveSessionsHtml(sessions: AdminSessionInfo[]): string {
         <span class="panel-badge">TTL: 1 Jam</span>
         ${
           otherSessionsCount > 0
-            ? `<button type="button" id="btn-revoke-all-sessions" class="btn-revoke-all" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); padding: 0.35rem 0.75rem; border-radius: 6px; font-size: 0.75rem; font-weight: 700; cursor: pointer;">Cabut Semua Sesi Lain (${otherSessionsCount})</button>`
+            ? `<button type="button" id="btn-revoke-all-sessions" class="btn-revoke-all" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); padding: 0.35rem 0.75rem; border-radius: 6px; font-size: 0.75rem; font-weight: 700; cursor: pointer; transition: all 0.2s;">Cabut Semua Sesi Lain (${otherSessionsCount})</button>`
             : ''
         }
       </div>
     </div>
 
     <div class="table-container">
-      <table>
+      <table style="min-width: 660px;">
         <thead>
           <tr>
-            <th>Token Sesi</th>
-            <th>Waktu Login</th>
-            <th>IP Klien</th>
-            <th>User Agent</th>
-            <th>Status</th>
-            <th>Aksi</th>
+            <th style="width: 120px;">Token Sesi</th>
+            <th style="width: 140px;">Waktu Login</th>
+            <th style="width: 130px;">IP Klien</th>
+            <th style="min-width: 160px;">User Agent</th>
+            <th style="width: 100px;">Status</th>
+            <th style="width: 80px; text-align: center;">Aksi</th>
           </tr>
         </thead>
         <tbody>
           ${
             sessions.length === 0
-              ? `<tr><td colspan="6" style="text-align: center; color: var(--muted); padding: 1.5rem;">Tidak ada sesi aktif.</td></tr>`
+              ? `<tr><td colspan="6" style="text-align: center; color: var(--muted); padding: 2rem;">Tidak ada sesi aktif.</td></tr>`
               : sessions
                   .map((s) => `
             <tr id="session-row-${escapeHtml(s.token)}">
               <td>
-                <code style="background: rgba(255,255,255,0.06); padding: 0.2rem 0.4rem; border-radius: 4px; font-size: 0.75rem; color: #a5b4fc;">
+                <code style="background: rgba(255,255,255,0.06); padding: 0.25rem 0.45rem; border-radius: 4px; font-size: 0.75rem; color: #a5b4fc; font-weight: 600; white-space: nowrap;">
                   ${escapeHtml(s.tokenPreview)}
                 </code>
               </td>
               <td>
-                <div style="font-weight: 600; font-size: 0.8rem;">${formatRelativeTime(s.loginAt)}</div>
-                <div style="font-size: 0.7rem; color: var(--muted);">${formatAbsoluteTime(s.loginAt)}</div>
+                <div style="font-weight: 600; font-size: 0.8rem; white-space: nowrap;">${formatRelativeTime(s.loginAt)}</div>
+                <div style="font-size: 0.7rem; color: var(--muted); white-space: nowrap;">${formatAbsoluteTime(s.loginAt)}</div>
               </td>
-              <td style="font-weight: 600; font-size: 0.8rem;">${escapeHtml(s.ip)}</td>
-              <td style="font-size: 0.75rem; color: var(--muted); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(s.userAgent)}">
-                ${escapeHtml(s.userAgent)}
+              <td style="font-weight: 600; font-size: 0.8rem; white-space: nowrap;">${escapeHtml(s.ip)}</td>
+              <td>
+                <div style="font-size: 0.75rem; color: var(--muted); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(s.userAgent)}">
+                  ${escapeHtml(s.userAgent)}
+                </div>
               </td>
               <td>
                 ${
                   s.isCurrent
-                    ? `<span style="background: rgba(16, 185, 129, 0.2); color: #34d399; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700;">Sesi Ini</span>`
-                    : `<span style="background: rgba(255, 255, 255, 0.08); color: var(--muted); padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600;">Perangkat Lain</span>`
+                    ? `<span style="display: inline-block; background: rgba(16, 185, 129, 0.2); color: #34d399; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700; white-space: nowrap;">Sesi Ini</span>`
+                    : `<span style="display: inline-block; background: rgba(255, 255, 255, 0.08); color: var(--muted); padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; white-space: nowrap;">Perangkat Lain</span>`
                 }
               </td>
-              <td>
+              <td style="text-align: center;">
                 ${
                   s.isCurrent
                     ? `<span style="font-size: 0.75rem; color: var(--muted);">-</span>`
-                    : `<button type="button" class="btn-revoke-single" data-token="${escapeHtml(s.token)}" style="background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 700; cursor: pointer;">Cabut</button>`
+                    : `<button type="button" class="btn-revoke-single" data-token="${escapeHtml(s.token)}" style="background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); padding: 0.25rem 0.55rem; border-radius: 4px; font-size: 0.75rem; font-weight: 700; cursor: pointer; transition: all 0.2s;">Cabut</button>`
                 }
               </td>
             </tr>`)
@@ -322,14 +324,14 @@ export function renderAuditLogsHtml(logs: AuditLogEntry[]): string {
       <span class="panel-badge">Retensi 90 Hari</span>
     </div>
 
-    <div class="table-container" style="max-height: 400px; overflow-y: auto;">
-      <table>
+    <div class="table-container" style="max-height: 420px; overflow-y: auto;">
+      <table style="min-width: 680px;">
         <thead>
           <tr>
-            <th>Waktu</th>
-            <th>Jenis Tindakan</th>
-            <th>Detail &amp; Dampak</th>
-            <th>IP Admin</th>
+            <th style="width: 140px; position: sticky; top: 0; background: var(--card); z-index: 2;">Waktu</th>
+            <th style="width: 150px; position: sticky; top: 0; background: var(--card); z-index: 2;">Jenis Tindakan</th>
+            <th style="min-width: 260px; position: sticky; top: 0; background: var(--card); z-index: 2;">Detail &amp; Dampak</th>
+            <th style="width: 120px; position: sticky; top: 0; background: var(--card); z-index: 2;">IP Admin</th>
           </tr>
         </thead>
         <tbody>
@@ -353,19 +355,19 @@ export function renderAuditLogsHtml(logs: AuditLogEntry[]): string {
 
                     return `
             <tr>
-              <td>
+              <td style="white-space: nowrap;">
                 <div style="font-weight: 600; font-size: 0.78rem;">${formatRelativeTime(log.timestamp)}</div>
                 <div style="font-size: 0.68rem; color: var(--muted);">${formatAbsoluteTime(log.timestamp)}</div>
               </td>
               <td>
-                <span style="display: inline-block; background: ${badgeBg}; color: ${badgeColor}; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase;">
+                <span style="display: inline-block; background: ${badgeBg}; color: ${badgeColor}; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; white-space: nowrap;">
                   ${escapeHtml(log.type)}
                 </span>
               </td>
-              <td style="font-size: 0.8rem; line-height: 1.4;">
+              <td style="font-size: 0.8rem; line-height: 1.45; word-break: break-word;">
                 ${escapeHtml(log.detail)}
               </td>
-              <td style="font-size: 0.78rem; font-weight: 600; color: var(--muted);">
+              <td style="font-size: 0.78rem; font-weight: 600; color: var(--muted); white-space: nowrap;">
                 ${escapeHtml(log.ip || '-')}
               </td>
             </tr>`;
@@ -380,6 +382,16 @@ export function renderAuditLogsHtml(logs: AuditLogEntry[]): string {
 
 export function getOperationalPanelStyles(): string {
   return `
+    .config-form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+    @media (max-width: 640px) {
+      .config-form-grid {
+        grid-template-columns: 1fr;
+      }
+    }
     .btn-maint-enable {
       background: rgba(239, 68, 68, 0.2);
       color: #f87171;
@@ -439,8 +451,26 @@ export function getOperationalPanelScripts(panelPath: string): string {
     (function() {
       const pPath = ${JSON.stringify(panelPath)};
 
-      function showNotice(msg, isError) {
-        alert(msg);
+      // Helper function for alerts/confirms (falls back to native if custom not ready)
+      async function alertIos(title, message, icon) {
+        if (typeof window.showIosAlert === 'function') {
+          return await window.showIosAlert({ title, message, icon: icon || 'info' });
+        } else {
+          alert(title + '\\n\\n' + message);
+        }
+      }
+
+      async function confirmIos(title, message, isDestructive, confirmText) {
+        if (typeof window.showIosConfirm === 'function') {
+          return await window.showIosConfirm({
+            title,
+            message,
+            isDestructive: isDestructive !== false,
+            confirmText: confirmText || (isDestructive ? 'Ya, Lanjutkan' : 'Konfirmasi')
+          });
+        } else {
+          return confirm(title + '\\n\\n' + message);
+        }
       }
 
       // 1. Toggle Maintenance Kill Switch
@@ -449,10 +479,16 @@ export function getOperationalPanelScripts(panelPath: string): string {
         btnMaint.addEventListener('click', async function() {
           const currentlyActive = btnMaint.getAttribute('data-active') === 'true';
           const newTarget = !currentlyActive;
-          const confirmMsg = newTarget
-            ? 'PERINGATAN: Mengaktifkan Kill Switch akan menutup seluruh fitur unggah berkas untuk semua pengguna publik (HTTP 503). Lanjutkan?'
-            : 'Aktifkan kembali layanan unggahan normal?';
-          if (!confirm(confirmMsg)) return;
+          
+          const confirmed = await confirmIos(
+            newTarget ? 'Aktifkan Kill Switch?' : 'Nonaktifkan Maintenance?',
+            newTarget
+              ? 'PERINGATAN: Mengaktifkan Kill Switch akan menutup seluruh akses upload publik (HTTP 503 Maintenance). Halaman admin tetap dapat diakses.'
+              : 'Layanan upload publik akan kembali dibuka secara normal untuk semua pengguna.',
+            newTarget,
+            newTarget ? 'Aktifkan Kill Switch' : 'Buka Layanan Normal'
+          );
+          if (!confirmed) return;
 
           try {
             btnMaint.disabled = true;
@@ -466,11 +502,11 @@ export function getOperationalPanelScripts(panelPath: string): string {
             if (data.success) {
               window.location.reload();
             } else {
-              alert('Gagal mengubah mode maintenance: ' + (data.error?.message || 'Unknown error'));
+              await alertIos('Gagal Mengubah Mode', data.error?.message || 'Terjadi kesalahan sistem.', 'danger');
               window.location.reload();
             }
           } catch (err) {
-            alert('Gagal menghubungi server.');
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
             window.location.reload();
           }
         });
@@ -496,12 +532,12 @@ export function getOperationalPanelScripts(panelPath: string): string {
             });
             const data = await res.json();
             if (data.success) {
-              alert('Banner pengumuman berhasil diperbarui.');
+              await alertIos('Pengumuman Disimpan', 'Banner pengumuman publik berhasil diperbarui.', 'success');
             } else {
-              alert('Gagal menyimpan pengumuman: ' + (data.error?.message || 'Error'));
+              await alertIos('Gagal Menyimpan', data.error?.message || 'Error', 'danger');
             }
           } catch (err) {
-            alert('Gagal menghubungi server.');
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
           } finally {
             btnSaveAnnounce.disabled = false;
             btnSaveAnnounce.textContent = 'Simpan Pengumuman';
@@ -520,11 +556,11 @@ export function getOperationalPanelScripts(panelPath: string): string {
           const pwaInstallPrompt = document.getElementById('flag-pwa').checked;
 
           if (isNaN(maxUploadMb) || maxUploadMb < 1 || maxUploadMb > 500) {
-            alert('Ukuran berkas harus antara 1 sampai 500 MB.');
+            await alertIos('Ukuran Berkas Tidak Valid', 'Batas ukuran berkas harus bernilai antara 1 sampai 500 MB.', 'warning');
             return;
           }
           if (isNaN(rateLimit) || rateLimit < 1 || rateLimit > 200) {
-            alert('Rate limit harus antara 1 sampai 200 upload/menit.');
+            await alertIos('Rate Limit Tidak Valid', 'Rate limit harus bernilai antara 1 sampai 200 upload/menit.', 'warning');
             return;
           }
 
@@ -542,12 +578,12 @@ export function getOperationalPanelScripts(panelPath: string): string {
             });
             const data = await res.json();
             if (data.success) {
-              alert('Konfigurasi dinamis & feature flags berhasil diperbarui.');
+              await alertIos('Konfigurasi Disimpan', 'Konfigurasi batas dinamis & feature flags berhasil diperbarui.', 'success');
             } else {
-              alert('Gagal menyimpan konfigurasi: ' + (data.error?.message || 'Error'));
+              await alertIos('Gagal Menyimpan', data.error?.message || 'Error', 'danger');
             }
           } catch (err) {
-            alert('Gagal menghubungi server.');
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
           } finally {
             btnSaveLimits.disabled = false;
             btnSaveLimits.textContent = 'Simpan Konfigurasi Dinamis';
@@ -559,7 +595,13 @@ export function getOperationalPanelScripts(panelPath: string): string {
       document.querySelectorAll('.btn-revoke-single').forEach(function(btn) {
         btn.addEventListener('click', async function() {
           const token = btn.getAttribute('data-token');
-          if (!confirm('Cabut sesi admin ini? Sesi tersebut akan langsung logout.')) return;
+          const confirmed = await confirmIos(
+            'Cabut Sesi Admin Ini?',
+            'Sesi pada perangkat tersebut akan langsung ditutup dan dipaksa logout.',
+            true,
+            'Cabut Sesi'
+          );
+          if (!confirmed) return;
 
           try {
             btn.disabled = true;
@@ -573,15 +615,16 @@ export function getOperationalPanelScripts(panelPath: string): string {
             if (data.success) {
               const row = document.getElementById('session-row-' + token);
               if (row) row.remove();
-              alert('Sesi berhasil dicabut.');
+              await alertIos('Sesi Dicabut', 'Sesi admin tersebut telah berhasil dinonaktifkan.', 'success');
             } else {
-              alert('Gagal mencabut sesi.');
+              await alertIos('Gagal Mencabut Sesi', data.error?.message || 'Gagal mencabut sesi.', 'danger');
               btn.disabled = false;
               btn.textContent = 'Cabut';
             }
           } catch (err) {
-            alert('Gagal menghubungi server.');
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
             btn.disabled = false;
+            btn.textContent = 'Cabut';
           }
         });
       });
@@ -589,7 +632,14 @@ export function getOperationalPanelScripts(panelPath: string): string {
       const btnRevokeAll = document.getElementById('btn-revoke-all-sessions');
       if (btnRevokeAll) {
         btnRevokeAll.addEventListener('click', async function() {
-          if (!confirm('Cabut SEMUA sesi admin lain? Hanya sesi Anda saat ini yang akan tetap aktif.')) return;
+          const confirmed = await confirmIos(
+            'Cabut Semua Sesi Lain?',
+            'Seluruh sesi admin pada perangkat lain akan langsung logout. Hanya sesi Anda saat ini yang akan tetap aktif.',
+            true,
+            'Cabut Semua Sesi Lain'
+          );
+          if (!confirmed) return;
+
           try {
             btnRevokeAll.disabled = true;
             btnRevokeAll.textContent = 'Memproses...';
@@ -599,14 +649,14 @@ export function getOperationalPanelScripts(panelPath: string): string {
             });
             const data = await res.json();
             if (data.success) {
-              alert('Berhasil mencabut ' + data.revokedCount + ' sesi lain.');
+              await alertIos('Berhasil', 'Berhasil mencabut ' + data.revokedCount + ' sesi admin lainnya.', 'success');
               window.location.reload();
             } else {
-              alert('Gagal mencabut semua sesi.');
+              await alertIos('Gagal', 'Gagal mencabut sesi admin lainnya.', 'danger');
               btnRevokeAll.disabled = false;
             }
           } catch (err) {
-            alert('Gagal menghubungi server.');
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
             btnRevokeAll.disabled = false;
           }
         });
@@ -653,16 +703,16 @@ export function getOperationalPanelScripts(panelPath: string): string {
 
                 previewItems.innerHTML = cachedCandidates.map(function(item) {
                   return '<div style="display: flex; justify-content: space-between; font-size: 0.75rem; padding: 0.3rem 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.05);">' +
-                    '<span style="font-weight: 600; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + (item.name || item.id) + '</span>' +
+                    '<span style="font-weight: 600; max-width: clamp(120px, 40vw, 250px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + (item.name || item.id) + '</span>' +
                     '<span style="color: var(--muted);">' + (item.formattedSize || '0 B') + ' | ' + (item.views || 0) + ' views</span>' +
                   '</div>';
                 }).join('');
               }
             } else {
-              alert('Gagal memuat pratinjau: ' + (data.error?.message || 'Error'));
+              await alertIos('Gagal Memuat Pratinjau', data.error?.message || 'Error', 'danger');
             }
           } catch (err) {
-            alert('Gagal menghubungi server.');
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
           } finally {
             btnPreviewCleanup.disabled = false;
             btnPreviewCleanup.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg> Pratinjau Berkas Terdampak';
@@ -686,6 +736,15 @@ export function getOperationalPanelScripts(panelPath: string): string {
 
         btnExecuteCleanup.addEventListener('click', async function() {
           if (confirmInput.value.trim() !== 'KONFIRMASI HAPUS MASSAL') return;
+          
+          const confirmed = await confirmIos(
+            'Hapus ' + cachedCandidates.length + ' Berkas Massal?',
+            'PERINGATAN: Tindakan ini bersifat PERMANEN dan akan menghapus seluruh berkas terpilih dari server penyimpanan Catbox.',
+            true,
+            'Hapus Massal Sekarang'
+          );
+          if (!confirmed) return;
+
           const olderThanDays = parseInt(document.getElementById('cleanup-older-than').value, 10);
           const maxViews = parseInt(document.getElementById('cleanup-max-views').value, 10);
 
@@ -699,15 +758,15 @@ export function getOperationalPanelScripts(panelPath: string): string {
             });
             const data = await res.json();
             if (data.success) {
-              alert('Pembersihan massal selesai! ' + data.data.succeeded + ' berkas berhasil dihapus permanen. Total storage dibebaskan: ' + data.data.formattedFreedBytes);
+              await alertIos('Pembersihan Selesai', data.data.succeeded + ' berkas berhasil dihapus permanen. Total storage dibebaskan: ' + data.data.formattedFreedBytes, 'success');
               window.location.reload();
             } else {
-              alert('Gagal menjalankan pembersihan massal: ' + (data.error?.message || 'Error'));
+              await alertIos('Gagal Eksekusi', data.error?.message || 'Error', 'danger');
               btnExecuteCleanup.disabled = false;
               btnExecuteCleanup.textContent = 'Jalankan Hapus Massal Permanen';
             }
           } catch (err) {
-            alert('Gagal menghubungi server.');
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
             btnExecuteCleanup.disabled = false;
           }
         });
@@ -753,7 +812,7 @@ export function getOperationalPanelScripts(panelPath: string): string {
         btnSearchDb.addEventListener('click', async function() {
           const q = searchInput.value.trim();
           if (!q) {
-            alert('Masukkan kata kunci pencarian.');
+            await alertIos('Pencarian', 'Masukkan kata kunci pencarian terlebih dahulu.', 'warning');
             return;
           }
           try {
@@ -763,13 +822,13 @@ export function getOperationalPanelScripts(panelPath: string): string {
             const data = await res.json();
             if (data.success) {
               const items = data.data.items || [];
-              alert('Ditemukan ' + items.length + ' berkas di seluruh database yang cocok dengan "' + q + '".');
+              await alertIos('Hasil Pencarian', 'Ditemukan ' + items.length + ' berkas di database yang cocok dengan "' + q + '".', 'info');
               filterTableLocally(q);
             } else {
-              alert('Pencarian gagal: ' + (data.error?.message || 'Error'));
+              await alertIos('Pencarian Gagal', data.error?.message || 'Error', 'danger');
             }
           } catch (err) {
-            alert('Gagal menghubungi server.');
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
           } finally {
             btnSearchDb.disabled = false;
             btnSearchDb.textContent = 'Cari di Seluruh DB';

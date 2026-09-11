@@ -189,6 +189,23 @@ export interface ToastInfo {
   type?: 'success' | 'error' | 'warning' | 'info';
 }
 
+export interface AnnouncementBannerInfo {
+  message: string;
+  type: 'info' | 'warning' | 'success';
+  enabled: boolean;
+  updatedAt?: number;
+}
+
+export interface SystemStatusData {
+  maintenanceMode: boolean;
+  announcement: AnnouncementBannerInfo | null;
+  featureFlags?: {
+    pasteToUpload: boolean;
+    qrCode: boolean;
+    pwaInstallPrompt: boolean;
+  };
+}
+
 export interface DailyStats {
   date: string;
   uploads: number;
@@ -207,6 +224,17 @@ export interface WeeklyTrendItem {
   bytes: number;
   formattedBytes: string;
   views: number;
+}
+
+export interface DeletedFileRecord {
+  id: string;
+  name: string;
+  formattedSize: string;
+  type: MediaType | string;
+  shareUrl: string;
+  deletedAt: number;
+  deletedBy: 'user' | 'admin' | 'bulk_cleanup' | 'sync_purge';
+  reason?: string;
 }
 
 export interface AdminDashboardData {

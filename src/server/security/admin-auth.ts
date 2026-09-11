@@ -321,6 +321,24 @@ export async function checkAdminLoginRateLimit(
 }
 
 /**
+ * Resets admin login rate limit for a given IP (useful in testing or manual unblocks).
+ */
+export async function resetAdminLoginRateLimit(ip = '127.0.0.1'): Promise<void> {
+  const limiter = getRateLimiter();
+  const keys = [
+    `admin_login:${ip}`,
+    `admin_login:::ffff:${ip}`,
+    `admin_login:::1`,
+    `admin_login:localhost`,
+  ];
+  for (const k of keys) {
+    if ('resetKey' in limiter && typeof (limiter as any).resetKey === 'function') {
+      await (limiter as any).resetKey(k);
+    }
+  }
+}
+
+/**
  * Middleware that strictly protects admin routes.
  * If unauthenticated: redirects browser requests to login or returns 401 for API requests.
  */

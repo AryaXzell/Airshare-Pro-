@@ -30,11 +30,34 @@ export interface SystemConfigData {
 export type SystemConfig = SystemConfigData;
 export type AnnouncementConfig = AnnouncementBanner;
 
+/**
+ * Vercel Serverless hard limit for request/response body payload is 4.5MB.
+ * To provide a reliable buffer for multipart form boundaries and headers,
+ * safe maximum upload size on Vercel is capped at 4.2MB (4,200,000 bytes).
+ */
+export const VERCEL_SAFE_MAX_UPLOAD_SIZE = 4200000;
+export const DEFAULT_MAX_UPLOAD_SIZE = 4 * 1024 * 1024; // 4MB default
+
+function resolveInitialMaxUploadSize(): number {
+  const configured = parseInt(process.env.MAX_UPLOAD_SIZE || `${DEFAULT_MAX_UPLOAD_SIZE}`, 10);
+  const parsed = isNaN(configured) || configured <= 0 ? DEFAULT_MAX_UPLOAD_SIZE : configured;
+
+  if (process.env.VERCEL) {
+    if (parsed > VERCEL_SAFE_MAX_UPLOAD_SIZE) {
+      console.warn(
+        `[CONFIG_WARN_CRITICAL] MAX_UPLOAD_SIZE (${parsed} bytes) melebihi batas aman Vercel Serverless (maks ~4.2MB). Vercel memiliki hard limit 4.5MB untuk seluruh request body yang akan memutus koneksi dengan error 413 sebelum sampai ke aplikasi. Otomatis membatasi (clamp) maxUploadSize ke ${VERCEL_SAFE_MAX_UPLOAD_SIZE} bytes (4.2 MB).`
+      );
+      return VERCEL_SAFE_MAX_UPLOAD_SIZE;
+    }
+  }
+  return parsed;
+}
+
 // In-memory fallbacks for single-process / development environments
 const inMemoryConfig = {
   maintenanceMode: false,
   announcement: null as AnnouncementBanner | null,
-  maxUploadSize: parseInt(process.env.MAX_UPLOAD_SIZE || '209715200', 10), // default 200MB
+  maxUploadSize: resolveInitialMaxUploadSize(),
   rateLimit: {
     limit: parseInt(process.env.RATE_LIMIT_MAX_UPLOADS_PER_MIN || '20', 10),
     windowMs: 60 * 1000,
@@ -103,10 +126,26 @@ export async function getAnnouncement(): Promise<AnnouncementBanner | null> {
   const redis = isUpstashConfigured() ? getRedisClient() : null;
   if (redis) {
     try {
-      const raw = await redis.get<string | AnnouncementBanner>('config:announcement');
+      const raw = await redis.get<any>('config:announcement');
       if (raw) {
-        const parsed: AnnouncementBanner = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        return parsed;
+        let parsed: any = raw;
+        while (typeof parsed === 'string') {
+          try {
+            parsed = JSON.parse(parsed);
+          } catch {
+            break;
+          }
+        }
+        if (parsed && typeof parsed === 'object') {
+          const announcement: AnnouncementBanner = {
+            message: String(parsed.message || ''),
+            type: ['info', 'warning', 'success'].includes(parsed.type) ? parsed.type : 'info',
+            enabled: parsed.enabled === true || parsed.enabled === 'true',
+            updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
+          };
+          inMemoryConfig.announcement = announcement;
+          return announcement;
+        }
       }
     } catch (err) {
       console.warn('[SYSTEM_CONFIG] Gagal membaca pengumuman dari Redis:', err);
@@ -120,8 +159,10 @@ export async function getAnnouncement(): Promise<AnnouncementBanner | null> {
  */
 export async function setAnnouncement(announcement: Omit<AnnouncementBanner, 'updatedAt'> & { updatedAt?: number }): Promise<void> {
   const finalAnnouncement: AnnouncementBanner = {
-    ...announcement,
-    updatedAt: announcement.updatedAt || Date.now(),
+    message: String(announcement.message || '').trim(),
+    type: ['info', 'warning', 'success'].includes(announcement.type) ? announcement.type : 'info',
+    enabled: announcement.enabled === true || (announcement.enabled as any) === 'true',
+    updatedAt: Date.now(),
   };
   inMemoryConfig.announcement = finalAnnouncement;
   const redis = isUpstashConfigured() ? getRedisClient() : null;
@@ -140,7 +181,8 @@ export async function setAnnouncement(announcement: Omit<AnnouncementBanner, 'up
 
 /**
  * Retrieves the dynamic max upload size in bytes.
- * Fallback to process.env.MAX_UPLOAD_SIZE or 200MB.
+ * Fallback to process.env.MAX_UPLOAD_SIZE or 4MB default.
+ * Automatically clamped to VERCEL_SAFE_MAX_UPLOAD_SIZE on Vercel.
  */
 export async function getMaxUploadSize(): Promise<number> {
   const redis = isUpstashConfigured() ? getRedisClient() : null;
@@ -150,6 +192,9 @@ export async function getMaxUploadSize(): Promise<number> {
       if (val !== null && val !== undefined) {
         const num = typeof val === 'number' ? val : parseInt(val, 10);
         if (!isNaN(num) && num > 0) {
+          if (process.env.VERCEL && num > VERCEL_SAFE_MAX_UPLOAD_SIZE) {
+            return VERCEL_SAFE_MAX_UPLOAD_SIZE;
+          }
           return num;
         }
       }
@@ -161,12 +206,12 @@ export async function getMaxUploadSize(): Promise<number> {
 }
 
 /**
- * Updates the dynamic max upload size (enforcing 1MB to 500MB boundary).
+ * Updates the dynamic max upload size (enforcing 1MB to 500MB boundary, or clamped on Vercel).
  */
 export async function setMaxUploadSize(bytes: number): Promise<void> {
   const MIN_SIZE = 1024 * 1024; // 1MB
-  const MAX_SIZE = 500 * 1024 * 1024; // 500MB (Catbox safe boundary)
-  const clamped = Math.max(MIN_SIZE, Math.min(MAX_SIZE, bytes));
+  const maxLimit = process.env.VERCEL ? VERCEL_SAFE_MAX_UPLOAD_SIZE : 500 * 1024 * 1024;
+  const clamped = Math.max(MIN_SIZE, Math.min(maxLimit, bytes));
 
   inMemoryConfig.maxUploadSize = clamped;
   const redis = isUpstashConfigured() ? getRedisClient() : null;

@@ -298,9 +298,40 @@ async function runAdminTests() {
     const postDelLookup = await mediaRepo.getByIdForAdmin(testItem.id);
     assert(postDelLookup === null, 'Item is deleted from MediaRepository after delete-permanent');
 
+    // Test: Unauthenticated POST /api/ai-recommendations returns 401
+    const unauthAi = await fetch(`${baseUrl}/admin/api/ai-recommendations`, {
+      method: 'POST',
+    });
+    assert(unauthAi.status === 401, 'Unauthenticated POST /api/ai-recommendations returns 401');
+
+    // Test: Authenticated POST /api/ai-recommendations returns 200 with summary & recommendations
+    const authAiRes = await fetch(`${baseUrl}/admin/api/ai-recommendations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: `admin_auth_token=${authSessionToken}`,
+      },
+    });
+    assert(authAiRes.status === 200, 'Authenticated POST /api/ai-recommendations returns 200');
+    const aiData = await authAiRes.json();
+    assert(
+      aiData.success === true &&
+      typeof aiData.summary === 'string' &&
+      Array.isArray(aiData.recommendations) &&
+      aiData.recommendations.length > 0 &&
+      (aiData.isAi === true ? typeof aiData.model === 'string' : (aiData.isAi === false && aiData.model === 'heuristic-engine')),
+      'Authenticated POST /api/ai-recommendations returns structured summary and recommendation array'
+    );
+
     await destroyAdminSession(authSessionToken);
   } finally {
     server.close();
+    await analyticsRepository.resetForTesting();
+    const { getMediaRepository } = await import('../repository/media-repository');
+    const repo = getMediaRepository();
+    if ('clearTestData' in repo && typeof (repo as any).clearTestData === 'function') {
+      (repo as any).clearTestData();
+    }
   }
 
   // Restore env vars

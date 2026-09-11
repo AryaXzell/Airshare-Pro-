@@ -599,6 +599,12 @@ async function runSecurityTests() {
     }
   } finally {
     server.close();
+    await analyticsRepository.resetForTesting();
+    const { getMediaRepository } = await import('../repository/media-repository');
+    const repo = getMediaRepository();
+    if ('clearTestData' in repo && typeof (repo as any).clearTestData === 'function') {
+      (repo as any).clearTestData();
+    }
   }
 
   console.log(`\nAll Security Tests Completed: ${passed} passed, ${failed} failed.`);

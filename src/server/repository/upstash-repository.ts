@@ -95,64 +95,79 @@ export class UpstashMediaRepository implements MediaRepository {
       textLanguageHint: media.textLanguageHint,
     };
 
-    // Pipeline: save media JSON, store filtered public lookup key, admin mapping, and add to session sorted set index
-    const pipeline = this.redis.pipeline();
-    pipeline.set(itemKey, JSON.stringify(media));
-    pipeline.set(publicKey, JSON.stringify(publicMedia));
-    pipeline.set(idToSessionKey, sessionId);
-    pipeline.zadd(indexKey, { score: media.createdAt, member: media.id });
-    // Keep 30-day retention on active session indices, public lookup, and admin mapping
-    pipeline.expire(itemKey, 30 * 24 * 60 * 60);
-    pipeline.expire(publicKey, 30 * 24 * 60 * 60);
-    pipeline.expire(idToSessionKey, 30 * 24 * 60 * 60);
-    pipeline.expire(indexKey, 30 * 24 * 60 * 60);
+    try {
+      // Pipeline: save media JSON, store filtered public lookup key, admin mapping, and add to session sorted set index
+      const pipeline = this.redis.pipeline();
+      pipeline.set(itemKey, JSON.stringify(media));
+      pipeline.set(publicKey, JSON.stringify(publicMedia));
+      pipeline.set(idToSessionKey, sessionId);
+      pipeline.zadd(indexKey, { score: media.createdAt, member: media.id });
+      // Keep 30-day retention on active session indices, public lookup, and admin mapping
+      pipeline.expire(itemKey, 30 * 24 * 60 * 60);
+      pipeline.expire(publicKey, 30 * 24 * 60 * 60);
+      pipeline.expire(idToSessionKey, 30 * 24 * 60 * 60);
+      pipeline.expire(indexKey, 30 * 24 * 60 * 60);
 
-    // Clear any previous tombstone for this id
-    const tombstoneKey = this.getTombstoneKey(media.id);
-    pipeline.del(tombstoneKey);
+      // Clear any previous tombstone for this id
+      const tombstoneKey = this.getTombstoneKey(media.id);
+      pipeline.del(tombstoneKey);
 
-    await pipeline.exec();
-    return media;
+      await pipeline.exec();
+      return media;
+    } catch (err: any) {
+      console.error('[UPSTASH_CREATE_ERROR] Gagal menyimpan record media ke Redis setelah upload:', err);
+      throw new Error(`Gagal menyimpan data berkas ke database setelah upload berhasil ke penyimpanan. Detail: ${err?.message || 'Kesalahan tidak diketahui'}`);
+    }
   }
 
   public async list(sessionId: string, limit = 100): Promise<MediaObject[]> {
     assertValidSessionId(sessionId, 'list');
-    const indexKey = this.getIndexKey(sessionId);
-    // Fetch newest IDs first using ZREVRANGE
-    const ids: string[] = await this.redis.zrange(indexKey, 0, limit - 1, { rev: true });
+    try {
+      const indexKey = this.getIndexKey(sessionId);
+      // Fetch newest IDs first using ZREVRANGE
+      const ids: string[] = await this.redis.zrange(indexKey, 0, limit - 1, { rev: true });
 
-    if (!ids || ids.length === 0) {
+      if (!ids || ids.length === 0) {
+        return [];
+      }
+
+      const itemKeys = ids.map((id) => this.getItemKey(sessionId, id));
+      // Batch fetch media items
+      const rawItems = await this.redis.mget<string[]>(...itemKeys);
+
+      const result: MediaObject[] = [];
+      rawItems.forEach((raw) => {
+        if (raw) {
+          try {
+            const item = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            result.push(item);
+          } catch {
+            // Ignore parse errors on corrupt items
+          }
+        }
+      });
+
+      return result;
+    } catch (err: any) {
+      console.error('[UPSTASH_LIST_ERROR] Gagal membaca daftar media dari Redis:', err);
       return [];
     }
-
-    const itemKeys = ids.map((id) => this.getItemKey(sessionId, id));
-    // Batch fetch media items
-    const rawItems = await this.redis.mget<string[]>(...itemKeys);
-
-    const result: MediaObject[] = [];
-    rawItems.forEach((raw) => {
-      if (raw) {
-        try {
-          const item = typeof raw === 'string' ? JSON.parse(raw) : raw;
-          result.push(item);
-        } catch {
-          // Ignore parse errors on corrupt items
-        }
-      }
-    });
-
-    return result;
   }
 
   public async get(id: string, sessionId: string): Promise<MediaObject | null> {
     assertValidSessionId(sessionId, 'get');
-    const itemKey = this.getItemKey(sessionId, id);
-    const raw = await this.redis.get<string>(itemKey);
-    if (!raw) return null;
-
     try {
-      return typeof raw === 'string' ? JSON.parse(raw) : raw;
-    } catch {
+      const itemKey = this.getItemKey(sessionId, id);
+      const raw = await this.redis.get<string>(itemKey);
+      if (!raw) return null;
+
+      try {
+        return typeof raw === 'string' ? JSON.parse(raw) : raw;
+      } catch {
+        return null;
+      }
+    } catch (err: any) {
+      console.error('[UPSTASH_GET_ERROR] Gagal membaca media dari Redis:', err);
       return null;
     }
   }
@@ -163,126 +178,141 @@ export class UpstashMediaRepository implements MediaRepository {
     }
     const cleanId = id.trim();
 
-    // 1. If marked as deleted tombstone, NEVER return it
-    const tombstone = await this.getTombstone(cleanId);
-    if (tombstone) {
-      return null;
-    }
-
-    const publicKey = this.getPublicKey(cleanId);
-    const raw = await this.redis.get<string>(publicKey);
-
-    let publicMedia: PublicMediaView | null = null;
-    if (raw) {
-      try {
-        publicMedia = typeof raw === 'string' ? JSON.parse(raw) : (raw as PublicMediaView);
-      } catch {
-        publicMedia = null;
+    try {
+      // 1. If marked as deleted tombstone, NEVER return it
+      const tombstone = await this.getTombstone(cleanId);
+      if (tombstone) {
+        return null;
       }
-    }
 
-    // 2. STRICT RULE: DO NOT resurrect a file if publicMedia is null!
-    // A missing publicMedia key means the item was deleted.
-    // Only enrich if publicMedia ALREADY exists in repository, but is missing country code or createdAt
-    if (publicMedia && (!publicMedia.uploaderCountryCode || !publicMedia.createdAt)) {
-      try {
-        const fullRaw = await this.redis.get<string>(`stats:media_obj:${cleanId}`);
-        if (fullRaw) {
-          const full = typeof fullRaw === 'string' ? JSON.parse(fullRaw) : (fullRaw as MediaObject);
-          if (full && typeof full === 'object') {
-            if (!publicMedia.uploaderCountryCode && full.uploaderCountryCode) {
-              publicMedia.uploaderCountryCode = full.uploaderCountryCode;
-              publicMedia.uploaderCountryName = full.uploaderCountryName;
-            }
-            if ((!publicMedia.createdAt || isNaN(publicMedia.createdAt)) && full.createdAt) {
-              publicMedia.createdAt = full.createdAt;
-            }
-            if (!publicMedia.audioMeta && full.audioMeta && full.type === 'audio') {
-              publicMedia.audioMeta = full.audioMeta;
-            }
-            if (!publicMedia.videoMeta && full.videoMeta && full.type === 'video') {
-              publicMedia.videoMeta = full.videoMeta;
-            }
-            if (!publicMedia.imageMeta && full.imageMeta && full.type === 'image') {
-              publicMedia.imageMeta = full.imageMeta;
-            }
-            if (publicMedia.isTextPreviewable === undefined && full.isTextPreviewable !== undefined) {
-              publicMedia.isTextPreviewable = full.isTextPreviewable;
-              publicMedia.textLanguageHint = full.textLanguageHint;
+      const publicKey = this.getPublicKey(cleanId);
+      const raw = await this.redis.get<string>(publicKey);
+
+      let publicMedia: PublicMediaView | null = null;
+      if (raw) {
+        try {
+          publicMedia = typeof raw === 'string' ? JSON.parse(raw) : (raw as PublicMediaView);
+        } catch {
+          publicMedia = null;
+        }
+      }
+
+      // 2. STRICT RULE: DO NOT resurrect a file if publicMedia is null!
+      // A missing publicMedia key means the item was deleted.
+      // Only enrich if publicMedia ALREADY exists in repository, but is missing country code or createdAt
+      if (publicMedia && (!publicMedia.uploaderCountryCode || !publicMedia.createdAt)) {
+        try {
+          const fullRaw = await this.redis.get<string>(`stats:media_obj:${cleanId}`);
+          if (fullRaw) {
+            const full = typeof fullRaw === 'string' ? JSON.parse(fullRaw) : (fullRaw as MediaObject);
+            if (full && typeof full === 'object') {
+              if (!publicMedia.uploaderCountryCode && full.uploaderCountryCode) {
+                publicMedia.uploaderCountryCode = full.uploaderCountryCode;
+                publicMedia.uploaderCountryName = full.uploaderCountryName;
+              }
+              if ((!publicMedia.createdAt || isNaN(publicMedia.createdAt)) && full.createdAt) {
+                publicMedia.createdAt = full.createdAt;
+              }
+              if (!publicMedia.audioMeta && full.audioMeta && full.type === 'audio') {
+                publicMedia.audioMeta = full.audioMeta;
+              }
+              if (!publicMedia.videoMeta && full.videoMeta && full.type === 'video') {
+                publicMedia.videoMeta = full.videoMeta;
+              }
+              if (!publicMedia.imageMeta && full.imageMeta && full.type === 'image') {
+                publicMedia.imageMeta = full.imageMeta;
+              }
+              if (publicMedia.isTextPreviewable === undefined && full.isTextPreviewable !== undefined) {
+                publicMedia.isTextPreviewable = full.isTextPreviewable;
+                publicMedia.textLanguageHint = full.textLanguageHint;
+              }
             }
           }
+        } catch {
+          // Fail-open
         }
-      } catch {
-        // Fail-open
       }
-    }
 
-    return publicMedia;
+      return publicMedia;
+    } catch (err: any) {
+      console.error('[UPSTASH_GET_BY_ID_PUBLIC_ERROR] Gagal membaca berkas publik dari Redis:', err);
+      return null;
+    }
   }
 
   public async delete(id: string, sessionId: string): Promise<boolean> {
-    assertValidSessionId(sessionId, 'delete');
-    const cleanId = id.trim();
-    const itemKey = this.getItemKey(sessionId, cleanId);
-    const publicKey = this.getPublicKey(cleanId);
-    const indexKey = this.getIndexKey(sessionId);
-    const idToSessionKey = this.getIdToSessionKey(cleanId);
-    const tombstoneKey = this.getTombstoneKey(cleanId);
+    try {
+      assertValidSessionId(sessionId, 'delete');
+      const cleanId = id.trim();
+      const itemKey = this.getItemKey(sessionId, cleanId);
+      const publicKey = this.getPublicKey(cleanId);
+      const indexKey = this.getIndexKey(sessionId);
+      const idToSessionKey = this.getIdToSessionKey(cleanId);
+      const tombstoneKey = this.getTombstoneKey(cleanId);
 
-    const tombstoneData: MediaTombstone = {
-      id: cleanId,
-      deletedAt: Date.now(),
-      reason: 'USER_DELETED',
-    };
+      const tombstoneData: MediaTombstone = {
+        id: cleanId,
+        deletedAt: Date.now(),
+        reason: 'USER_DELETED',
+      };
 
-    const pipeline = this.redis.pipeline();
-    pipeline.del(itemKey);
-    pipeline.del(publicKey);
-    pipeline.del(idToSessionKey);
-    pipeline.del(`stats:media_obj:${cleanId}`);
-    pipeline.zrem(indexKey, cleanId);
-    pipeline.zrem('stats:recent_uploads', cleanId);
-    if (typeof pipeline.set === 'function') {
-      pipeline.set(tombstoneKey, JSON.stringify(tombstoneData), { ex: 14 * 24 * 60 * 60 });
+      const pipeline = this.redis.pipeline();
+      pipeline.del(itemKey);
+      pipeline.del(publicKey);
+      pipeline.del(idToSessionKey);
+      pipeline.del(`stats:media_obj:${cleanId}`);
+      pipeline.zrem(indexKey, cleanId);
+      pipeline.zrem('stats:recent_uploads', cleanId);
+      if (typeof pipeline.set === 'function') {
+        pipeline.set(tombstoneKey, JSON.stringify(tombstoneData), { ex: 14 * 24 * 60 * 60 });
+      }
+      const results = await pipeline.exec();
+
+      // Fallback if pipeline.set wasn't available in pipeline mock
+      if (typeof pipeline.set !== 'function') {
+        this.recordTombstone(cleanId, 'USER_DELETED').catch(() => {});
+      }
+
+      const delCount = results[0] as number;
+      return typeof delCount === 'number' && delCount > 0;
+    } catch (err: any) {
+      console.error('[UPSTASH_DELETE_ERROR] Gagal menghapus media dari Redis:', err);
+      throw new Error(`Gagal menghapus berkas dari database. Detail: ${err?.message || 'Kesalahan tidak diketahui'}`);
     }
-    const results = await pipeline.exec();
-
-    // Fallback if pipeline.set wasn't available in pipeline mock
-    if (typeof pipeline.set !== 'function') {
-      this.recordTombstone(cleanId, 'USER_DELETED').catch(() => {});
-    }
-
-    const delCount = results[0] as number;
-    return typeof delCount === 'number' && delCount > 0;
   }
 
   public async clearAll(sessionId: string): Promise<void> {
-    assertValidSessionId(sessionId, 'clearAll');
-    const indexKey = this.getIndexKey(sessionId);
-    // Fetch all item IDs in this session
-    const ids: string[] = await this.redis.zrange(indexKey, 0, -1);
+    try {
+      assertValidSessionId(sessionId, 'clearAll');
+      const indexKey = this.getIndexKey(sessionId);
+      // Fetch all item IDs in this session
+      const ids: string[] = await this.redis.zrange(indexKey, 0, -1);
 
-    const pipeline = this.redis.pipeline();
-    if (ids && ids.length > 0) {
-      const now = Date.now();
-      ids.forEach((id) => {
-        const cleanId = id.trim();
-        pipeline.del(this.getItemKey(sessionId, cleanId));
-        pipeline.del(this.getPublicKey(cleanId));
-        pipeline.del(this.getIdToSessionKey(cleanId));
-        pipeline.del(`stats:media_obj:${cleanId}`);
-        pipeline.zrem('stats:recent_uploads', cleanId);
-        if (typeof pipeline.set === 'function') {
-          pipeline.set(
-            this.getTombstoneKey(cleanId),
-            JSON.stringify({ id: cleanId, deletedAt: now, reason: 'USER_CLEARED' }),
-            { ex: 14 * 24 * 60 * 60 }
-          );
-        }
-      });
+      const pipeline = this.redis.pipeline();
+      if (ids && ids.length > 0) {
+        const now = Date.now();
+        ids.forEach((id) => {
+          const cleanId = id.trim();
+          pipeline.del(this.getItemKey(sessionId, cleanId));
+          pipeline.del(this.getPublicKey(cleanId));
+          pipeline.del(this.getIdToSessionKey(cleanId));
+          pipeline.del(`stats:media_obj:${cleanId}`);
+          pipeline.zrem('stats:recent_uploads', cleanId);
+          if (typeof pipeline.set === 'function') {
+            pipeline.set(
+              this.getTombstoneKey(cleanId),
+              JSON.stringify({ id: cleanId, deletedAt: now, reason: 'USER_CLEARED' }),
+              { ex: 14 * 24 * 60 * 60 }
+            );
+          }
+        });
+      }
+      pipeline.del(indexKey);
+      await pipeline.exec();
+    } catch (err: any) {
+      console.error('[UPSTASH_CLEAR_ALL_ERROR] Gagal membersihkan semua riwayat dari Redis:', err);
+      throw new Error(`Gagal membersihkan riwayat berkas dari database. Detail: ${err?.message || 'Kesalahan tidak diketahui'}`);
     }
-    pipeline.del(indexKey);
-    await pipeline.exec();
   }
 
   /**
@@ -295,54 +325,59 @@ export class UpstashMediaRepository implements MediaRepository {
       return null;
     }
     const cleanId = id.trim();
-    const idToSessionKey = this.getIdToSessionKey(cleanId);
-    const sessionId = await this.redis.get<string>(idToSessionKey);
+    try {
+      const idToSessionKey = this.getIdToSessionKey(cleanId);
+      const sessionId = await this.redis.get<string>(idToSessionKey);
 
-    if (sessionId) {
-      const itemKey = this.getItemKey(sessionId, cleanId);
-      const raw = await this.redis.get<string>(itemKey);
-      if (raw) {
+      if (sessionId) {
+        const itemKey = this.getItemKey(sessionId, cleanId);
+        const raw = await this.redis.get<string>(itemKey);
+        if (raw) {
+          try {
+            return typeof raw === 'string' ? JSON.parse(raw) : (raw as MediaObject);
+          } catch {
+            // Fall through to fallback
+          }
+        }
+      }
+
+      // Fallback for items created prior to id_to_session mapping
+      const publicKey = this.getPublicKey(cleanId);
+      const pubRaw = await this.redis.get<string>(publicKey);
+      if (pubRaw) {
         try {
-          return typeof raw === 'string' ? JSON.parse(raw) : (raw as MediaObject);
+          const pub = typeof pubRaw === 'string' ? JSON.parse(pubRaw) : (pubRaw as PublicMediaView);
+          if (pub) {
+            return {
+              ...pub,
+              sessionId: sessionId || 'admin_recovered_session',
+            };
+          }
         } catch {
-          // Fall through to fallback
+          // Fall through
         }
       }
-    }
 
-    // Fallback for items created prior to id_to_session mapping
-    const publicKey = this.getPublicKey(cleanId);
-    const pubRaw = await this.redis.get<string>(publicKey);
-    if (pubRaw) {
-      try {
-        const pub = typeof pubRaw === 'string' ? JSON.parse(pubRaw) : (pubRaw as PublicMediaView);
-        if (pub) {
-          return {
-            ...pub,
-            sessionId: sessionId || 'admin_recovered_session',
-          };
+      const statsRaw = await this.redis.get<string>(`stats:media_obj:${cleanId}`);
+      if (statsRaw) {
+        try {
+          const statsObj = typeof statsRaw === 'string' ? JSON.parse(statsRaw) : (statsRaw as any);
+          if (statsObj) {
+            return {
+              ...statsObj,
+              sessionId: sessionId || 'admin_recovered_session',
+            };
+          }
+        } catch {
+          // Fall through
         }
-      } catch {
-        // Fall through
       }
-    }
 
-    const statsRaw = await this.redis.get<string>(`stats:media_obj:${cleanId}`);
-    if (statsRaw) {
-      try {
-        const statsObj = typeof statsRaw === 'string' ? JSON.parse(statsRaw) : (statsRaw as any);
-        if (statsObj) {
-          return {
-            ...statsObj,
-            sessionId: sessionId || 'admin_recovered_session',
-          };
-        }
-      } catch {
-        // Fall through
-      }
+      return null;
+    } catch (err: any) {
+      console.error('[UPSTASH_GET_BY_ID_ADMIN_ERROR] Gagal membaca media admin dari Redis:', err);
+      return null;
     }
-
-    return null;
   }
 
   /**
@@ -350,38 +385,43 @@ export class UpstashMediaRepository implements MediaRepository {
    * Permanently deletes all Redis keys for an item across all sessions, indices, and lookups.
    */
   public async deleteForAdmin(id: string): Promise<boolean> {
-    if (!id || typeof id !== 'string' || !id.trim()) {
-      return false;
-    }
-    const cleanId = id.trim();
-    const idToSessionKey = this.getIdToSessionKey(cleanId);
-    const sessionId = await this.redis.get<string>(idToSessionKey);
-    const tombstoneKey = this.getTombstoneKey(cleanId);
+    try {
+      if (!id || typeof id !== 'string' || !id.trim()) {
+        return false;
+      }
+      const cleanId = id.trim();
+      const idToSessionKey = this.getIdToSessionKey(cleanId);
+      const sessionId = await this.redis.get<string>(idToSessionKey);
+      const tombstoneKey = this.getTombstoneKey(cleanId);
 
-    const tombstoneData: MediaTombstone = {
-      id: cleanId,
-      deletedAt: Date.now(),
-      reason: 'ADMIN_DELETED',
-    };
+      const tombstoneData: MediaTombstone = {
+        id: cleanId,
+        deletedAt: Date.now(),
+        reason: 'ADMIN_DELETED',
+      };
 
-    const pipeline = this.redis.pipeline();
-    pipeline.del(this.getPublicKey(cleanId));
-    pipeline.del(idToSessionKey);
-    pipeline.del(`stats:media_obj:${cleanId}`);
-    pipeline.zrem('stats:recent_uploads', cleanId);
-    if (typeof pipeline.set === 'function') {
-      pipeline.set(tombstoneKey, JSON.stringify(tombstoneData), { ex: 14 * 24 * 60 * 60 });
-    }
+      const pipeline = this.redis.pipeline();
+      pipeline.del(this.getPublicKey(cleanId));
+      pipeline.del(idToSessionKey);
+      pipeline.del(`stats:media_obj:${cleanId}`);
+      pipeline.zrem('stats:recent_uploads', cleanId);
+      if (typeof pipeline.set === 'function') {
+        pipeline.set(tombstoneKey, JSON.stringify(tombstoneData), { ex: 14 * 24 * 60 * 60 });
+      }
 
-    if (sessionId) {
-      pipeline.del(this.getItemKey(sessionId, cleanId));
-      pipeline.zrem(this.getIndexKey(sessionId), cleanId);
-    }
+      if (sessionId) {
+        pipeline.del(this.getItemKey(sessionId, cleanId));
+        pipeline.zrem(this.getIndexKey(sessionId), cleanId);
+      }
 
-    const results = await pipeline.exec();
-    if (typeof pipeline.set !== 'function') {
-      this.recordTombstone(cleanId, 'ADMIN_DELETED').catch(() => {});
+      const results = await pipeline.exec();
+      if (typeof pipeline.set !== 'function') {
+        this.recordTombstone(cleanId, 'ADMIN_DELETED').catch(() => {});
+      }
+      return results.some((r) => typeof r === 'number' && r > 0);
+    } catch (err: any) {
+      console.error('[UPSTASH_DELETE_FOR_ADMIN_ERROR] Gagal menghapus media admin dari Redis:', err);
+      throw new Error(`Gagal menghapus data berkas di level admin. Detail: ${err?.message || 'Kesalahan tidak diketahui'}`);
     }
-    return results.some((r) => typeof r === 'number' && r > 0);
   }
 }

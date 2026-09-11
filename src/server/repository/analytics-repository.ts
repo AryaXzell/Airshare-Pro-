@@ -1,10 +1,29 @@
 import { Redis } from '@upstash/redis';
 import { DailyStats, MediaObject, PublicMediaView, WeeklyTrendItem } from '../../types';
 import { getRedisClient, isUpstashConfigured } from '../storage/redis-client';
-import { getMediaRepository } from './media-repository';
+import { deletedFilesRepository } from './deleted-files-repository';
 
 const STATS_TTL_SECONDS = 90 * 24 * 60 * 60; // 90 days retention
 const TOTAL_ITEMS_KEY = 'stats:total_items_ever';
+
+/**
+ * Checks whether an ID or filename belongs to automated tests / mock fixtures
+ */
+export function isTestArtifactId(id: string): boolean {
+  if (!id || typeof id !== 'string') return false;
+  const lower = id.toLowerCase().trim();
+  return (
+    lower.startsWith('test-') ||
+    lower.startsWith('mock-') ||
+    lower.startsWith('secret_') ||
+    lower.startsWith('img_test_') ||
+    lower.startsWith('audio_test_') ||
+    lower.startsWith('test_') ||
+    lower.includes('test-admin-file') ||
+    lower.includes('test-note') ||
+    lower.includes('test-del')
+  );
+}
 
 function formatBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 B';
@@ -90,6 +109,31 @@ class InMemoryAnalyticsStore {
 
   removeRecentUpload(id: string) {
     this.recentUploads = this.recentUploads.filter((item) => item.id !== id);
+  }
+
+  removeFileFromAllStats(id: string) {
+    this.fileViews.delete(id);
+    this.recentUploads = this.recentUploads.filter((item) => item.id !== id);
+  }
+
+  resetStore() {
+    this.uploadsByDate.clear();
+    this.bytesByDate.clear();
+    this.viewsByDate.clear();
+    this.byTypeByDate.clear();
+    this.byCountryByDate.clear();
+    this.fileViews.clear();
+    this.recentUploads = [];
+    this.totalItemsEver = 0;
+  }
+
+  purgeTestAndOrphanItems() {
+    this.recentUploads = this.recentUploads.filter((item) => !isTestArtifactId(item.id));
+    for (const id of Array.from(this.fileViews.keys())) {
+      if (isTestArtifactId(id)) {
+        this.fileViews.delete(id);
+      }
+    }
   }
 
   getTotalItemsEver(): number {
@@ -268,18 +312,27 @@ export class AnalyticsRepository {
    * Immediately purges an item from recent uploads cache in Redis and memory.
    */
   public async removeRecentUpload(id: string): Promise<void> {
+    await this.removeFileFromAllStats(id);
+  }
+
+  /**
+   * Completely purges a file from all analytics sets (recent uploads, popular files, cached media objects, views).
+   */
+  public async removeFileFromAllStats(id: string): Promise<void> {
     try {
-      inMemoryStore.removeRecentUpload(id);
+      inMemoryStore.removeFileFromAllStats(id);
 
       const redis = this.getRedis();
       if (!redis) return;
 
       const pipeline = redis.pipeline();
       pipeline.zrem('stats:recent_uploads', id);
+      pipeline.zrem('stats:popular_files', id);
       pipeline.del(`stats:media_obj:${id}`);
+      pipeline.del(`stats:views:${id}`);
       await pipeline.exec();
     } catch (err) {
-      console.warn('[ANALYTICS_REMOVE_RECENT_ERROR] Fail-open:', err);
+      console.warn('[ANALYTICS_REMOVE_ALL_STATS_ERROR] Fail-open:', err);
     }
   }
 
@@ -402,16 +455,24 @@ export class AnalyticsRepository {
 
   /**
    * Retrieves top most viewed files from Redis sorted set.
+   * STRICT FILTER: Excludes test artifacts and deleted files.
    */
   public async getTopFiles(limit = 10): Promise<{ id: string; views: number }[]> {
     const redis = this.getRedis();
     if (!redis) {
-      return inMemoryStore.getTopFiles(limit);
+      const memFiles = inMemoryStore.getTopFiles(limit);
+      const filtered: { id: string; views: number }[] = [];
+      for (const f of memFiles) {
+        if (!(await deletedFilesRepository.isDeleted(f.id))) {
+          filtered.push(f);
+        }
+      }
+      return filtered;
     }
 
     try {
       // Upstash zrange with rev: true and withScores: true
-      const rawResults = await redis.zrange('stats:popular_files', 0, limit - 1, {
+      const rawResults = await redis.zrange('stats:popular_files', 0, (limit * 3) - 1, {
         rev: true,
         withScores: true,
       });
@@ -419,16 +480,26 @@ export class AnalyticsRepository {
       const items: { id: string; views: number }[] = [];
       if (Array.isArray(rawResults)) {
         for (let i = 0; i < rawResults.length; i += 2) {
-          // Check if format is [id, score, id, score] or objects [{member, score}]
           const entry = rawResults[i];
+          let id = '';
+          let score = 0;
+
           if (typeof entry === 'object' && entry !== null && 'member' in entry) {
             const obj = entry as { member: string; score: number };
-            items.push({ id: String(obj.member), views: Number(obj.score) || 0 });
-            // Since elements are objects, i increments normally
+            id = String(obj.member);
+            score = Number(obj.score) || 0;
           } else {
-            const id = String(entry);
-            const score = Number(rawResults[i + 1]) || 0;
-            items.push({ id, views: score });
+            id = String(entry);
+            score = Number(rawResults[i + 1]) || 0;
+          }
+
+          if (id) {
+            // Check if file was deleted
+            const isDeleted = await deletedFilesRepository.isDeleted(id);
+            if (!isDeleted) {
+              items.push({ id, views: score });
+              if (items.length >= limit) break;
+            }
           }
         }
       }
@@ -511,15 +582,23 @@ export class AnalyticsRepository {
   /**
    * Retrieves recent 50 uploads across all sessions for admin monitoring.
    * STRICT SECURITY: Returns only PublicMediaView objects (never exposes sessionId).
+   * STRICT FILTER: Excludes test artifacts and deleted files.
    */
   public async getRecentUploads(limit = 50): Promise<PublicMediaView[]> {
     const redis = this.getRedis();
     if (!redis) {
-      return inMemoryStore.getRecentUploads(limit);
+      const memUploads = inMemoryStore.getRecentUploads(limit);
+      const filtered: PublicMediaView[] = [];
+      for (const m of memUploads) {
+        if (!(await deletedFilesRepository.isDeleted(m.id))) {
+          filtered.push(m);
+        }
+      }
+      return filtered;
     }
 
     try {
-      const recentIds: string[] = await redis.zrange('stats:recent_uploads', 0, limit - 1, {
+      const recentIds: string[] = await redis.zrange('stats:recent_uploads', 0, (limit * 2) - 1, {
         rev: true,
       });
 
@@ -527,7 +606,21 @@ export class AnalyticsRepository {
         return inMemoryStore.getRecentUploads(limit);
       }
 
-      const keys = recentIds.map((id) => `stats:media_obj:${id}`);
+      // Filter out deleted files
+      const validIds: string[] = [];
+      for (const id of recentIds) {
+        const isDeleted = await deletedFilesRepository.isDeleted(id);
+        if (!isDeleted) {
+          validIds.push(id);
+          if (validIds.length >= limit) break;
+        }
+      }
+
+      if (validIds.length === 0) {
+        return [];
+      }
+
+      const keys = validIds.map((id) => `stats:media_obj:${id}`);
       const rawObjects = await redis.mget<string[]>(...keys);
 
       const items: PublicMediaView[] = [];
@@ -543,7 +636,7 @@ export class AnalyticsRepository {
           }
         } else {
           // If media_obj key expired or was missing, check in-memory
-          const fallback = inMemoryStore.recentUploads.find((m) => m.id === recentIds[idx]);
+          const fallback = inMemoryStore.recentUploads.find((m) => m.id === validIds[idx]);
           if (fallback) items.push(fallback);
         }
       });
@@ -554,6 +647,71 @@ export class AnalyticsRepository {
       return inMemoryStore.getRecentUploads(limit);
     }
   }
+
+  /**
+   * Cleans all mock/test fixture artifacts so automated tests or stale test runs
+   * never pollute real production statistics, top files, or recent upload tables.
+   */
+  public async purgeTestData(): Promise<void> {
+    inMemoryStore.purgeTestAndOrphanItems();
+    const redis = this.getRedis();
+    if (!redis) return;
+    try {
+      // 1. Purge from recent_uploads
+      const recentIds: string[] = await redis.zrange('stats:recent_uploads', 0, 500);
+      if (recentIds && Array.isArray(recentIds)) {
+        for (const id of recentIds) {
+          if (isTestArtifactId(id)) {
+            await this.removeFileFromAllStats(id);
+          }
+        }
+      }
+
+      // 2. Purge from popular_files
+      const popularIds: string[] = await redis.zrange('stats:popular_files', 0, 500);
+      if (popularIds && Array.isArray(popularIds)) {
+        for (const id of popularIds) {
+          if (isTestArtifactId(id)) {
+            await this.removeFileFromAllStats(id);
+          }
+        }
+      }
+
+      // 3. Purge specific known test fixtures explicitly
+      const explicitTestIds = [
+        'test-admin-file-01.png',
+        'test-note.txt',
+        'test-del.jpg',
+        'test-admin-del-123.jpg',
+        'img_test_1.png',
+        'test_sec_media_1.png',
+        'test_sec_media_2.png',
+        'test-file-1.png',
+        'test-file-2.png',
+      ];
+      for (const tid of explicitTestIds) {
+        await this.removeFileFromAllStats(tid);
+      }
+    } catch {}
+  }
+
+  /**
+   * Complete test-only store reset for isolated integration test suites.
+   */
+  public async resetForTesting(): Promise<void> {
+    inMemoryStore.resetStore();
+    const redis = this.getRedis();
+    if (!redis) return;
+    try {
+      await redis.del('stats:recent_uploads');
+      await redis.del('stats:popular_files');
+      await redis.del('stats:total_items_ever');
+    } catch {}
+  }
 }
 
 export const analyticsRepository = new AnalyticsRepository();
+
+// Automatically prune any test fixture artifacts on startup
+analyticsRepository.purgeTestData().catch(() => {});
+

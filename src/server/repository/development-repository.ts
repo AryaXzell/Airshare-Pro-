@@ -152,7 +152,33 @@ export class DevelopmentMediaRepository implements MediaRepository {
     await this.recordTombstone(cleanId, 'ADMIN_DELETED');
     return deleted;
   }
+
+  /**
+   * Cleans all mock/test fixture artifacts so automated tests or stale test runs
+   * never pollute real development memory.
+   */
+  public clearTestData(): void {
+    for (const id of Array.from(this.items.keys())) {
+      if (
+        id.startsWith('test-') ||
+        id.startsWith('mock-') ||
+        id.startsWith('secret_') ||
+        id.startsWith('img_test_') ||
+        id.startsWith('audio_test_')
+      ) {
+        this.items.delete(id);
+      }
+    }
+  }
+
+  public resetStore(): void {
+    this.items.clear();
+    this.tombstones.clear();
+  }
 }
 
 // Global singleton instance for server runtime
 export const developmentMediaRepository = new DevelopmentMediaRepository();
+
+// Automatically prune any test fixture artifacts on startup
+developmentMediaRepository.clearTestData();
