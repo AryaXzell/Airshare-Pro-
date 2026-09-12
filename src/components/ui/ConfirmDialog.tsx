@@ -9,6 +9,7 @@ interface ConfirmDialogProps {
   confirmLabel?: string;
   cancelLabel?: string;
   isDestructive?: boolean;
+  isLoading?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -20,6 +21,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   confirmLabel = 'Konfirmasi',
   cancelLabel = 'Batal',
   isDestructive = false,
+  isLoading = false,
   onConfirm,
   onCancel,
 }) => {
@@ -150,7 +152,8 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
               <button
                 ref={cancelButtonRef}
                 onClick={onCancel}
-                className="py-2.5 px-4 rounded-xl font-bold text-xs clean-interactive clean-tap border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                disabled={isLoading}
+                className="py-2.5 px-4 rounded-xl font-bold text-xs clean-interactive clean-tap border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-main)' }}
               >
                 {cancelLabel}
@@ -158,14 +161,15 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
               <button
                 ref={confirmButtonRef}
                 onClick={onConfirm}
-                className={`py-2.5 px-4 rounded-xl font-bold text-xs transition-all clean-tap shadow-xs focus-visible:outline-none focus-visible:ring-2 ${
+                disabled={isLoading}
+                className={`py-2.5 px-4 rounded-xl font-bold text-xs transition-all clean-tap shadow-xs focus-visible:outline-none focus-visible:ring-2 disabled:opacity-50 disabled:cursor-not-allowed ${
                   isDestructive
                     ? 'bg-rose-600 hover:bg-rose-700 text-white focus-visible:ring-rose-500'
                     : 'text-white focus-visible:ring-[var(--accent)]'
                 }`}
                 style={!isDestructive ? { backgroundColor: 'var(--accent)', color: 'var(--accent-text)' } : {}}
               >
-                {confirmLabel}
+                {isLoading ? 'Memproses...' : confirmLabel}
               </button>
             </div>
           </motion.div>

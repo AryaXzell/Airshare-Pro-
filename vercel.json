@@ -28,6 +28,14 @@
       "destination": "/api?__vpath=/health"
     },
     {
+      "source": "/status",
+      "destination": "/api?__vpath=/status"
+    },
+    {
+      "source": "/status/(.*)",
+      "destination": "/api?__vpath=/status/$1"
+    },
+    {
       "source": "/system-status",
       "destination": "/api?__vpath=/system-status"
     },

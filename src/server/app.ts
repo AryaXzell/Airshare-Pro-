@@ -3,6 +3,7 @@ import cookieParser from 'cookie-parser';
 import { mediaRouter } from './api/routes';
 import { shareController } from './api/share-controller';
 import { adminController } from './api/admin-controller';
+import { statusController, getSystemStatusData } from './api/status-controller';
 import { getAdminConfig, requireAdminAuth } from './security/admin-auth';
 import { isMaintenanceModeActive, getAnnouncement, getFeatureFlags } from './security/system-config';
 import { standardRateLimiter } from './security/rate-limiter';
@@ -18,9 +19,6 @@ import { ApiErrorResponse } from '../types';
 export function createExpressApp(): Express {
   const app = express();
   const isDev = process.env.NODE_ENV !== 'production';
-
-  // Enable Trust Proxy for reverse proxy / Vercel deployment IP resolution
-  app.set('trust proxy', 1);
 
   // Cookie parser middleware for session cookie extraction
   app.use(cookieParser());
@@ -184,7 +182,7 @@ export function createExpressApp(): Express {
 
   // Dynamic robots.txt to strictly disallow crawling of admin path and sensitive endpoints
   app.get('/robots.txt', (req: Request, res: Response) => {
-    let content = `User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /s/\nDisallow: /admin/\n\nSitemap: https://airshare-pro.vercel.app/sitemap.xml\n`;
+    let content = `User-agent: *\nAllow: /\nAllow: /status\nDisallow: /api/\nDisallow: /s/\nDisallow: /admin/\n\nSitemap: https://airshare-pro.vercel.app/sitemap.xml\n`;
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.send(content);
@@ -338,25 +336,19 @@ export function createExpressApp(): Express {
     });
   }
 
-  // Public System Status API (Maintenance Mode, Announcement Banner, Feature Flags)
+  // Public System Status HTML Page (Accessible even in full lockdown)
+  app.get(['/status', '/status/'], (req: Request, res: Response) => {
+    return statusController.renderStatusPage(req, res);
+  });
+
+  // Public System Status API (Maintenance Mode, Announcement Banner, Feature Flags, Services Health)
   app.get(['/api/system-status', '/system-status'], standardRateLimiter, async (req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     try {
-      const [maintenanceMode, rawAnnouncement, featureFlags] = await Promise.all([
-        isMaintenanceModeActive(),
-        getAnnouncement(),
-        getFeatureFlags(),
-      ]);
-
-      const activeAnnouncement = rawAnnouncement && rawAnnouncement.enabled ? rawAnnouncement : null;
-
+      const data = await getSystemStatusData();
       res.json({
         success: true,
-        data: {
-          maintenanceMode,
-          announcement: activeAnnouncement,
-          featureFlags,
-        },
+        data,
       });
     } catch (err: unknown) {
       console.error('[SYSTEM_STATUS_ERROR]', err);

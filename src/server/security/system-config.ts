@@ -1,10 +1,13 @@
 import { getRedisClient, isUpstashConfigured } from '../storage/redis-client';
 
+export type MaintenanceLevel = 'off' | 'upload_only' | 'full_lockdown';
+
 export interface AnnouncementBanner {
   message: string;
   type: 'info' | 'warning' | 'success';
   enabled: boolean;
   updatedAt: number;
+  expiresAt?: number | null; // Unix timestamp ms kapan banner otomatis dianggap kadaluarsa, null = tidak ada batas waktu
 }
 
 export interface FeatureFlags {
@@ -19,7 +22,8 @@ export interface UploadRateLimitConfig {
 }
 
 export interface SystemConfigData {
-  maintenanceMode: boolean;
+  maintenanceLevel: MaintenanceLevel;
+  maintenanceMode: boolean; // dipertahankan untuk backward compatibility
   announcement: AnnouncementBanner | null;
   maxUploadSize: number;
   formattedMaxSize: string;
@@ -55,6 +59,7 @@ function resolveInitialMaxUploadSize(): number {
 
 // In-memory fallbacks for single-process / development environments
 const inMemoryConfig = {
+  maintenanceLevel: 'off' as MaintenanceLevel,
   maintenanceMode: false,
   announcement: null as AnnouncementBanner | null,
   maxUploadSize: resolveInitialMaxUploadSize(),
@@ -81,38 +86,60 @@ function formatBytes(bytes: number): string {
 // 1. Maintenance Mode (Kill Switch)
 // -------------------------------------------------------------
 
-/**
- * Checks if Maintenance Mode (Kill Switch) is currently active.
- * Fail-safe: default to false if Redis is unreachable to avoid accidental lockouts.
- */
-export async function isMaintenanceModeActive(): Promise<boolean> {
+function normalizeMaintenanceLevel(raw: string | null | undefined): MaintenanceLevel {
+  if (raw === 'full_lockdown') return 'full_lockdown';
+  if (raw === 'upload_only' || raw === 'true' || raw === '1') return 'upload_only'; // 'true' = data lama sebelum migrasi
+  return 'off'; // termasuk raw === 'false' (data lama) atau null/tidak ada
+}
+
+export async function getMaintenanceLevel(): Promise<MaintenanceLevel> {
   const redis = isUpstashConfigured() ? getRedisClient() : null;
   if (redis) {
     try {
-      const val = await redis.get<string>('config:maintenance_mode');
-      if (val !== null && val !== undefined) {
-        return val === 'true' || val === '1';
-      }
+      const raw = await redis.get<string>('config:maintenance_mode');
+      const level = normalizeMaintenanceLevel(raw);
+      inMemoryConfig.maintenanceLevel = level;
+      inMemoryConfig.maintenanceMode = level !== 'off';
+      return level;
     } catch (err) {
-      console.warn('[SYSTEM_CONFIG] Gagal membaca maintenance mode dari Redis, fail-safe false:', err);
+      console.warn('[SYSTEM_CONFIG] Gagal membaca maintenance level dari Redis, memakai cache lokal:', err);
     }
   }
-  return inMemoryConfig.maintenanceMode;
+  return inMemoryConfig.maintenanceLevel ?? 'off';
+}
+
+export async function setMaintenanceLevel(level: MaintenanceLevel): Promise<void> {
+  const redis = isUpstashConfigured() ? getRedisClient() : null;
+  if (redis) {
+    try {
+      await redis.set('config:maintenance_mode', level);
+      inMemoryConfig.maintenanceLevel = level;
+      inMemoryConfig.maintenanceMode = level !== 'off';
+      return;
+    } catch (err) {
+      console.error('[SYSTEM_CONFIG_CRITICAL] Gagal menyimpan maintenance level ke Redis:', err);
+      throw new Error('Gagal menyimpan status Kill Switch ke database persisten (Redis). Perubahan TIDAK tersimpan.');
+    }
+  }
+  inMemoryConfig.maintenanceLevel = level;
+  inMemoryConfig.maintenanceMode = level !== 'off';
+  console.warn('[SYSTEM_CONFIG_WARN] Redis tidak dikonfigurasi. Kill Switch hanya tersimpan sementara di memori instance ini.');
 }
 
 /**
- * Updates the Maintenance Mode (Kill Switch) state.
+ * Checks if Maintenance Mode (Kill Switch) is currently active.
+ * Fail-safe wrapper returning true if level is upload_only or full_lockdown.
+ */
+export async function isMaintenanceModeActive(): Promise<boolean> {
+  const level = await getMaintenanceLevel();
+  return level !== 'off';
+}
+
+/**
+ * Updates the Maintenance Mode (Kill Switch) state (backward compatibility wrapper).
  */
 export async function setMaintenanceMode(active: boolean): Promise<void> {
-  inMemoryConfig.maintenanceMode = active;
-  const redis = isUpstashConfigured() ? getRedisClient() : null;
-  if (redis) {
-    try {
-      await redis.set('config:maintenance_mode', active ? 'true' : 'false');
-    } catch (err) {
-      console.warn('[SYSTEM_CONFIG] Gagal menyimpan maintenance mode ke Redis:', err);
-    }
-  }
+  await setMaintenanceLevel(active ? 'upload_only' : 'off');
 }
 
 // -------------------------------------------------------------
@@ -142,27 +169,43 @@ export async function getAnnouncement(): Promise<AnnouncementBanner | null> {
             type: ['info', 'warning', 'success'].includes(parsed.type) ? parsed.type : 'info',
             enabled: parsed.enabled === true || parsed.enabled === 'true',
             updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
+            expiresAt: typeof parsed.expiresAt === 'number' ? parsed.expiresAt : null,
           };
           inMemoryConfig.announcement = announcement;
-          return announcement;
+
+          // Auto-expire check
+          if (announcement.expiresAt != null && Date.now() >= announcement.expiresAt) {
+            return null;
+          }
+          return announcement.enabled ? announcement : null;
         }
+      } else {
+        inMemoryConfig.announcement = null;
+        return null;
       }
     } catch (err) {
       console.warn('[SYSTEM_CONFIG] Gagal membaca pengumuman dari Redis:', err);
     }
   }
-  return inMemoryConfig.announcement;
+  const cached = inMemoryConfig.announcement;
+  if (cached && cached.expiresAt != null && Date.now() >= cached.expiresAt) {
+    return null;
+  }
+  return cached && cached.enabled ? cached : null;
 }
 
 /**
  * Updates the system announcement banner.
  */
-export async function setAnnouncement(announcement: Omit<AnnouncementBanner, 'updatedAt'> & { updatedAt?: number }): Promise<void> {
+export async function setAnnouncement(
+  announcement: Omit<AnnouncementBanner, 'updatedAt'> & { updatedAt?: number }
+): Promise<void> {
   const finalAnnouncement: AnnouncementBanner = {
     message: String(announcement.message || '').trim(),
     type: ['info', 'warning', 'success'].includes(announcement.type) ? announcement.type : 'info',
     enabled: announcement.enabled === true || (announcement.enabled as any) === 'true',
     updatedAt: Date.now(),
+    expiresAt: typeof announcement.expiresAt === 'number' ? announcement.expiresAt : null,
   };
   inMemoryConfig.announcement = finalAnnouncement;
   const redis = isUpstashConfigured() ? getRedisClient() : null;
@@ -170,7 +213,24 @@ export async function setAnnouncement(announcement: Omit<AnnouncementBanner, 'up
     try {
       await redis.set('config:announcement', JSON.stringify(finalAnnouncement));
     } catch (err) {
-      console.warn('[SYSTEM_CONFIG] Gagal menyimpan pengumuman ke Redis:', err);
+      console.error('[SYSTEM_CONFIG_CRITICAL] Gagal menyimpan pengumuman ke Redis:', err);
+      throw new Error('Gagal menyimpan konfigurasi banner ke database persisten (Redis).');
+    }
+  }
+}
+
+/**
+ * Clears the system announcement banner permanently.
+ */
+export async function clearAnnouncement(): Promise<void> {
+  inMemoryConfig.announcement = null;
+  const redis = isUpstashConfigured() ? getRedisClient() : null;
+  if (redis) {
+    try {
+      await redis.del('config:announcement');
+    } catch (err) {
+      console.error('[SYSTEM_CONFIG_CRITICAL] Gagal menghapus pengumuman dari Redis:', err);
+      throw new Error('Gagal menghapus konfigurasi banner dari database persisten (Redis).');
     }
   }
 }
@@ -324,9 +384,9 @@ export async function setFeatureFlags(flags: Partial<FeatureFlags>): Promise<voi
 // -------------------------------------------------------------
 
 export async function getAllSystemConfig(): Promise<SystemConfigData> {
-  const [maintenanceMode, announcement, maxUploadSize, rateLimit, featureFlags] =
+  const [maintenanceLevel, announcement, maxUploadSize, rateLimit, featureFlags] =
     await Promise.all([
-      isMaintenanceModeActive(),
+      getMaintenanceLevel(),
       getAnnouncement(),
       getMaxUploadSize(),
       getUploadRateLimit(),
@@ -334,7 +394,8 @@ export async function getAllSystemConfig(): Promise<SystemConfigData> {
     ]);
 
   return {
-    maintenanceMode,
+    maintenanceLevel,
+    maintenanceMode: maintenanceLevel !== 'off',
     announcement,
     maxUploadSize,
     formattedMaxSize: formatBytes(maxUploadSize),

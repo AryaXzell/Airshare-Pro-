@@ -42,6 +42,15 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
   onToast,
 }) => {
   const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+
+  React.useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -50,7 +59,12 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
     if (ok) {
       setCopied(true);
       onToast('Tautan berhasil disalin!');
-      setTimeout(() => setCopied(false), 2200);
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+      copyTimeoutRef.current = setTimeout(() => {
+        setCopied(false);
+      }, 2200);
     } else {
       onToast('Gagal menyalin tautan.', { type: 'error' });
     }

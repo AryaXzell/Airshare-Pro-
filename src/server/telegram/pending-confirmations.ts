@@ -3,6 +3,7 @@ import { getRedisClient, isUpstashConfigured } from '../storage/redis-client';
 
 export type PendingActionType =
   | 'killswitch_on'
+  | 'killswitch_lockdown'
   | 'killswitch_off'
   | 'hapus_permanen'
   | 'revoke_all_sesi'

@@ -1,7 +1,18 @@
 import { isAuthorizedTelegramUser, handleUnauthorizedAttempt, checkTelegramRateLimit } from './telegram-auth';
 import { sendTelegramMessage, alertMaintenanceModeChanged } from './telegram-notifier';
-import { createPendingAction, getPendingAction, clearPendingAction } from './pending-confirmations';
-import { isMaintenanceModeActive, setMaintenanceMode, setAnnouncement } from '../security/system-config';
+import {
+  createPendingAction,
+  getPendingAction,
+  clearPendingAction,
+  PendingActionType,
+} from './pending-confirmations';
+import {
+  isMaintenanceModeActive,
+  getMaintenanceLevel,
+  setMaintenanceLevel,
+  MaintenanceLevel,
+  setAnnouncement,
+} from '../security/system-config';
 import { checkRedisHealth } from '../storage/redis-client';
 import { checkCatboxHealth } from '../storage/catbox-health-check';
 import { analyticsRepository, getTodayDateString } from '../repository/analytics-repository';
@@ -104,11 +115,15 @@ export async function handleTelegramCommand(payload: TelegramMessagePayload): Pr
       break;
 
     case '/killswitch_on':
-      await promptKillswitch(chatId, fromId, true);
+      await promptKillswitch(chatId, fromId, 'upload_only');
+      break;
+
+    case '/killswitch_lockdown':
+      await promptKillswitch(chatId, fromId, 'full_lockdown');
       break;
 
     case '/killswitch_off':
-      await promptKillswitch(chatId, fromId, false);
+      await promptKillswitch(chatId, fromId, 'off');
       break;
 
     case '/hapus_permanen':
@@ -151,8 +166,9 @@ async function handleHelp(chatId: number): Promise<void> {
     '• /sessions — Daftar sesi admin web yang aktif saat ini',
     '',
     '<b>Perintah Kontrol (Memerlukan Konfirmasi):</b>',
-    '• /killswitch_on — Aktifkan Kill Switch (tutup unggahan, 503)',
-    '• /killswitch_off — Nonaktifkan Kill Switch (buka unggahan)',
+    '• /killswitch_on — Tutup unggahan saja (upload 503, share link tetap aktif)',
+    '• /killswitch_lockdown — Lockdown Total (upload &amp; share link ditutup 503)',
+    '• /killswitch_off — Nonaktifkan Kill Switch (seluruh layanan normal)',
     '• /hapus_permanen &lt;id&gt; — Hapus berkas dari Catbox &amp; DB',
     '• /revoke_all_sesi — Cabut seluruh sesi admin web aktif',
     '• /bulk_cleanup &lt;hari&gt; &lt;maxViews&gt; — Pembersihan massal berkas usang',
@@ -165,8 +181,8 @@ async function handleHelp(chatId: number): Promise<void> {
 }
 
 async function handleStatus(chatId: number): Promise<void> {
-  const [isMaintenance, redisHealth, catboxHealth, todaySummary] = await Promise.all([
-    isMaintenanceModeActive(),
+  const [maintenanceLevel, redisHealth, catboxHealth, todaySummary] = await Promise.all([
+    getMaintenanceLevel(),
     checkRedisHealth(),
     checkCatboxHealth(),
     analyticsRepository.getDailySummary(getTodayDateString()),
@@ -182,9 +198,12 @@ async function handleStatus(chatId: number): Promise<void> {
     ? `🟢 Aktif (${catboxHealth.latencyMs || 0} ms)`
     : '🔴 Gangguan / Tidak Tersedia';
 
-  const maintStatus = isMaintenance
-    ? '🔴 <b>AKTIF</b> (Unggahan Ditutup — 503)'
-    : '🟢 <b>Layanan Normal</b> (Unggahan Terbuka)';
+  const maintStatus =
+    maintenanceLevel === 'full_lockdown'
+      ? '🔴 <b>LOCKDOWN TOTAL</b> (Upload &amp; Share Ditutup — 503)'
+      : maintenanceLevel === 'upload_only'
+      ? '🟡 <b>TUTUP UPLOAD</b> (Upload 503, Share Link Tetap Aktif)'
+      : '🟢 <b>Layanan Normal</b> (Unggahan &amp; Berbagi Terbuka)';
 
   const msg = [
     '📊 <b>Status Sistem AirShare Pro</b>',
@@ -320,20 +339,39 @@ async function handleSessions(chatId: number): Promise<void> {
 // CONTROL COMMAND PROMPTS (Bagian 3)
 // -------------------------------------------------------------
 
-async function promptKillswitch(chatId: number, userId: number, enable: boolean): Promise<void> {
-  const current = await isMaintenanceModeActive();
-  if (current === enable) {
+async function promptKillswitch(chatId: number, userId: number, targetLevel: MaintenanceLevel): Promise<void> {
+  const current = await getMaintenanceLevel();
+  if (current === targetLevel) {
+    const currentName =
+      targetLevel === 'full_lockdown'
+        ? 'LOCKDOWN TOTAL'
+        : targetLevel === 'upload_only'
+        ? 'TUTUP UPLOAD'
+        : 'NORMAL';
     await sendTelegramMessage(
       chatId,
-      `ℹ️ Kill switch sudah dalam status ${enable ? 'AKTIF' : 'NONAKTIF'}. Tidak ada perubahan yang diperlukan.`
+      `ℹ️ Kill switch sudah dalam status <b>${currentName}</b>. Tidak ada perubahan yang diperlukan.`
     );
     return;
   }
 
-  const actionType = enable ? 'killswitch_on' : 'killswitch_off';
-  const desc = enable
-    ? 'Mengaktifkan Kill Switch (tutup seluruh unggahan baru dengan HTTP 503)'
-    : 'Menonaktifkan Kill Switch (membuka kembali layanan unggahan normal)';
+  let actionType: PendingActionType;
+  let title: string;
+  let desc: string;
+
+  if (targetLevel === 'full_lockdown') {
+    actionType = 'killswitch_lockdown';
+    title = 'AKTIVASI LOCKDOWN TOTAL';
+    desc = 'Mengaktifkan Lockdown Total (tutup seluruh unggahan baru DAN akses tautan share publik dengan HTTP 503)';
+  } else if (targetLevel === 'upload_only') {
+    actionType = 'killswitch_on';
+    title = 'AKTIVASI TUTUP UNGGAHAN';
+    desc = 'Mengaktifkan Tutup Unggahan (tutup seluruh unggahan baru dengan HTTP 503, tautan share yang ada tetap aktif)';
+  } else {
+    actionType = 'killswitch_off';
+    title = 'DEAKTIVASI KILL SWITCH (LAYANAN NORMAL)';
+    desc = 'Menonaktifkan Kill Switch (membuka kembali seluruh layanan unggahan dan akses berkas secara normal)';
+  }
 
   const confirmationId = await createPendingAction(userId, {
     type: actionType,
@@ -341,7 +379,7 @@ async function promptKillswitch(chatId: number, userId: number, enable: boolean)
   });
 
   const msg = [
-    `⚠️ <b>KONFIRMASI ${enable ? 'AKTIVASI' : 'DEAKTIVASI'} KILL SWITCH</b>`,
+    `⚠️ <b>KONFIRMASI ${title}</b>`,
     '',
     `Aksi yang akan dilakukan:`,
     `<b>${desc}</b>`,
@@ -607,31 +645,46 @@ async function handleConfirm(
   try {
     switch (pending.type) {
       case 'killswitch_on': {
-        await setMaintenanceMode(true);
+        await setMaintenanceLevel('upload_only');
         await auditLogRepository.recordAction({
           type: 'telegram_killswitch_toggle',
-          detail: `Kill Switch (Maintenance Mode) DIAKTIFKAN oleh Telegram user ${adminTag}`,
+          detail: `Kill Switch diubah ke TUTUP UPLOAD SAJA oleh Telegram user ${adminTag}`,
           ip: 'telegram-api',
         });
-        await alertMaintenanceModeChanged(true, 'telegram', adminTag);
+        await alertMaintenanceModeChanged('upload_only', 'telegram', adminTag);
         await sendTelegramMessage(
           chatId,
-          '✅ <b>Kill Switch BERHASIL DIAKTIFKAN.</b>\nSeluruh unggahan baru kini ditolak dengan status HTTP 503 Maintenance Mode.'
+          '✅ <b>Kill Switch BERHASIL DIAKTIFKAN (TUTUP UPLOAD).</b>\nSeluruh unggahan baru kini ditolak (503). Tautan share yang sudah ada tetap aktif.'
+        );
+        break;
+      }
+
+      case 'killswitch_lockdown': {
+        await setMaintenanceLevel('full_lockdown');
+        await auditLogRepository.recordAction({
+          type: 'telegram_killswitch_toggle',
+          detail: `Kill Switch diubah ke LOCKDOWN TOTAL oleh Telegram user ${adminTag}`,
+          ip: 'telegram-api',
+        });
+        await alertMaintenanceModeChanged('full_lockdown', 'telegram', adminTag);
+        await sendTelegramMessage(
+          chatId,
+          '✅ <b>Kill Switch BERHASIL DIAKTIFKAN (LOCKDOWN TOTAL).</b>\nSeluruh unggahan baru DAN akses tautan share publik kini diblokir (503).'
         );
         break;
       }
 
       case 'killswitch_off': {
-        await setMaintenanceMode(false);
+        await setMaintenanceLevel('off');
         await auditLogRepository.recordAction({
           type: 'telegram_killswitch_toggle',
-          detail: `Kill Switch (Maintenance Mode) DINONAKTIFKAN oleh Telegram user ${adminTag}`,
+          detail: `Kill Switch DINONAKTIFKAN oleh Telegram user ${adminTag}`,
           ip: 'telegram-api',
         });
-        await alertMaintenanceModeChanged(false, 'telegram', adminTag);
+        await alertMaintenanceModeChanged('off', 'telegram', adminTag);
         await sendTelegramMessage(
           chatId,
-          '✅ <b>Kill Switch BERHASIL DINONAKTIFKAN.</b>\nLayanan unggahan telah dibuka kembali secara normal.'
+          '✅ <b>Kill Switch BERHASIL DINONAKTIFKAN.</b>\nSeluruh layanan unggahan dan akses tautan telah dibuka kembali secara normal.'
         );
         break;
       }
@@ -720,6 +773,7 @@ async function handleConfirm(
           type: 'info',
           enabled: true,
           updatedAt: Date.now(),
+          expiresAt: null,
         });
 
         await auditLogRepository.recordAction({

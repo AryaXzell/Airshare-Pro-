@@ -3,6 +3,7 @@ import hljs from 'highlight.js';
 import { getMediaRepository } from '../repository/media-repository';
 import { analyticsRepository } from '../repository/analytics-repository';
 import { checkUpstreamFileStatus } from '../storage/catbox-health-check';
+import { getMaintenanceLevel } from '../security/system-config';
 import { PublicMediaView } from '../../types';
 import { getFlagAssetPath } from '../../shared/flags';
 import {
@@ -133,6 +134,15 @@ export interface ThemedErrorOptions {
 
 export class ShareController {
   public async renderShareLanding(req: Request, res: Response): Promise<void> {
+    // Check Full Lockdown Kill Switch FIRST
+    const level = await getMaintenanceLevel();
+    if (level === 'full_lockdown') {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.status(503).send(ShareController.renderFullLockdownHtml());
+      return;
+    }
+
     const rawId = req.params.id;
     const requestId =
       (req as any).id ||
@@ -275,6 +285,242 @@ export class ShareController {
       errorCode: 'ERR_MEDIA_NOT_FOUND',
       httpStatus: 404,
     });
+  }
+
+  public static renderFullLockdownHtml(): string {
+    return `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>Layanan Sedang Ditutup Sementara — AirShare Pro</title>
+  <style>
+    :root {
+      --bg: #09090b;
+      --card: #121216;
+      --card-inner: #181820;
+      --border: #27272a;
+      --border-subtle: #202025;
+      --text: #f4f4f5;
+      --text-muted: #a1a1aa;
+      --accent: #f87171;
+      --accent-glow: rgba(239, 68, 68, 0.15);
+      --blue: #3b82f6;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      position: relative;
+      overflow-x: hidden;
+    }
+    body::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 360px;
+      background: radial-gradient(circle at 50% 10%, rgba(239, 68, 68, 0.08) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+    .wrapper {
+      position: relative;
+      z-index: 1;
+      max-width: 520px;
+      width: 100%;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.625rem;
+      margin-bottom: 1.5rem;
+      text-decoration: none;
+      color: var(--text);
+    }
+    .brand-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #ef4444, #b91c1c);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+    }
+    .brand-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .brand-tag {
+      font-size: 0.7rem;
+      padding: 0.15rem 0.45rem;
+      border-radius: 9999px;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #f87171;
+      font-weight: 600;
+    }
+    .card {
+      background-color: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 1.25rem;
+      padding: 2rem;
+      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.03);
+      text-align: center;
+    }
+    .status-badge-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1.25rem;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      background-color: var(--accent-glow);
+      color: var(--accent);
+      border: 1px solid rgba(239, 68, 68, 0.25);
+      border-radius: 9999px;
+      padding: 0.35rem 0.85rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background-color: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+    }
+    .hero-icon-container {
+      width: 60px;
+      height: 60px;
+      border-radius: 1rem;
+      background-color: var(--accent-glow);
+      color: var(--accent);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 1.25rem;
+    }
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.6rem;
+      color: var(--text);
+      line-height: 1.3;
+    }
+    .desc {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      line-height: 1.6;
+      margin-bottom: 1.5rem;
+    }
+    .status-info-box {
+      background: var(--card-inner);
+      border: 1px solid var(--border-subtle);
+      border-radius: 0.85rem;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1rem;
+      border-radius: 0.75rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s;
+      cursor: pointer;
+      border: 1px solid transparent;
+    }
+    .btn-primary {
+      background-color: #2563eb;
+      color: #fff;
+    }
+    .btn-primary:hover {
+      background-color: #1d4ed8;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+        </svg>
+      </div>
+      <span class="brand-title">AirShare Pro</span>
+      <span class="brand-tag">Maintenance</span>
+    </div>
+
+    <div class="card">
+      <div class="status-badge-row">
+        <div class="status-badge">
+          <span class="status-dot"></span>
+          <span>503 SERVICE UNAVAILABLE</span>
+        </div>
+      </div>
+
+      <div class="hero-icon-container">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+        </svg>
+      </div>
+
+      <h1>Layanan Sedang Ditutup Sementara</h1>
+      <p class="desc">Saat ini seluruh akses layanan berbagi berkas sedang ditutup sementara untuk pemeliharaan sistem.</p>
+
+      <div class="status-info-box">
+        Silakan coba beberapa saat lagi. Anda dapat memantau perkembangan pemeliharaan melalui halaman status publik kami.
+      </div>
+
+      <div class="actions">
+        <a href="/status" class="btn btn-primary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+          </svg>
+          Cek status layanan di sini
+        </a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
   }
 
   public static renderThemedErrorHtml(options: ThemedErrorOptions): string {

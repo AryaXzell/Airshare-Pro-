@@ -160,6 +160,7 @@ export interface ApiErrorResponse {
     code: string;
     message: string;
     details?: unknown;
+    statusPageUrl?: string;
   };
 }
 
@@ -196,14 +197,39 @@ export interface AnnouncementBannerInfo {
   updatedAt?: number;
 }
 
+export type MaintenanceLevel = 'off' | 'upload_only' | 'full_lockdown';
+
+export interface SystemServiceStatus {
+  status: 'operational' | 'maintenance' | 'degraded' | 'outage';
+  label: string;
+  latencyMs?: number;
+  message?: string;
+}
+
 export interface SystemStatusData {
+  status: 'operational' | 'degraded' | 'major_outage';
+  maintenanceLevel: MaintenanceLevel;
   maintenanceMode: boolean;
+  services: {
+    upload: SystemServiceStatus;
+    download: SystemServiceStatus;
+    storage: SystemServiceStatus;
+    database: SystemServiceStatus;
+  };
   announcement: AnnouncementBannerInfo | null;
   featureFlags?: {
-    pasteToUpload: boolean;
-    qrCode: boolean;
-    pwaInstallPrompt: boolean;
+    pasteToUpload?: boolean;
+    qrCode?: boolean;
+    pwaInstallPrompt?: boolean;
+    enableUrlShortener?: boolean;
+    enableZipDownload?: boolean;
+    enableGalleryView?: boolean;
   };
+  uptime: {
+    status: string;
+    lastChecked: string;
+  };
+  timestamp: string;
 }
 
 export interface DailyStats {

@@ -10,20 +10,18 @@ export const telegramWebhookController = {
   async handleWebhook(req: Request, res: Response): Promise<void> {
     const config = getTelegramConfig();
 
-    // 1. If bot is disabled due to missing token or user IDs, return 200 without processing
+    // 1. If bot is disabled due to missing token, user IDs, or secret, return 200 without processing
     if (!config.enabled) {
       res.status(200).json({ ok: false, message: 'Telegram bot integration is not enabled.' });
       return;
     }
 
     // 2. Secret Token Verification (X-Telegram-Bot-Api-Secret-Token)
-    if (config.webhookSecret) {
-      const receivedSecret = req.headers['x-telegram-bot-api-secret-token'];
-      if (!receivedSecret || receivedSecret !== config.webhookSecret) {
-        console.warn('[TELEGRAM_WEBHOOK_AUTH] Webhook request ditolak: Secret token tidak cocok.');
-        res.status(401).json({ error: 'Unauthorized webhook secret token' });
-        return;
-      }
+    const receivedSecret = req.headers['x-telegram-bot-api-secret-token'];
+    if (!receivedSecret || receivedSecret !== config.webhookSecret) {
+      console.warn('[TELEGRAM_WEBHOOK_AUTH] Webhook request ditolak: Secret token tidak cocok.');
+      res.status(401).json({ error: 'Unauthorized webhook secret token' });
+      return;
     }
 
     // Respond immediately to Telegram to prevent timeouts

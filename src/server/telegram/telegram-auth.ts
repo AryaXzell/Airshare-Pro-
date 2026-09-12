@@ -22,7 +22,11 @@ export function getTelegramConfig(): TelegramConfig {
     .map((idStr) => parseInt(idStr.trim(), 10))
     .filter((id) => !isNaN(id) && id > 0);
 
-  const enabled = Boolean(botToken.length > 0 && adminUserIds.length > 0);
+  const enabled = Boolean(
+    botToken.length > 0 &&
+    adminUserIds.length > 0 &&
+    webhookSecret.length >= 16
+  );
 
   return {
     enabled,

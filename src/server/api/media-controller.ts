@@ -86,7 +86,7 @@ export const mediaController = {
         success: false,
         error: {
           code: 'MAINTENANCE_MODE',
-          message: 'Layanan sedang dalam pemeliharaan. Silakan coba beberapa saat lagi.',
+          message: 'Layanan unggah sedang dalam pemeliharaan. Silakan coba beberapa saat lagi atau pantau status di /status.',
         },
       };
       res.status(503).json(err);

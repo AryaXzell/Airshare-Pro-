@@ -164,11 +164,18 @@ export async function alertAdminLoginFailed(ip: string): Promise<void> {
  * Alerts admins when Maintenance Mode (Kill Switch) state changes.
  */
 export async function alertMaintenanceModeChanged(
-  active: boolean,
+  levelOrActive: boolean | 'off' | 'upload_only' | 'full_lockdown',
   channel: 'web' | 'telegram',
   operatorInfo?: string
 ): Promise<void> {
-  const statusText = active ? '🔴 DIAKTIFKAN (Unggahan Ditutup)' : '🟢 DINONAKTIFKAN (Layanan Normal)';
+  let statusText = '';
+  if (levelOrActive === 'full_lockdown') {
+    statusText = '🔴 LOCKDOWN TOTAL (Upload & Share Link Ditutup)';
+  } else if (levelOrActive === 'upload_only' || levelOrActive === true) {
+    statusText = '🟡 UPLOAD DITUTUP (Hanya Upload Dinonaktifkan)';
+  } else {
+    statusText = '🟢 DINONAKTIFKAN (Layanan Normal)';
+  }
   const op = operatorInfo ? `\nOperator: <code>${sanitizeForTelegramHtml(operatorInfo)}</code>` : '';
 
   const msg = [

@@ -26,7 +26,10 @@ import { CatboxStorageProvider } from '../storage/catbox-storage-provider';
 import {
   getAllSystemConfig,
   setMaintenanceMode,
+  setMaintenanceLevel,
+  MaintenanceLevel,
   setAnnouncement,
+  clearAnnouncement,
   setMaxUploadSize,
   setUploadRateLimit,
   setFeatureFlags,
@@ -43,6 +46,13 @@ import {
   getOperationalPanelStyles,
   getOperationalPanelScripts,
 } from './admin-operational-panel';
+import {
+  GOOGLE_FONTS_TAGS,
+  THEME_HEAD_SCRIPT,
+  THEME_BODY_SCRIPT,
+  THEME_STORAGE_LISTENER_SCRIPT,
+  THEME_CSS_VARIABLES,
+} from './theme-styles';
 import {
   alertAdminLoginFailed,
   alertMaintenanceModeChanged,
@@ -290,46 +300,39 @@ export const adminController = {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Admin Authentication — AirShare Pro</title>
+  ${GOOGLE_FONTS_TAGS}
+  ${THEME_HEAD_SCRIPT}
   <style>
-    :root {
-      --bg: #09090b;
-      --card: #18181b;
-      --card-inner: #27272a;
-      --text: #f4f4f5;
-      --muted: #a1a1aa;
-      --border: rgba(255, 255, 255, 0.1);
-      --accent: #2563eb;
-      --accent-hover: #1d4ed8;
-      --error-bg: rgba(239, 68, 68, 0.15);
-      --error-text: #f87171;
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    ${THEME_CSS_VARIABLES}
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background-color: var(--bg);
-      color: var(--text);
+      font-family: var(--font-sans);
+      background-color: var(--bg-primary);
+      color: var(--text-main);
       min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
       padding: 1.5rem;
+      transition: background-color 0.25s ease, color 0.25s ease;
     }
     .glass-card {
-      background: rgba(24, 24, 27, 0.85);
-      backdrop-filter: blur(16px);
-      border: 1px solid var(--border);
+      background: var(--surface-primary);
+      border: 1px solid var(--border-subtle);
       border-radius: 1.5rem;
       padding: 2.25rem;
       max-width: 420px;
       width: 100%;
-      box-shadow: 0 20px 40px -15px rgba(0,0,0,0.7);
+      box-shadow: var(--shadow-modal);
     }
     .header { text-align: center; margin-bottom: 2rem; }
     .badge {
       display: inline-flex;
       align-items: center;
       gap: 0.35rem;
-      background: rgba(37, 99, 235, 0.15);
-      color: #60a5fa;
+      background: var(--accent-soft);
+      color: var(--accent);
       padding: 0.35rem 0.85rem;
       border-radius: 9999px;
       font-size: 0.75rem;
@@ -337,14 +340,14 @@ export const adminController = {
       letter-spacing: 0.05em;
       text-transform: uppercase;
       margin-bottom: 1rem;
-      border: 1px solid rgba(96, 165, 250, 0.2);
+      border: 1px solid var(--border-subtle);
     }
-    h1 { font-size: 1.35rem; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 0.35rem; }
-    p.subtitle { color: var(--muted); font-size: 0.85rem; line-height: 1.4; }
+    h1 { font-size: 1.35rem; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 0.35rem; color: var(--text-main); }
+    p.subtitle { color: var(--text-muted); font-size: 0.85rem; line-height: 1.4; }
     .error-banner {
-      background: var(--error-bg);
+      background: rgba(239, 68, 68, 0.12);
       border: 1px solid rgba(239, 68, 68, 0.3);
-      color: var(--error-text);
+      color: #f87171;
       padding: 0.75rem 1rem;
       border-radius: 0.75rem;
       font-size: 0.825rem;
@@ -355,26 +358,26 @@ export const adminController = {
       gap: 0.5rem;
     }
     .form-group { margin-bottom: 1.25rem; }
-    label { display: block; font-size: 0.8rem; font-weight: 600; color: var(--muted); margin-bottom: 0.5rem; }
+    label { display: block; font-size: 0.8rem; font-weight: 600; color: var(--text-muted); margin-bottom: 0.5rem; }
     input[type="password"] {
       width: 100%;
-      background: var(--card-inner);
-      border: 1px solid var(--border);
+      background: var(--surface-secondary);
+      border: 1px solid var(--border-subtle);
       border-radius: 0.75rem;
       padding: 0.8rem 1rem;
-      color: var(--text);
+      color: var(--text-main);
       font-size: 0.95rem;
       outline: none;
       transition: border-color 0.2s, box-shadow 0.2s;
     }
     input[type="password"]:focus {
       border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25);
+      box-shadow: 0 0 0 3px var(--border-focus);
     }
     .btn-submit {
       width: 100%;
       background: var(--accent);
-      color: #fff;
+      color: var(--accent-text, #fff);
       border: none;
       border-radius: 0.75rem;
       padding: 0.85rem 1rem;
@@ -388,16 +391,17 @@ export const adminController = {
       margin-top: 1.5rem;
       text-align: center;
       font-size: 0.725rem;
-      color: var(--muted);
-      opacity: 0.75;
+      color: var(--text-muted);
+      opacity: 0.85;
     }
   </style>
 </head>
-<body>
+<body class="theme-rosegold">
+  ${THEME_BODY_SCRIPT}
   <div class="glass-card">
     <div class="header">
       <div class="badge">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         Panel Terenkripsi
       </div>
       <h1>AirShare Pro Admin</h1>
@@ -425,6 +429,10 @@ export const adminController = {
       Bcrypt Salting Cost 12 • Strict Session TTL 1 Jam • IP Rate Limited
     </div>
   </div>
+
+  <script>
+    ${THEME_STORAGE_LISTENER_SCRIPT}
+  </script>
 </body>
 </html>`;
 
@@ -667,35 +675,20 @@ export const adminController = {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AirShare Pro — Analytics &amp; Admin Dashboard</title>
+  ${GOOGLE_FONTS_TAGS}
+  ${THEME_HEAD_SCRIPT}
   <style>
-    :root {
-      --bg: #0e0e11;
-      --surface-primary: rgba(22, 22, 26, 0.94);
-      --card: #16161a;
-      --card-elevated: #1e1e24;
-      --border: rgba(255, 255, 255, 0.08);
-      --border-subtle: rgba(255, 255, 255, 0.06);
-      --border-hover: rgba(255, 255, 255, 0.16);
-      --border-accent: rgba(59, 130, 246, 0.35);
-      --text: #f5f5f7;
-      --fg: #f5f5f7;
-      --muted: #94949b;
-      --accent: #3b82f6;
-      --accent-dark: #1d4ed8;
-      --accent-soft: rgba(59, 130, 246, 0.12);
-      --accent-soft-hover: rgba(59, 130, 246, 0.2);
-      --success: #10b981;
-      --success-soft: rgba(16, 185, 129, 0.12);
-      --warning: #f59e0b;
-      --warning-soft: rgba(245, 158, 11, 0.15);
-      --danger: #ef4444;
-      --danger-soft: rgba(239, 68, 68, 0.15);
-      --surface-glass: rgba(22, 22, 26, 0.85);
-      --shadow-subtle: 0 4px 16px -2px rgba(0, 0, 0, 0.35);
-      --shadow-elevated: 0 16px 36px -4px rgba(0, 0, 0, 0.55);
+    ${THEME_CSS_VARIABLES}
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font-sans);
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      padding: 1.25rem;
+      min-height: 100vh;
+      transition: background-color 0.25s ease, color 0.25s ease;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background-color: var(--bg); color: var(--text); padding: 1.25rem; min-height: 100vh; }
     .container { max-width: 1280px; margin: 0 auto; }
 
     /* Header & Navigation */
@@ -1651,7 +1644,8 @@ export const adminController = {
     ${getOperationalPanelStyles()}
   </style>
 </head>
-<body>
+<body class="theme-rosegold">
+  ${THEME_BODY_SCRIPT}
   <div class="container">
     <!-- Top Nav -->
     <header class="top-nav">
@@ -1683,27 +1677,27 @@ export const adminController = {
 
     <!-- Mobile Category Tabs -->
     <nav class="admin-mobile-tabs" aria-label="Kategori Panel Mobile" role="tablist">
-      <button type="button" class="admin-tab-btn active" data-category="ringkasan" id="mobile-tab-ringkasan" onclick="switchCategory('ringkasan')" role="tab" aria-selected="true">
+      <button type="button" class="admin-tab-btn active" data-category="ringkasan" id="mobile-tab-ringkasan" aria-controls="panel-ringkasan" onclick="switchCategory('ringkasan')" role="tab" aria-selected="true">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
         <span>Ringkasan</span>
       </button>
-      <button type="button" class="admin-tab-btn" data-category="analitik" id="mobile-tab-analitik" onclick="switchCategory('analitik')" role="tab" aria-selected="false">
+      <button type="button" class="admin-tab-btn" data-category="analitik" id="mobile-tab-analitik" aria-controls="panel-analitik" onclick="switchCategory('analitik')" role="tab" aria-selected="false">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
         <span>Analitik</span>
       </button>
-      <button type="button" class="admin-tab-btn" data-category="kontrol" id="mobile-tab-kontrol" onclick="switchCategory('kontrol')" role="tab" aria-selected="false">
+      <button type="button" class="admin-tab-btn" data-category="kontrol" id="mobile-tab-kontrol" aria-controls="panel-kontrol" onclick="switchCategory('kontrol')" role="tab" aria-selected="false">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         <span>Kontrol Sistem</span>
       </button>
-      <button type="button" class="admin-tab-btn" data-category="keamanan" id="mobile-tab-keamanan" onclick="switchCategory('keamanan')" role="tab" aria-selected="false">
+      <button type="button" class="admin-tab-btn" data-category="keamanan" id="mobile-tab-keamanan" aria-controls="panel-keamanan" onclick="switchCategory('keamanan')" role="tab" aria-selected="false">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         <span>Keamanan &amp; Sesi</span>
       </button>
-      <button type="button" class="admin-tab-btn" data-category="data" id="mobile-tab-data" onclick="switchCategory('data')" role="tab" aria-selected="false">
+      <button type="button" class="admin-tab-btn" data-category="data" id="mobile-tab-data" aria-controls="panel-data" onclick="switchCategory('data')" role="tab" aria-selected="false">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         <span>Pengelolaan Data</span>
       </button>
-      <button type="button" class="admin-tab-btn" data-category="terhapus" id="tab-btn-terhapus" onclick="switchCategory('terhapus')" role="tab" aria-selected="false">
+      <button type="button" class="admin-tab-btn" data-category="terhapus" id="tab-btn-terhapus" aria-controls="panel-terhapus" onclick="switchCategory('terhapus')" role="tab" aria-selected="false">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
         <span>Berkas Terhapus (${deletedFiles.length})</span>
       </button>
@@ -1715,7 +1709,7 @@ export const adminController = {
       <aside class="admin-sidebar" aria-label="Navigasi Kategori Admin">
         <div class="sidebar-title">Menu Utama</div>
         <nav class="sidebar-nav" role="tablist">
-          <button type="button" class="admin-sidebar-btn active" data-category="ringkasan" id="sidebar-btn-ringkasan" onclick="switchCategory('ringkasan')" role="tab" aria-selected="true">
+          <button type="button" class="admin-sidebar-btn active" data-category="ringkasan" id="sidebar-btn-ringkasan" aria-controls="panel-ringkasan" onclick="switchCategory('ringkasan')" role="tab" aria-selected="true">
             <div class="sidebar-btn-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
             </div>
@@ -1724,7 +1718,7 @@ export const adminController = {
               <span class="sidebar-btn-desc">Metrik &amp; Rekomendasi</span>
             </div>
           </button>
-          <button type="button" class="admin-sidebar-btn" data-category="analitik" id="sidebar-btn-analitik" onclick="switchCategory('analitik')" role="tab" aria-selected="false">
+          <button type="button" class="admin-sidebar-btn" data-category="analitik" id="sidebar-btn-analitik" aria-controls="panel-analitik" onclick="switchCategory('analitik')" role="tab" aria-selected="false">
             <div class="sidebar-btn-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
             </div>
@@ -1733,7 +1727,7 @@ export const adminController = {
               <span class="sidebar-btn-desc">Tren, Media &amp; Geolokasi</span>
             </div>
           </button>
-          <button type="button" class="admin-sidebar-btn" data-category="kontrol" id="sidebar-btn-kontrol" onclick="switchCategory('kontrol')" role="tab" aria-selected="false">
+          <button type="button" class="admin-sidebar-btn" data-category="kontrol" id="sidebar-btn-kontrol" aria-controls="panel-kontrol" onclick="switchCategory('kontrol')" role="tab" aria-selected="false">
             <div class="sidebar-btn-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             </div>
@@ -1742,7 +1736,7 @@ export const adminController = {
               <span class="sidebar-btn-desc">Kill Switch &amp; Sinkronisasi</span>
             </div>
           </button>
-          <button type="button" class="admin-sidebar-btn" data-category="keamanan" id="sidebar-btn-keamanan" onclick="switchCategory('keamanan')" role="tab" aria-selected="false">
+          <button type="button" class="admin-sidebar-btn" data-category="keamanan" id="sidebar-btn-keamanan" aria-controls="panel-keamanan" onclick="switchCategory('keamanan')" role="tab" aria-selected="false">
             <div class="sidebar-btn-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
             </div>
@@ -1751,7 +1745,7 @@ export const adminController = {
               <span class="sidebar-btn-desc">Sesi Aktif &amp; Log Audit</span>
             </div>
           </button>
-          <button type="button" class="admin-sidebar-btn" data-category="data" id="sidebar-btn-data" onclick="switchCategory('data')" role="tab" aria-selected="false">
+          <button type="button" class="admin-sidebar-btn" data-category="data" id="sidebar-btn-data" aria-controls="panel-data" onclick="switchCategory('data')" role="tab" aria-selected="false">
             <div class="sidebar-btn-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </div>
@@ -1760,7 +1754,7 @@ export const adminController = {
               <span class="sidebar-btn-desc">Riwayat Unggahan &amp; Cleanup</span>
             </div>
           </button>
-          <button type="button" class="admin-sidebar-btn" data-category="terhapus" id="sidebar-btn-terhapus" onclick="switchCategory('terhapus')" role="tab" aria-selected="false">
+          <button type="button" class="admin-sidebar-btn" data-category="terhapus" id="sidebar-btn-terhapus" aria-controls="panel-terhapus" onclick="switchCategory('terhapus')" role="tab" aria-selected="false">
             <div class="sidebar-btn-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
             </div>
@@ -1775,7 +1769,7 @@ export const adminController = {
       <!-- Main Categorized Content Panels -->
       <main class="admin-main">
         <!-- 1. Kategori: Ringkasan -->
-        <div class="category-panel active" data-category-panel="ringkasan">
+        <div class="category-panel active" id="panel-ringkasan" data-category-panel="ringkasan" role="tabpanel" aria-labelledby="sidebar-btn-ringkasan">
           <!-- 4 Big Number Summaries for Today -->
           <section class="metrics-grid">
             <div class="metric-card">
@@ -1918,7 +1912,7 @@ export const adminController = {
         </div>
 
         <!-- 2. Kategori: Analitik -->
-        <div class="category-panel" data-category-panel="analitik">
+        <div class="category-panel" id="panel-analitik" data-category-panel="analitik" role="tabpanel" aria-labelledby="sidebar-btn-analitik">
           <!-- 7-Day Trend & Media Type Distribution -->
           <div class="section-grid">
             <!-- 7-Day Trend Chart -->
@@ -2072,7 +2066,7 @@ export const adminController = {
         </div>
 
         <!-- 3. Kategori: Kontrol Sistem -->
-        <div class="category-panel" data-category-panel="kontrol">
+        <div class="category-panel" id="panel-kontrol" data-category-panel="kontrol" role="tabpanel" aria-labelledby="sidebar-btn-kontrol">
           <!-- Kontrol Operasional & Konfigurasi Dinamis (Kill Switch & Dynamic Config) -->
           ${renderOperationalControlsHtml(systemConfig)}
 
@@ -2105,7 +2099,7 @@ export const adminController = {
         </div>
 
         <!-- 4. Kategori: Keamanan & Sesi -->
-        <div class="category-panel" data-category-panel="keamanan">
+        <div class="category-panel" id="panel-keamanan" data-category-panel="keamanan" role="tabpanel" aria-labelledby="sidebar-btn-keamanan">
           <!-- Manajemen Sesi Admin Aktif -->
           ${renderActiveSessionsHtml(activeSessions)}
 
@@ -2114,7 +2108,7 @@ export const adminController = {
         </div>
 
         <!-- 5. Kategori: Pengelolaan Data -->
-        <div class="category-panel" data-category-panel="data">
+        <div class="category-panel" id="panel-data" data-category-panel="data" role="tabpanel" aria-labelledby="sidebar-btn-data">
           <!-- 50 Most Recent Uploads Across All Sessions -->
           <section class="panel" style="margin-bottom: 1.5rem;">
             <div class="panel-header">
@@ -2214,7 +2208,7 @@ export const adminController = {
         </div>
 
         <!-- 6. Kategori: Berkas Terhapus -->
-        <div class="category-panel" data-category-panel="terhapus">
+        <div class="category-panel" id="panel-terhapus" data-category-panel="terhapus" role="tabpanel" aria-labelledby="sidebar-btn-terhapus">
           <section class="panel" style="margin-bottom: 1.5rem;">
             <div class="panel-header">
               <h2 class="panel-title">
@@ -2551,8 +2545,10 @@ export const adminController = {
         panels.forEach(function(panel) {
           if (panel.getAttribute('data-category-panel') === targetCat) {
             panel.classList.add('active');
+            panel.setAttribute('aria-hidden', 'false');
           } else {
             panel.classList.remove('active');
+            panel.setAttribute('aria-hidden', 'true');
           }
         });
 
@@ -3302,6 +3298,8 @@ export const adminController = {
     })();
 
     ${getOperationalPanelScripts(fullAdminPath)}
+
+    ${THEME_STORAGE_LISTENER_SCRIPT}
   </script>
 </body>
 </html>`;
@@ -3705,7 +3703,7 @@ export const adminController = {
   async updateConfig(req: Request, res: Response): Promise<void> {
     try {
       const clientIp = getClientIp(req);
-      const { maxUploadSize, rateLimit, announcement, featureFlags } = req.body || {};
+      const { maxUploadSize, rateLimit, announcement, featureFlags, clearAnnouncement: shouldClearAnnouncement } = req.body || {};
       const changes: string[] = [];
 
       if (typeof maxUploadSize === 'number' && maxUploadSize >= 1024 * 1024 && maxUploadSize <= 500 * 1024 * 1024) {
@@ -3720,13 +3718,23 @@ export const adminController = {
         changes.push(`rateLimit: ${limit}/mnt`);
       }
 
-      if (announcement && typeof announcement.message === 'string') {
+      if (shouldClearAnnouncement) {
+        await clearAnnouncement();
+        changes.push('announcement: Dihapus permanen');
+      } else if (announcement && typeof announcement.message === 'string') {
         const validTypes = ['info', 'warning', 'success'] as const;
         const type = validTypes.includes(announcement.type) ? announcement.type : 'info';
+        
+        let validExpiresAt: number | null = null;
+        if (typeof announcement.expiresAt === 'number' && announcement.expiresAt > Date.now()) {
+          validExpiresAt = announcement.expiresAt;
+        }
+
         await setAnnouncement({
           message: announcement.message,
           type,
           enabled: Boolean(announcement.enabled),
+          expiresAt: validExpiresAt,
         });
         changes.push(`announcement: ${announcement.enabled ? 'Aktif' : 'Nonaktif'} ("${announcement.message.substring(0, 30)}")`);
       }
@@ -3763,32 +3771,70 @@ export const adminController = {
 
   /**
    * POST /{ADMIN_PANEL_PATH}/api/maintenance
-   * Toggles the maintenance mode kill switch.
+   * Updates the maintenance mode kill switch (3 levels).
    */
   async toggleMaintenance(req: Request, res: Response): Promise<void> {
     try {
       const clientIp = getClientIp(req);
-      const enabled = Boolean(req.body?.enabled);
-      await setMaintenanceMode(enabled);
+      let targetLevel: MaintenanceLevel;
+
+      if (req.body?.level !== undefined) {
+        const rawLevel = String(req.body.level).toLowerCase().trim();
+        if (rawLevel !== 'off' && rawLevel !== 'upload_only' && rawLevel !== 'full_lockdown') {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'INVALID_MAINTENANCE_LEVEL',
+              message: 'Level maintenance tidak valid. Nilai yang diterima: off, upload_only, full_lockdown.',
+            },
+          });
+          return;
+        }
+        targetLevel = rawLevel as MaintenanceLevel;
+      } else if (req.body?.enabled !== undefined) {
+        targetLevel = Boolean(req.body.enabled) ? 'upload_only' : 'off';
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'MISSING_LEVEL_OR_ENABLED',
+            message: 'Parameter level atau enabled wajib disertakan.',
+          },
+        });
+        return;
+      }
+
+      await setMaintenanceLevel(targetLevel);
+
+      let logDetail = '';
+      if (targetLevel === 'full_lockdown') {
+        logDetail = 'Kill Switch diubah ke: LOCKDOWN TOTAL — Seluruh unggahan publik dan akses share link ditolak (503)';
+      } else if (targetLevel === 'upload_only') {
+        logDetail = 'Kill Switch diubah ke: TUTUP UPLOAD SAJA — Seluruh unggahan baru ditolak (503), share link lama tetap aktif';
+      } else {
+        logDetail = 'Kill Switch DINONAKTIFKAN — Mode Pemeliharaan nonaktif, seluruh layanan berjalan normal';
+      }
 
       await auditLogRepository.recordAction({
         type: 'MAINTENANCE_TOGGLE',
-        detail: enabled
-          ? 'Kill Switch DIAKTIFKAN — Mode Pemeliharaan aktif, seluruh unggahan publik ditolak (503)'
-          : 'Kill Switch DINONAKTIFKAN — Mode Pemeliharaan nonaktif, layanan unggahan berjalan normal',
+        detail: logDetail,
         ip: clientIp,
       });
 
-      alertMaintenanceModeChanged(enabled, 'web', `IP ${clientIp}`).catch((alertErr) => {
+      alertMaintenanceModeChanged(targetLevel, 'web', `IP ${clientIp}`).catch((alertErr) => {
         console.warn('[TELEGRAM_ALERT_WARN] Gagal mengirim alert maintenance mode:', alertErr);
       });
 
       res.json({
         success: true,
-        maintenanceMode: enabled,
-        message: enabled
-          ? 'Mode Pemeliharaan aktif (Kill Switch Hidup).'
-          : 'Mode Pemeliharaan dinonaktifkan (Layanan Normal).',
+        maintenanceLevel: targetLevel,
+        maintenanceMode: targetLevel !== 'off',
+        message:
+          targetLevel === 'full_lockdown'
+            ? 'Mode Pemeliharaan aktif (Lockdown Total).'
+            : targetLevel === 'upload_only'
+            ? 'Mode Pemeliharaan aktif (Tutup Upload Saja).'
+            : 'Mode Pemeliharaan dinonaktifkan (Layanan Normal).',
       });
     } catch (err: unknown) {
       console.error('[TOGGLE_MAINTENANCE_ERROR]', err);

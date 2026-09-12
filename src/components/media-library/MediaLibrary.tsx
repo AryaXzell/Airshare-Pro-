@@ -68,31 +68,40 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<string | null>(null);
   const [inspectingItem, setInspectingItem] = useState<MediaItem | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const visibleIds = filteredItems.map((item) => item.id);
   const allVisibleSelected =
     visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
 
   const handleConfirmClear = async () => {
-    setShowClearConfirm(false);
-    const result = await onClearAll();
-    if (result && result.failed > 0 && result.succeeded === 0) {
-      onToast('Gagal membersihkan riwayat dari server.', {
-        type: 'error',
-        description: 'Terjadi kesalahan saat menghubungi server. Silakan coba lagi.',
-      });
-    } else {
-      onToast('Semua riwayat berkas dibersihkan dari server.', {
-        type: 'success',
-      });
+    if (isDeleting) return;
+    setIsDeleting(true);
+    try {
+      const result = await onClearAll();
+      setShowClearConfirm(false);
+      if (result && result.failed > 0 && result.succeeded === 0) {
+        onToast('Gagal membersihkan riwayat dari server.', {
+          type: 'error',
+          description: 'Terjadi kesalahan saat menghubungi server. Silakan coba lagi.',
+        });
+      } else {
+        onToast('Semua riwayat berkas dibersihkan dari server.', {
+          type: 'success',
+        });
+      }
+    } finally {
+      setIsDeleting(false);
     }
   };
 
   const handleConfirmSingleDelete = async () => {
-    if (itemToDelete) {
-      const id = itemToDelete;
-      setItemToDelete(null);
+    if (!itemToDelete || isDeleting) return;
+    const id = itemToDelete;
+    setIsDeleting(true);
+    try {
       const result = await onDeleteItem(id);
+      setItemToDelete(null);
       if (result && !result.success) {
         onToast('Gagal menghapus berkas dari server.', {
           type: 'error',
@@ -103,34 +112,42 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
           type: 'success',
         });
       }
+    } finally {
+      setIsDeleting(false);
     }
   };
 
   const handleDeleteSelected = async () => {
+    if (isDeleting) return;
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
-    const result = await onDeleteMultiple(ids);
-    if (result) {
-      if (result.failed === 0) {
-        onToast(`${result.succeeded} berkas berhasil dihapus dari riwayat.`, {
-          type: 'success',
-        });
-      } else if (result.succeeded > 0) {
-        onToast(
-          `${result.succeeded} berkas dihapus, tetapi ${result.failed} berkas gagal dihapus dari server.`,
-          {
-            type: 'warning',
-            description: 'Item yang gagal tetap berada di daftar. Coba ulangi penghapusan.',
-          }
-        );
+    setIsDeleting(true);
+    try {
+      const result = await onDeleteMultiple(ids);
+      if (result) {
+        if (result.failed === 0) {
+          onToast(`${result.succeeded} berkas berhasil dihapus dari riwayat.`, {
+            type: 'success',
+          });
+        } else if (result.succeeded > 0) {
+          onToast(
+            `${result.succeeded} berkas dihapus, tetapi ${result.failed} berkas gagal dihapus dari server.`,
+            {
+              type: 'warning',
+              description: 'Item yang gagal tetap berada di daftar. Coba ulangi penghapusan.',
+            }
+          );
+        } else {
+          onToast(`Gagal menghapus ${result.failed} berkas dari server.`, {
+            type: 'error',
+            description: 'Periksa koneksi internet Anda dan coba lagi.',
+          });
+        }
       } else {
-        onToast(`Gagal menghapus ${result.failed} berkas dari server.`, {
-          type: 'error',
-          description: 'Periksa koneksi internet Anda dan coba lagi.',
-        });
+        onToast(`${ids.length} berkas dihapus dari riwayat.`);
       }
-    } else {
-      onToast(`${ids.length} berkas dihapus dari riwayat.`);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -375,8 +392,9 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
         confirmLabel="Ya, Bersihkan"
         cancelLabel="Batal"
         isDestructive={true}
+        isLoading={isDeleting}
         onConfirm={handleConfirmClear}
-        onCancel={() => setShowClearConfirm(false)}
+        onCancel={() => !isDeleting && setShowClearConfirm(false)}
       />
 
       {/* Confirm Single Delete Dialog */}
@@ -387,8 +405,9 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
         confirmLabel="Hapus"
         cancelLabel="Batal"
         isDestructive={true}
+        isLoading={isDeleting}
         onConfirm={handleConfirmSingleDelete}
-        onCancel={() => setItemToDelete(null)}
+        onCancel={() => !isDeleting && setItemToDelete(null)}
       />
     </section>
   );
