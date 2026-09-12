@@ -1619,24 +1619,49 @@ export const adminController = {
       to { transform: rotate(360deg); }
     }
 
-    /* Health footer */
-    .health-bar {
+    /* Clean Minimalist Footer */
+    .admin-clean-footer {
       display: flex;
       align-items: center;
       justify-content: space-between;
       flex-wrap: wrap;
-      gap: 1rem;
-      padding: 1rem 1.5rem;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 1.25rem;
-      font-size: 0.775rem;
+      gap: 0.75rem;
+      padding: 0.85rem 1.25rem;
+      background: var(--surface-glass);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border-subtle);
+      border-radius: 1rem;
+      font-size: 0.75rem;
       color: var(--muted);
       margin-top: 1.5rem;
       box-shadow: var(--shadow-subtle);
     }
+    .admin-clean-footer .footer-left {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .admin-clean-footer .footer-dot {
+      opacity: 0.4;
+    }
+    .admin-clean-footer .footer-tab-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 700;
+    }
+    .admin-clean-footer .footer-tab-link:hover {
+      text-decoration: underline;
+    }
+    .admin-clean-footer .footer-right {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-weight: 600;
+      opacity: 0.8;
+    }
     .health-item { display: flex; align-items: center; gap: 0.5rem; }
-    .status-indicator { width: 8px; height: 8px; border-radius: 50%; }
+    .status-indicator { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
     .status-ok { background: var(--success); box-shadow: 0 0 6px var(--success); }
     .status-warn { background: var(--warning); box-shadow: 0 0 6px var(--warning); }
 
@@ -1677,7 +1702,7 @@ export const adminController = {
         padding: 1rem;
         border-radius: 1rem;
       }
-      .health-bar {
+      .admin-clean-footer {
         padding: 0.85rem 1rem;
         border-radius: 1rem;
       }
@@ -1727,6 +1752,10 @@ export const adminController = {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
         <span>Analitik</span>
       </button>
+      <button type="button" class="admin-tab-btn" data-category="status" id="mobile-tab-status" aria-controls="panel-status" onclick="switchCategory('status')" role="tab" aria-selected="false">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        <span>Status Sistem</span>
+      </button>
       <button type="button" class="admin-tab-btn" data-category="kontrol" id="mobile-tab-kontrol" aria-controls="panel-kontrol" onclick="switchCategory('kontrol')" role="tab" aria-selected="false">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         <span>Kontrol Sistem</span>
@@ -1767,6 +1796,15 @@ export const adminController = {
             <div class="sidebar-btn-content">
               <span class="sidebar-btn-title">Analitik</span>
               <span class="sidebar-btn-desc">Tren, Media &amp; Geolokasi</span>
+            </div>
+          </button>
+          <button type="button" class="admin-sidebar-btn" data-category="status" id="sidebar-btn-status" aria-controls="panel-status" onclick="switchCategory('status')" role="tab" aria-selected="false">
+            <div class="sidebar-btn-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            </div>
+            <div class="sidebar-btn-content">
+              <span class="sidebar-btn-title">Status Sistem</span>
+              <span class="sidebar-btn-desc">Infrastruktur &amp; Kesehatan Hulu</span>
             </div>
           </button>
           <button type="button" class="admin-sidebar-btn" data-category="kontrol" id="sidebar-btn-kontrol" aria-controls="panel-kontrol" onclick="switchCategory('kontrol')" role="tab" aria-selected="false">
@@ -2107,7 +2145,144 @@ export const adminController = {
           </div>
         </div>
 
-        <!-- 3. Kategori: Kontrol Sistem -->
+        <!-- 3. Kategori: Status Sistem -->
+        <div class="category-panel" id="panel-status" data-category-panel="status" role="tabpanel" aria-labelledby="sidebar-btn-status">
+          <!-- 4 Core Infrastructure Status Cards -->
+          <section class="metrics-grid" style="margin-bottom: 1.5rem;">
+            <!-- Storage Backend -->
+            <div class="metric-card" id="status-card-storage">
+              <div class="metric-header">
+                <span class="metric-label">Penyimpanan Utama</span>
+                <div class="metric-icon" style="background: rgba(59, 130, 246, 0.15); color: #3b82f6;">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 0.5rem; margin: 0.4rem 0;">
+                <span class="status-indicator ${redisConnected || !isUpstashConfigured() ? 'status-ok' : 'status-warn'}" id="status-tab-storage-dot"></span>
+                <div class="metric-value" style="font-size: 1.1rem; font-weight: 800;" id="status-tab-storage-val">${escapeHtml(storageMode)}</div>
+              </div>
+              <div class="metric-sub" id="status-tab-storage-sub">
+                ${redisConnected ? 'Koneksi aktif ke cluster Upstash Redis' : (!isUpstashConfigured() ? 'Penyimpanan lokal RAM in-memory aktif' : 'Gangguan koneksi - fallback in-memory')}
+              </div>
+            </div>
+
+            <!-- Catbox Upstream -->
+            <div class="metric-card" id="status-card-catbox">
+              <div class="metric-header">
+                <span class="metric-label">Koneksi Hulu Catbox</span>
+                <div class="metric-icon" style="background: rgba(16, 185, 129, 0.15); color: #10b981;">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="m12 12 4 4"/><path d="m16 12-4 4"/></svg>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 0.5rem; margin: 0.4rem 0;">
+                <span class="status-indicator ${catboxHealth.available ? 'status-ok' : 'status-warn'}" id="status-tab-catbox-dot"></span>
+                <div class="metric-value" style="font-size: 1.1rem; font-weight: 800;" id="status-tab-catbox-val">
+                  ${catboxHealth.available ? `Tersedia (${catboxHealth.latencyMs}ms)` : 'Tidak Tersedia'}
+                </div>
+              </div>
+              <div class="metric-sub" id="status-tab-catbox-sub">
+                ${catboxHealth.available ? 'Endpoint https://catbox.moe/user/api.php beroperasi normal' : 'Penyedia Catbox tidak dapat dijangkau'}
+              </div>
+            </div>
+
+            <!-- Server Uptime -->
+            <div class="metric-card" id="status-card-uptime">
+              <div class="metric-header">
+                <span class="metric-label">Waktu Aktif Server</span>
+                <div class="metric-icon" style="background: rgba(168, 85, 247, 0.15); color: #a855f7;">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 0.5rem; margin: 0.4rem 0;">
+                <span class="status-indicator status-ok"></span>
+                <div class="metric-value" style="font-size: 1.1rem; font-weight: 800;" id="status-tab-uptime-val">${escapeHtml(uptimeFormatted)}</div>
+              </div>
+              <div class="metric-sub">
+                Container runtime Node.js stabil &amp; beroperasi normal
+              </div>
+            </div>
+
+            <!-- Kerahasiaan & Keamanan Indeks -->
+            <div class="metric-card" id="status-card-privacy">
+              <div class="metric-header">
+                <span class="metric-label">Kerahasiaan &amp; Indeks</span>
+                <div class="metric-icon" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b;">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 0.5rem; margin: 0.4rem 0;">
+                <span class="status-indicator status-ok"></span>
+                <div class="metric-value" style="font-size: 1.1rem; font-weight: 800;">No-Index / No-Follow Active</div>
+              </div>
+              <div class="metric-sub">
+                Header proteksi X-Robots-Tag &amp; Cache-Control aktif
+              </div>
+            </div>
+          </section>
+
+          <!-- Detail Spesifikasi Infrastruktur & Diagnostik Panel -->
+          <div class="section-grid" style="margin-bottom: 1.5rem;">
+            <!-- Spesifikasi Runtime & Server -->
+            <section class="panel">
+              <div class="panel-header">
+                <h2 class="panel-title">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="M15 9h6"/><path d="M15 15h6"/></svg>
+                  Diagnostik Runtime &amp; Server
+                </h2>
+                <span class="panel-badge">Spesifikasi Lingkungan</span>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.5rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.9rem; background: var(--surface-secondary); border-radius: 0.75rem; border: 1px solid var(--border-subtle); font-size: 0.825rem;">
+                  <span style="color: var(--muted); font-weight: 600;">Node Environment</span>
+                  <span style="font-weight: 700; font-family: var(--font-mono); color: var(--accent);">${escapeHtml(process.env.NODE_ENV || 'production')}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.9rem; background: var(--surface-secondary); border-radius: 0.75rem; border: 1px solid var(--border-subtle); font-size: 0.825rem;">
+                  <span style="color: var(--muted); font-weight: 600;">Zona Waktu Server</span>
+                  <span style="font-weight: 700;">Asia/Jakarta (WIB, UTC+7)</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.9rem; background: var(--surface-secondary); border-radius: 0.75rem; border: 1px solid var(--border-subtle); font-size: 0.825rem;">
+                  <span style="color: var(--muted); font-weight: 600;">Waktu Server Saat Ini</span>
+                  <span style="font-weight: 700; font-family: var(--font-mono);" id="status-tab-server-time">${escapeHtml(initialDate.toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }))} WIB</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.9rem; background: var(--surface-secondary); border-radius: 0.75rem; border: 1px solid var(--border-subtle); font-size: 0.825rem;">
+                  <span style="color: var(--muted); font-weight: 600;">Header Robots Bot</span>
+                  <span style="font-weight: 700; font-family: var(--font-mono); color: #10b981;">noindex, nofollow, noarchive</span>
+                </div>
+              </div>
+            </section>
+
+            <!-- Status Layanan Eksternal & Integrasi -->
+            <section class="panel">
+              <div class="panel-header">
+                <h2 class="panel-title">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                  Integrasi &amp; Layanan Eksternal
+                </h2>
+                <span class="panel-badge">Konektivitas Hulu</span>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.5rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.9rem; background: var(--surface-secondary); border-radius: 0.75rem; border: 1px solid var(--border-subtle); font-size: 0.825rem;">
+                  <span style="color: var(--muted); font-weight: 600;">Upstream Storage Provider</span>
+                  <span style="font-weight: 700; color: #10b981;">Catbox.moe (API HTTPS)</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.9rem; background: var(--surface-secondary); border-radius: 0.75rem; border: 1px solid var(--border-subtle); font-size: 0.825rem;">
+                  <span style="color: var(--muted); font-weight: 600;">Redis REST Provider</span>
+                  <span style="font-weight: 700;">${isUpstashConfigured() ? '<span style="color: #10b981;">Upstash Cloud REST (SSL)</span>' : '<span style="color: #f59e0b;">Memory Engine (Lokal)</span>'}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.9rem; background: var(--surface-secondary); border-radius: 0.75rem; border: 1px solid var(--border-subtle); font-size: 0.825rem;">
+                  <span style="color: var(--muted); font-weight: 600;">AI Engine Model</span>
+                  <span style="font-weight: 700; font-family: var(--font-mono); color: var(--accent);">${escapeHtml(GEMINI_MODEL_NAME)}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.9rem; background: var(--surface-secondary); border-radius: 0.75rem; border: 1px solid var(--border-subtle); font-size: 0.825rem;">
+                  <span style="color: var(--muted); font-weight: 600;">Keamanan Sesi &amp; Cookie</span>
+                  <span style="font-weight: 700; color: #10b981;">HttpOnly, SameSite=Lax, Secure</span>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <!-- 4. Kategori: Kontrol Sistem -->
         <div class="category-panel" id="panel-kontrol" data-category-panel="kontrol" role="tabpanel" aria-labelledby="sidebar-btn-kontrol">
           <!-- Kontrol Operasional & Konfigurasi Dinamis (Kill Switch & Dynamic Config) -->
           ${renderOperationalControlsHtml(systemConfig)}
@@ -2357,25 +2532,15 @@ export const adminController = {
       </main>
     </div>
 
-    <!-- System Health Status Bar -->
-    <footer class="health-bar">
-      <div class="health-item" id="health-storage">
-        <span class="status-indicator ${redisConnected || !isUpstashConfigured() ? 'status-ok' : 'status-warn'}"></span>
-        <span>Storage Backend: <strong>${escapeHtml(storageMode)}</strong></span>
+    <!-- Clean Minimalist Footer -->
+    <footer class="admin-clean-footer">
+      <div class="footer-left">
+        <span>AirShare Pro Administration</span>
+        <span class="footer-dot">&bull;</span>
+        <span class="footer-desc">Status &amp; Kesehatan Infrastruktur lengkap tersedia di tab <a href="#status" onclick="switchCategory('status'); return false;" class="footer-tab-link">Status Sistem</a></span>
       </div>
-      <div class="health-item" id="health-catbox">
-        <span class="status-indicator ${catboxHealth.available ? 'status-ok' : 'status-warn'}"></span>
-        <span>Catbox Upstream: <strong>${
-          catboxHealth.available
-            ? `Tersedia (${catboxHealth.latencyMs}ms)`
-            : 'Tidak Tersedia — Periksa Status Catbox'
-        }</strong></span>
-      </div>
-      <div class="health-item">
-        <span>Server Uptime: <strong>${escapeHtml(uptimeFormatted)}</strong></span>
-      </div>
-      <div class="health-item">
-        <span>Kerahasiaan: <strong>No-Index / No-Follow Active</strong></span>
+      <div class="footer-right">
+        <span>Sesi Aman Aktif</span>
       </div>
     </footer>
   </div>
@@ -2596,7 +2761,7 @@ export const adminController = {
       }
 
       // 0. Category Switching & High-Performance Touch Navigation Handler
-      const VALID_CATEGORIES = ['ringkasan', 'analitik', 'kontrol', 'keamanan', 'data', 'terhapus'];
+      const VALID_CATEGORIES = ['ringkasan', 'analitik', 'status', 'kontrol', 'keamanan', 'data', 'terhapus'];
 
       function switchCategory(catName, shouldUpdateHash) {
         if (!catName) return;
@@ -3351,21 +3516,47 @@ export const adminController = {
             elTotalStored.textContent = 'Total Tersimpan: ' + Number(json.totalItemsInRepo).toLocaleString('id-ID') + ' item (' + monitoredCount + ' termonitor)';
           }
 
-          // Update footer health status
-          const elCatbox = document.getElementById('health-catbox');
-          if (elCatbox && json.catbox) {
-            if (json.catbox.available) {
-              elCatbox.innerHTML = '<span class="status-indicator status-ok"></span><span>Catbox Upstream: <strong>Tersedia (' + (json.catbox.latencyMs || 0) + 'ms)</strong></span>';
-            } else {
-              elCatbox.innerHTML = '<span class="status-indicator status-warn"></span><span>Catbox Upstream: <strong style="color: #f87171;">Tidak Tersedia — Periksa Status Catbox</strong></span>';
+          // Update Status tab health status
+          const elTabCatboxVal = document.getElementById('status-tab-catbox-val');
+          const elTabCatboxDot = document.getElementById('status-tab-catbox-dot');
+          const elTabCatboxSub = document.getElementById('status-tab-catbox-sub');
+          if (json.catbox) {
+            if (elTabCatboxVal) {
+              elTabCatboxVal.textContent = json.catbox.available ? 'Tersedia (' + (json.catbox.latencyMs || 0) + 'ms)' : 'Tidak Tersedia';
+            }
+            if (elTabCatboxDot) {
+              elTabCatboxDot.className = 'status-indicator ' + (json.catbox.available ? 'status-ok' : 'status-warn');
+            }
+            if (elTabCatboxSub) {
+              elTabCatboxSub.textContent = json.catbox.available ? 'Endpoint https://catbox.moe/user/api.php beroperasi normal' : 'Penyedia Catbox tidak dapat dijangkau';
             }
           }
 
-          const elStorage = document.getElementById('health-storage');
-          if (elStorage && json.redis) {
+          const elTabStorageVal = document.getElementById('status-tab-storage-val');
+          const elTabStorageDot = document.getElementById('status-tab-storage-dot');
+          const elTabStorageSub = document.getElementById('status-tab-storage-sub');
+          if (json.redis) {
             const isOk = json.redis.connected || (!json.redis.configured);
-            const dotClass = isOk ? 'status-ok' : 'status-warn';
-            elStorage.innerHTML = '<span class="status-indicator ' + dotClass + '"></span><span>Storage Backend: <strong>' + (json.redis.mode || 'In-Memory (Fallback)') + '</strong></span>';
+            if (elTabStorageVal) {
+              elTabStorageVal.textContent = json.redis.mode || 'In-Memory (Fallback)';
+            }
+            if (elTabStorageDot) {
+              elTabStorageDot.className = 'status-indicator ' + (isOk ? 'status-ok' : 'status-warn');
+            }
+            if (elTabStorageSub) {
+              elTabStorageSub.textContent = json.redis.connected ? 'Koneksi aktif ke cluster Upstash Redis' : (!json.redis.configured ? 'Penyimpanan lokal RAM in-memory aktif' : 'Gangguan koneksi - fallback in-memory');
+            }
+          }
+
+          const elTabUptimeVal = document.getElementById('status-tab-uptime-val');
+          if (elTabUptimeVal && json.uptimeFormatted) {
+            elTabUptimeVal.textContent = json.uptimeFormatted;
+          }
+
+          const elTabServerTime = document.getElementById('status-tab-server-time');
+          if (elTabServerTime) {
+            const d = new Date();
+            elTabServerTime.textContent = d.toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }) + ' WIB';
           }
 
           // Update sync badge to success
@@ -3459,6 +3650,9 @@ export const adminController = {
         ? (redisHealth.connected ? 'Upstash Redis (Terdistribusi)' : 'Upstash Redis (Terputus / Gangguan)')
         : 'In-Memory (Fallback)';
 
+      const uptimeSecs = Math.floor(process.uptime());
+      const uptimeFormatted = `${Math.floor(uptimeSecs / 3600)}j ${Math.floor((uptimeSecs % 3600) / 60)}m ${uptimeSecs % 60}d`;
+
       res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       res.setHeader('Pragma', 'no-cache');
@@ -3468,6 +3662,7 @@ export const adminController = {
         timestamp: new Date().toISOString(),
         today: todayStats,
         totalItemsInRepo,
+        uptimeFormatted,
         redis: {
           configured: redisHealth.configured,
           connected: redisHealth.connected,
