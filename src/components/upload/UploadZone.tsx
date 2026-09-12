@@ -1,11 +1,13 @@
 import React, { useRef, useState } from 'react';
-import { PlusCircle, UploadCloud, Image, Video, Music, FileText, WifiOff } from 'lucide-react';
+import { PlusCircle, UploadCloud, Image, Video, Music, FileText, WifiOff, AlertTriangle, ShieldAlert } from 'lucide-react';
+import { MaintenanceLevel } from '../../types';
 
 interface UploadZoneProps {
   onFileSelected: (file: File) => void;
   onRequestActionSheet: () => void;
   disabled?: boolean;
   isOnline?: boolean;
+  maintenanceLevel?: MaintenanceLevel;
 }
 
 export const UploadZone: React.FC<UploadZoneProps> = ({
@@ -13,12 +15,14 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
   onRequestActionSheet,
   disabled = false,
   isOnline = true,
+  maintenanceLevel = 'off',
 }) => {
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounter = useRef(0);
   const genericInputRef = useRef<HTMLInputElement>(null);
 
-  const effectiveDisabled = disabled || !isOnline;
+  const isUnderMaintenance = maintenanceLevel !== 'off';
+  const effectiveDisabled = disabled || !isOnline || isUnderMaintenance;
 
   const handleDragEnter = (e: React.DragEvent) => {
     e.preventDefault();
@@ -124,11 +128,27 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
         <div
           className="p-4 sm:p-4.5 rounded-2xl mb-4 transition-transform duration-200 group-hover:scale-105 flex items-center justify-center border pointer-events-none"
           style={{
-            backgroundColor: !isOnline ? 'var(--surface-primary)' : 'var(--accent-soft)',
-            borderColor: 'var(--border-subtle)',
+            backgroundColor:
+              maintenanceLevel === 'full_lockdown'
+                ? 'rgba(239, 68, 68, 0.12)'
+                : maintenanceLevel === 'upload_only'
+                ? 'rgba(245, 158, 11, 0.12)'
+                : !isOnline
+                ? 'var(--surface-primary)'
+                : 'var(--accent-soft)',
+            borderColor:
+              maintenanceLevel === 'full_lockdown'
+                ? 'rgba(239, 68, 68, 0.25)'
+                : maintenanceLevel === 'upload_only'
+                ? 'rgba(245, 158, 11, 0.25)'
+                : 'var(--border-subtle)',
           }}
         >
-          {!isOnline ? (
+          {maintenanceLevel === 'full_lockdown' ? (
+            <ShieldAlert className="w-7 h-7 sm:w-8 sm:h-8 text-rose-500 animate-pulse" />
+          ) : maintenanceLevel === 'upload_only' ? (
+            <AlertTriangle className="w-7 h-7 sm:w-8 sm:h-8 text-amber-500" />
+          ) : !isOnline ? (
             <WifiOff className="w-7 h-7 sm:w-8 sm:h-8 text-amber-500 opacity-80" />
           ) : isDragOver ? (
             <UploadCloud className="w-7 h-7 sm:w-8 sm:h-8" style={{ color: 'var(--accent)' }} />
@@ -138,7 +158,11 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
         </div>
 
         <h3 className="font-extrabold text-base sm:text-lg text-center tracking-tight pointer-events-none" style={{ color: 'var(--text-main)' }}>
-          {!isOnline
+          {maintenanceLevel === 'full_lockdown'
+            ? 'Situs Sedang Lockdown Total'
+            : maintenanceLevel === 'upload_only'
+            ? 'Layanan Unggah Ditutup Sementara'
+            : !isOnline
             ? 'Mode Offline Aktif'
             : isDragOver
             ? 'Lepaskan berkas di sini'
@@ -146,7 +170,11 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
         </h3>
 
         <p className="text-xs sm:text-sm mt-1.5 text-center font-medium max-w-xs sm:max-w-sm pointer-events-none" style={{ color: 'var(--text-muted)' }}>
-          {!isOnline
+          {maintenanceLevel === 'full_lockdown'
+            ? 'Seluruh akses unggah berkas ditutup untuk pemeliharaan sistem menyeluruh.'
+            : maintenanceLevel === 'upload_only'
+            ? 'Fungsi unggah sedang dalam pemeliharaan. Unduhan dan tautan berkas tetap dapat diakses.'
+            : !isOnline
             ? 'Fitur unggah dinonaktifkan sementara. Hubungkan perangkat ke internet untuk melanjutkan.'
             : isDragOver
             ? 'Berkas siap diproses dan dikirim'

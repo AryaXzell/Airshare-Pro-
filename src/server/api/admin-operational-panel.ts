@@ -530,29 +530,37 @@ export function getOperationalPanelStyles(): string {
       }
     }
     .btn-maint-enable {
-      background: rgba(239, 68, 68, 0.2);
-      color: #f87171;
-      border: 1px solid rgba(239, 68, 68, 0.4);
+      background: rgba(239, 68, 68, 0.15);
+      color: #dc2626;
+      border: 1px solid rgba(239, 68, 68, 0.35);
       padding: 0.45rem 1rem;
       border-radius: 6px;
       font-size: 0.825rem;
       font-weight: 700;
       cursor: pointer;
       transition: all 0.2s;
+    }
+    .theme-spacegray .btn-maint-enable, .theme-purple .btn-maint-enable, .theme-pacific .btn-maint-enable {
+      color: #f87171;
+      background: rgba(239, 68, 68, 0.2);
     }
     .btn-maint-enable:hover {
       background: rgba(239, 68, 68, 0.35);
     }
     .btn-maint-disable {
-      background: rgba(16, 185, 129, 0.2);
-      color: #34d399;
-      border: 1px solid rgba(16, 185, 129, 0.4);
+      background: rgba(16, 185, 129, 0.15);
+      color: #059669;
+      border: 1px solid rgba(16, 185, 129, 0.35);
       padding: 0.45rem 1rem;
       border-radius: 6px;
       font-size: 0.825rem;
       font-weight: 700;
       cursor: pointer;
       transition: all 0.2s;
+    }
+    .theme-spacegray .btn-maint-disable, .theme-purple .btn-maint-disable, .theme-pacific .btn-maint-disable {
+      color: #34d399;
+      background: rgba(16, 185, 129, 0.2);
     }
     .btn-maint-disable:hover {
       background: rgba(16, 185, 129, 0.35);
@@ -573,7 +581,7 @@ export function getOperationalPanelStyles(): string {
     }
     .btn-danger-subtle {
       background: rgba(239, 68, 68, 0.12);
-      color: #f87171;
+      color: #dc2626;
       border: 1px solid rgba(239, 68, 68, 0.3);
       padding: 0.5rem 1rem;
       border-radius: 6px;
@@ -581,6 +589,9 @@ export function getOperationalPanelStyles(): string {
       font-weight: 700;
       cursor: pointer;
       transition: all 0.2s;
+    }
+    .theme-spacegray .btn-danger-subtle, .theme-purple .btn-danger-subtle, .theme-pacific .btn-danger-subtle {
+      color: #f87171;
     }
     .btn-danger-subtle:hover {
       background: rgba(239, 68, 68, 0.25);
@@ -1030,17 +1041,32 @@ export function getOperationalPanelScripts(panelPath: string): string {
         });
       }
 
-      // Native Alert & Confirm Fallbacks
+      // Custom iOS-Style Alert & Confirmation Modal Handlers
       async function alertIos(title, message, type) {
-        if (window.showIosAdminAlert) {
+        if (typeof window.showIosAlert === 'function') {
+          return await window.showIosAlert({
+            title: title,
+            message: message,
+            icon: type || 'info',
+            buttonText: 'Mengerti'
+          });
+        } else if (typeof window.showIosAdminAlert === 'function') {
           return await window.showIosAdminAlert(title, message, type);
         } else {
-          alert(title + '\\n\\n' + message);
+          alert((title ? title + '\\n\\n' : '') + (message || ''));
         }
       }
 
       async function confirmIos(title, message, isDestructive, confirmLabel) {
-        if (window.showIosAdminConfirm) {
+        if (typeof window.showIosConfirm === 'function') {
+          return await window.showIosConfirm({
+            title: title,
+            message: message,
+            isDestructive: isDestructive !== false,
+            confirmText: confirmLabel || 'Konfirmasi',
+            cancelText: 'Batal'
+          });
+        } else if (typeof window.showIosAdminConfirm === 'function') {
           return await new Promise(function(resolve) {
             window.showIosAdminConfirm({
               title: title,
@@ -1053,7 +1079,7 @@ export function getOperationalPanelScripts(panelPath: string): string {
             });
           });
         } else {
-          return confirm(title + '\\n\\n' + message);
+          return confirm((title ? title + '\\n\\n' : '') + (message || ''));
         }
       }
 

@@ -154,13 +154,18 @@ export const statusController = {
       res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=30');
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
 
+      const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+      const host = req.get('host') || 'airshare-pro.vercel.app';
+      const siteRootUrl = `${protocol}://${host}/`;
+      const canonicalUrl = `${protocol}://${host}/status`;
+
       const data = await getSystemStatusData();
       const currentLevel = data.maintenanceLevel;
       const overallStatus = data.status;
 
       let bannerBg = 'rgba(16, 185, 129, 0.1)';
       let bannerBorder = 'rgba(16, 185, 129, 0.25)';
-      let bannerColor = '#34d399';
+      let bannerColor = 'var(--status-operational)';
       let bannerDotClass = 'dot-operational';
       let bannerHeadline = 'Semua Sistem Beroperasi Normal';
       let bannerSubtitle = 'Seluruh layanan unggah, unduh, dan penyimpanan berjalan optimal.';
@@ -168,14 +173,14 @@ export const statusController = {
       if (overallStatus === 'major_outage' || currentLevel === 'full_lockdown') {
         bannerBg = 'rgba(239, 68, 68, 0.12)';
         bannerBorder = 'rgba(239, 68, 68, 0.35)';
-        bannerColor = '#f87171';
+        bannerColor = 'var(--status-outage)';
         bannerDotClass = 'dot-outage';
         bannerHeadline = 'Lockdown Total — Layanan Ditutup Sementara';
         bannerSubtitle = 'Seluruh akses unggah dan berbagi publik ditutup sementara untuk perbaikan mendesak.';
       } else if (overallStatus === 'degraded' || currentLevel === 'upload_only') {
         bannerBg = 'rgba(245, 158, 11, 0.12)';
         bannerBorder = 'rgba(245, 158, 11, 0.35)';
-        bannerColor = '#fbbf24';
+        bannerColor = 'var(--status-degraded)';
         bannerDotClass = 'dot-degraded';
         bannerHeadline =
           currentLevel === 'upload_only'
@@ -230,11 +235,57 @@ export const statusController = {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>AirShare Pro — System Status</title>
-  <meta name="description" content="Status operasional real-time layanan AirShare Pro, uptime penyimpanan Catbox, dan database.">
-  <meta property="og:title" content="AirShare Pro — System Status">
-  <meta property="og:description" content="Status operasional real-time layanan AirShare Pro, uptime penyimpanan Catbox, dan database.">
+  <title>AirShare Pro — Status Layanan &amp; Kinerja Sistem Real-Time</title>
+  <meta name="description" content="Pantau status operasional real-time layanan AirShare Pro, ketersediaan penyimpanan cloud Catbox, database Redis, uptime server, dan performa jaringan.">
+  <meta name="keywords" content="airshare pro status, system status, uptime airshare pro, status server, catbox status, redis status, pemantauan sistem, latency">
+  <meta name="author" content="AirShare Pro Team">
+  <meta name="application-name" content="AirShare Pro">
+  <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+  <link rel="canonical" href="${canonicalUrl}">
+
+  <!-- Open Graph / Facebook -->
   <meta property="og:type" content="website">
+  <meta property="og:url" content="${canonicalUrl}">
+  <meta property="og:title" content="AirShare Pro — Status Layanan &amp; Kinerja Sistem Real-Time">
+  <meta property="og:description" content="Pantau status operasional real-time layanan AirShare Pro, ketersediaan penyimpanan cloud Catbox, database Redis, uptime server, dan performa jaringan.">
+  <meta property="og:site_name" content="AirShare Pro">
+  <meta property="og:locale" content="id_ID">
+  <meta property="og:image" content="${siteRootUrl}vite.svg">
+
+  <!-- Twitter Meta Tags -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:url" content="${canonicalUrl}">
+  <meta name="twitter:title" content="AirShare Pro — Status Layanan &amp; Kinerja Sistem Real-Time">
+  <meta name="twitter:description" content="Pantau status operasional real-time layanan AirShare Pro, ketersediaan penyimpanan cloud Catbox, database Redis, uptime server, dan performa jaringan.">
+  <meta name="twitter:image" content="${siteRootUrl}vite.svg">
+
+  <!-- JSON-LD Structured Data for Search Engines -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "name": "Status Layanan & Kinerja Sistem AirShare Pro",
+    "description": "Pantau status operasional real-time layanan AirShare Pro, uptime penyimpanan Catbox, dan database.",
+    "url": "${canonicalUrl}",
+    "inLanguage": "id-ID",
+    "isPartOf": {
+      "@type": "WebSite",
+      "name": "AirShare Pro",
+      "url": "${siteRootUrl}"
+    },
+    "about": {
+      "@type": "Service",
+      "name": "AirShare Pro Media Cloud Sharing",
+      "serviceType": "Cloud File Sharing and Media Streaming Platform",
+      "provider": {
+        "@type": "Organization",
+        "name": "AirShare Pro",
+        "url": "${siteRootUrl}"
+      }
+    }
+  }
+  </script>
+
   <link rel="icon" type="image/svg+xml" href="/vite.svg">
   ${GOOGLE_FONTS_TAGS}
   ${THEME_HEAD_SCRIPT}
@@ -251,11 +302,23 @@ export const statusController = {
       --primary: var(--accent);
       --primary-hover: var(--accent-hover);
       --green: #10b981;
-      --green-light: #34d399;
+      --green-light: #059669;
       --yellow: #f59e0b;
-      --yellow-light: #fbbf24;
+      --yellow-light: #d97706;
       --red: #ef4444;
+      --red-light: #dc2626;
+      --status-operational: #059669;
+      --status-degraded: #d97706;
+      --status-outage: #dc2626;
+    }
+
+    .theme-spacegray, .theme-purple, .theme-pacific {
+      --green-light: #34d399;
+      --yellow-light: #fbbf24;
       --red-light: #f87171;
+      --status-operational: #34d399;
+      --status-degraded: #fbbf24;
+      --status-outage: #f87171;
     }
 
     * {
@@ -429,19 +492,29 @@ export const statusController = {
       display: flex;
       gap: 1rem;
       align-items: flex-start;
-      color: #7dd3fc;
+      color: #0284c7;
     }
 
     .announcement-card.type-warning {
       background: rgba(245, 158, 11, 0.08);
       border-color: rgba(245, 158, 11, 0.25);
-      color: #fde047;
+      color: #b45309;
     }
 
     .announcement-card.type-success {
       background: rgba(16, 185, 129, 0.08);
       border-color: rgba(16, 185, 129, 0.25);
-      color: #6ee7b7;
+      color: #047857;
+    }
+
+    .theme-spacegray .announcement-card, .theme-purple .announcement-card, .theme-pacific .announcement-card {
+      color: #38bdf8;
+    }
+    .theme-spacegray .announcement-card.type-warning, .theme-purple .announcement-card.type-warning, .theme-pacific .announcement-card.type-warning {
+      color: #fbbf24;
+    }
+    .theme-spacegray .announcement-card.type-success, .theme-purple .announcement-card.type-success, .theme-pacific .announcement-card.type-success {
+      color: #34d399;
     }
 
     .ann-icon {
@@ -701,117 +774,125 @@ export const statusController = {
       </div>
     </header>
 
-    <!-- Overall Status Hero -->
-    <div class="status-hero">
-      <div class="hero-dot ${bannerDotClass}"></div>
-      <div>
-        <div class="hero-headline">${bannerHeadline}</div>
-        <div class="hero-sub">${bannerSubtitle}</div>
-      </div>
-    </div>
-
-    <!-- Active Announcement (if any) -->
-    ${announcementHtml}
-
-    <!-- Services Section -->
-    <div class="section-header">
-      <div class="section-title">Status Layanan &amp; Infrastruktur</div>
-      <div class="refresh-info">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-        <span>Pemeriksaan terakhir: <strong>${formattedCheckedTime}</strong></span>
-      </div>
-    </div>
-
-    <div class="services-grid">
-      <!-- Upload Service -->
-      <div class="service-row">
-        <div class="service-info">
-          <div class="service-name">${escapeHtml(data.services.upload.label)}</div>
-          <div class="service-desc">${escapeHtml(data.services.upload.message || '')}</div>
-        </div>
-        ${renderServiceBadge(data.services.upload.status)}
-      </div>
-
-      <!-- Download & Share Service -->
-      <div class="service-row">
-        <div class="service-info">
-          <div class="service-name">${escapeHtml(data.services.download.label)}</div>
-          <div class="service-desc">${escapeHtml(data.services.download.message || '')}</div>
-        </div>
-        ${renderServiceBadge(data.services.download.status)}
-      </div>
-
-      <!-- Storage (Catbox) -->
-      <div class="service-row">
-        <div class="service-info">
-          <div class="service-name">${escapeHtml(data.services.storage.label)}</div>
-          <div class="service-desc">${escapeHtml(data.services.storage.message || '')}</div>
-        </div>
-        ${renderServiceBadge(data.services.storage.status)}
-      </div>
-
-      <!-- Database (Redis) -->
-      <div class="service-row">
-        <div class="service-info">
-          <div class="service-name">${escapeHtml(data.services.database.label)}</div>
-          <div class="service-desc">${escapeHtml(data.services.database.message || '')}</div>
-        </div>
-        ${renderServiceBadge(data.services.database.status)}
-      </div>
-    </div>
-
-    <!-- Metrics Section -->
-    <div class="section-header">
-      <div class="section-title">Metrik Keandalan Sistem</div>
-    </div>
-
-    <div class="metrics-grid">
-      <div class="metric-card">
-        <div class="metric-label">Uptime Layanan (30 Hari)</div>
-        <div class="metric-val" style="color: var(--green-light);">${data.uptime.status}</div>
-        <div class="metric-sub">Ketersediaan sistem tingkat tinggi</div>
-      </div>
-
-      <div class="metric-card">
-        <div class="metric-label">Latensi Penyimpanan</div>
-        <div class="metric-val">${data.services.storage.latencyMs !== undefined ? data.services.storage.latencyMs + ' ms' : 'N/A'}</div>
-        <div class="metric-sub">Kecepatan respons upstream</div>
-      </div>
-
-      <div class="metric-card">
-        <div class="metric-label">Latensi Database</div>
-        <div class="metric-val">${data.services.database.latencyMs !== undefined ? data.services.database.latencyMs + ' ms' : 'In-Memory'}</div>
-        <div class="metric-sub">Cache &amp; metadata real-time</div>
-      </div>
-    </div>
-
-    <!-- Past 24h Incident Report -->
-    <div class="section-header">
-      <div class="section-title">Riwayat Insiden (24 Jam Terakhir)</div>
-    </div>
-
-    <div class="incidents-card">
-      <div class="incident-entry">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--green); flex-shrink: 0; margin-top: 1px;">
-          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-          <polyline points="22 4 12 14.01 9 11.01"></polyline>
-        </svg>
+    <main id="main-content">
+      <!-- Overall Status Hero -->
+      <section class="status-hero" aria-label="Status Ringkasan Sistem">
+        <div class="hero-dot ${bannerDotClass}"></div>
         <div>
-          <div style="font-weight: 600; color: var(--fg); margin-bottom: 0.15rem;">
-            ${
-              overallStatus === 'operational'
-                ? 'Tidak ada insiden atau gangguan yang dilaporkan.'
-                : overallStatus === 'major_outage'
-                ? 'Sedang berlangsung: Lockdown total untuk pemeliharaan sistem.'
-                : 'Sedang berlangsung: Penyesuaian mode operasional sistem.'
-            }
-          </div>
-          <div style="font-size: 0.775rem; color: var(--subtle);">
-            Semua metrik dan pemeriksaan kesehatan dipantau secara otomatis setiap 30 detik.
+          <h1 class="hero-headline">${bannerHeadline}</h1>
+          <div class="hero-sub">${bannerSubtitle}</div>
+        </div>
+      </section>
+
+      <!-- Active Announcement (if any) -->
+      ${announcementHtml}
+
+      <!-- Services Section -->
+      <section aria-label="Status Layanan dan Infrastruktur">
+        <div class="section-header">
+          <h2 class="section-title">Status Layanan &amp; Infrastruktur</h2>
+          <div class="refresh-info">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            <span>Pemeriksaan terakhir: <strong>${formattedCheckedTime}</strong></span>
           </div>
         </div>
-      </div>
-    </div>
+
+        <div class="services-grid">
+          <!-- Upload Service -->
+          <div class="service-row">
+            <div class="service-info">
+              <div class="service-name">${escapeHtml(data.services.upload.label)}</div>
+              <div class="service-desc">${escapeHtml(data.services.upload.message || '')}</div>
+            </div>
+            ${renderServiceBadge(data.services.upload.status)}
+          </div>
+
+          <!-- Download & Share Service -->
+          <div class="service-row">
+            <div class="service-info">
+              <div class="service-name">${escapeHtml(data.services.download.label)}</div>
+              <div class="service-desc">${escapeHtml(data.services.download.message || '')}</div>
+            </div>
+            ${renderServiceBadge(data.services.download.status)}
+          </div>
+
+          <!-- Storage (Catbox) -->
+          <div class="service-row">
+            <div class="service-info">
+              <div class="service-name">${escapeHtml(data.services.storage.label)}</div>
+              <div class="service-desc">${escapeHtml(data.services.storage.message || '')}</div>
+            </div>
+            ${renderServiceBadge(data.services.storage.status)}
+          </div>
+
+          <!-- Database (Redis) -->
+          <div class="service-row">
+            <div class="service-info">
+              <div class="service-name">${escapeHtml(data.services.database.label)}</div>
+              <div class="service-desc">${escapeHtml(data.services.database.message || '')}</div>
+            </div>
+            ${renderServiceBadge(data.services.database.status)}
+          </div>
+        </div>
+      </section>
+
+      <!-- Metrics Section -->
+      <section aria-label="Metrik Keandalan Sistem" style="margin-top: 2rem;">
+        <div class="section-header">
+          <h2 class="section-title">Metrik Keandalan Sistem</h2>
+        </div>
+
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-label">Uptime Layanan (30 Hari)</div>
+            <div class="metric-val" style="color: var(--green-light);">${data.uptime.status}</div>
+            <div class="metric-sub">Ketersediaan sistem tingkat tinggi</div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-label">Latensi Penyimpanan</div>
+            <div class="metric-val">${data.services.storage.latencyMs !== undefined ? data.services.storage.latencyMs + ' ms' : 'N/A'}</div>
+            <div class="metric-sub">Kecepatan respons upstream</div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-label">Latensi Database</div>
+            <div class="metric-val">${data.services.database.latencyMs !== undefined ? data.services.database.latencyMs + ' ms' : 'In-Memory'}</div>
+            <div class="metric-sub">Cache &amp; metadata real-time</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Past 24h Incident Report -->
+      <section aria-label="Riwayat Insiden" style="margin-top: 2rem;">
+        <div class="section-header">
+          <h2 class="section-title">Riwayat Insiden (24 Jam Terakhir)</h2>
+        </div>
+
+        <div class="incidents-card">
+          <div class="incident-entry">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--green); flex-shrink: 0; margin-top: 1px;">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+              <polyline points="22 4 12 14.01 9 11.01"></polyline>
+            </svg>
+            <div>
+              <div style="font-weight: 600; color: var(--fg); margin-bottom: 0.15rem;">
+                ${
+                  overallStatus === 'operational'
+                    ? 'Tidak ada insiden atau gangguan yang dilaporkan.'
+                    : overallStatus === 'major_outage'
+                    ? 'Sedang berlangsung: Lockdown total untuk pemeliharaan sistem.'
+                    : 'Sedang berlangsung: Penyesuaian mode operasional sistem.'
+                }
+              </div>
+              <div style="font-size: 0.775rem; color: var(--subtle);">
+                Semua metrik dan pemeriksaan kesehatan dipantau secara otomatis setiap 30 detik.
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
 
     <!-- Footer -->
     <footer class="footer">

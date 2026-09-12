@@ -61,7 +61,11 @@ import { DailyStats, PublicMediaView, WeeklyTrendItem, DeletedFileRecord } from 
 import { deletedFilesRepository } from '../repository/deleted-files-repository';
 import { getFlagAssetPath } from '../../shared/flags';
 
-const GEMINI_MODEL_NAME = process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash';
+const configuredModel = process.env.GEMINI_MODEL?.trim();
+// Default to gemini-2.5-flash for stability and high responsiveness
+const GEMINI_MODEL_NAME = (!configuredModel || configuredModel === 'gemini-3.8-flash' || configuredModel.toLowerCase().includes('3.8'))
+  ? 'gemini-2.5-flash'
+  : configuredModel;
 
 const storageProvider = new CatboxStorageProvider();
 
@@ -947,7 +951,7 @@ export const adminController = {
     }
     .metric-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
     .metric-label { font-size: 0.8rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
-    .metric-icon { width: 32px; height: 32px; border-radius: 0.6rem; display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.05); color: var(--accent); }
+    .metric-icon { width: 32px; height: 32px; border-radius: 0.6rem; display: flex; align-items: center; justify-content: center; background: var(--surface-secondary); border: 1px solid var(--border-subtle); color: var(--accent); }
     .metric-value { font-size: 1.85rem; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 0.25rem; }
     .metric-sub { font-size: 0.75rem; color: var(--muted); }
 
@@ -988,24 +992,33 @@ export const adminController = {
     /* Distribution Progress */
     .dist-item { margin-bottom: 1rem; }
     .dist-header { display: flex; justify-content: space-between; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.35rem; }
-    .dist-bar-track { width: 100%; height: 8px; background: rgba(255, 255, 255, 0.06); border-radius: 9999px; overflow: hidden; }
+    .dist-bar-track { width: 100%; height: 8px; background: var(--surface-secondary); border: 1px solid var(--border-subtle); border-radius: 9999px; overflow: hidden; }
     .dist-bar-fill { height: 100%; border-radius: 9999px; }
 
     /* Country List */
-    .country-row { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid rgba(255, 255, 255, 0.04); font-size: 0.85rem; }
+    .country-row { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border-subtle); font-size: 0.85rem; }
     .country-info { display: flex; align-items: center; gap: 0.6rem; }
     .country-flag { width: 20px; height: 14px; object-fit: cover; border-radius: 2px; }
 
     /* Gemini AI Recommendations & Real-Time Summary Box */
     .ai-rec-box {
-      background: linear-gradient(180deg, rgba(37, 99, 235, 0.1) 0%, rgba(30, 58, 138, 0.04) 100%);
-      border: 1px solid rgba(59, 130, 246, 0.28);
+      background: var(--card);
+      border: 1px solid var(--border);
       border-radius: 1.25rem;
       padding: 1.35rem 1.5rem;
       margin-bottom: 1.5rem;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 0 15px rgba(59, 130, 246, 0.08);
+      box-shadow: var(--shadow-subtle);
       position: relative;
       overflow: hidden;
+    }
+    .ai-rec-box::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899);
     }
     .ai-rec-header {
       display: flex;
@@ -1015,7 +1028,7 @@ export const adminController = {
       gap: 0.75rem;
       margin-bottom: 1rem;
       padding-bottom: 0.75rem;
-      border-bottom: 1px solid rgba(59, 130, 246, 0.15);
+      border-bottom: 1px solid var(--border-subtle);
     }
     .ai-rec-title-group {
       display: flex;
@@ -1031,13 +1044,13 @@ export const adminController = {
       align-items: center;
       justify-content: center;
       color: #ffffff;
-      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.35);
       flex-shrink: 0;
     }
     .ai-rec-title {
       font-size: 0.975rem;
       font-weight: 800;
-      color: #e0f2fe;
+      color: var(--text-main);
       display: flex;
       align-items: center;
       gap: 0.5rem;
@@ -1053,10 +1066,10 @@ export const adminController = {
       gap: 0.35rem;
       font-size: 0.7rem;
       font-weight: 700;
-      background: rgba(59, 130, 246, 0.15);
-      border: 1px solid rgba(59, 130, 246, 0.35);
-      color: #93c5fd;
-      padding: 0.2rem 0.55rem;
+      background: var(--surface-secondary);
+      border: 1px solid var(--border-subtle);
+      color: var(--accent);
+      padding: 0.25rem 0.65rem;
       border-radius: 9999px;
       letter-spacing: 0.02em;
     }
@@ -1064,8 +1077,8 @@ export const adminController = {
       width: 6px;
       height: 6px;
       border-radius: 50%;
-      background: #60a5fa;
-      box-shadow: 0 0 6px #60a5fa;
+      background: var(--accent);
+      box-shadow: 0 0 6px var(--accent);
       animation: pulseDot 2s infinite ease-in-out;
     }
     @keyframes pulseDot {
@@ -1073,9 +1086,9 @@ export const adminController = {
       50% { opacity: 1; transform: scale(1.2); }
     }
     .btn-ai-refresh {
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      color: #e2e8f0;
+      background: var(--surface-secondary);
+      border: 1px solid var(--border);
+      color: var(--text-main);
       border-radius: 8px;
       padding: 0.35rem 0.75rem;
       font-size: 0.75rem;
@@ -1090,37 +1103,38 @@ export const adminController = {
       user-select: none;
     }
     .btn-ai-refresh:hover {
-      background: rgba(59, 130, 246, 0.2);
-      border-color: rgba(59, 130, 246, 0.4);
-      color: #ffffff;
+      background: var(--surface-hover);
+      border-color: var(--accent);
+      color: var(--accent);
     }
     .btn-ai-refresh:active {
-      transform: scale(0.95);
+      transform: scale(0.96);
     }
     .btn-ai-refresh:disabled {
       opacity: 0.6;
       cursor: not-allowed;
     }
 
-    /* AI Executive Summary Card */
+    /* AI Executive Summary Card — High Contrast Adaptive Styling */
     .ai-summary-card {
-      background: rgba(0, 0, 0, 0.25);
-      border: 1px solid rgba(255, 255, 255, 0.06);
-      border-left: 3px solid #3b82f6;
+      background: var(--surface-secondary);
+      border: 1px solid var(--border-subtle);
+      border-left: 3.5px solid var(--accent);
       border-radius: 10px;
-      padding: 0.95rem 1.15rem;
+      padding: 1rem 1.25rem;
       margin-bottom: 1rem;
-      font-size: 0.85rem;
-      line-height: 1.6;
-      color: #f1f5f9;
+      font-size: 0.875rem;
+      line-height: 1.65;
+      color: var(--text-main);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
     }
     .ai-summary-label {
-      font-size: 0.725rem;
+      font-size: 0.75rem;
       font-weight: 800;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: #60a5fa;
-      margin-bottom: 0.35rem;
+      color: var(--accent);
+      margin-bottom: 0.4rem;
       display: flex;
       align-items: center;
       gap: 0.4rem;
@@ -1140,15 +1154,19 @@ export const adminController = {
       align-items: flex-start;
       gap: 0.65rem;
       font-size: 0.85rem;
-      line-height: 1.55;
-      color: #e2e8f0;
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid rgba(255, 255, 255, 0.04);
-      padding: 0.65rem 0.85rem;
+      line-height: 1.6;
+      color: var(--text-main);
+      background: var(--surface-secondary);
+      border: 1px solid var(--border-subtle);
+      padding: 0.75rem 0.95rem;
       border-radius: 8px;
+      transition: background 0.15s ease;
+    }
+    .ai-list-item:hover {
+      background: var(--surface-hover);
     }
     .ai-bullet {
-      color: #60a5fa;
+      color: var(--accent);
       flex-shrink: 0;
       font-size: 0.85rem;
       margin-top: 0.15rem;
@@ -1157,8 +1175,8 @@ export const adminController = {
       width: 18px;
       height: 18px;
       border-radius: 50%;
-      background: rgba(59, 130, 246, 0.2);
-      color: #93c5fd;
+      background: var(--accent-soft);
+      color: var(--accent);
       font-size: 0.7rem;
       font-weight: 800;
       display: inline-flex;
@@ -1170,29 +1188,32 @@ export const adminController = {
     .ai-item-body {
       flex: 1;
       min-width: 0;
+      color: var(--text-main);
     }
     .ai-bold {
       font-weight: 700;
-      color: #ffffff;
+      color: var(--text-main);
     }
     .ai-italic {
       font-style: italic;
-      color: #93c5fd;
+      color: var(--text-main);
+      opacity: 0.92;
     }
     .ai-code {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 0.75rem;
-      background: rgba(255, 255, 255, 0.08);
-      color: #fde047;
-      padding: 0.15rem 0.4rem;
+      font-family: var(--font-mono);
+      font-size: 0.775rem;
+      font-weight: 600;
+      background: var(--surface-primary);
+      color: var(--accent);
+      padding: 0.15rem 0.45rem;
       border-radius: 4px;
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border-subtle);
     }
     .ai-heading-3 {
       font-size: 0.9rem;
-      font-weight: 700;
-      color: #93c5fd;
-      margin: 0.5rem 0 0.25rem;
+      font-weight: 800;
+      color: var(--text-main);
+      margin: 0.6rem 0 0.3rem;
     }
     .ai-meta-footer {
       display: flex;
@@ -1202,9 +1223,9 @@ export const adminController = {
       gap: 0.5rem;
       margin-top: 0.9rem;
       padding-top: 0.75rem;
-      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      border-top: 1px solid var(--border-subtle);
       font-size: 0.725rem;
-      color: var(--muted);
+      color: var(--text-muted);
     }
 
     /* Custom Loading Skeleton */
@@ -1218,7 +1239,7 @@ export const adminController = {
       align-items: center;
       gap: 0.6rem;
       font-size: 0.8rem;
-      color: #93c5fd;
+      color: var(--text-muted);
       font-weight: 600;
       margin-bottom: 0.25rem;
     }
@@ -1226,12 +1247,12 @@ export const adminController = {
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: #3b82f6;
-      box-shadow: 0 0 8px #3b82f6;
+      background: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
       animation: pulseDot 1.2s infinite ease-in-out;
     }
     .skeleton-shimmer {
-      background: linear-gradient(90deg, rgba(255, 255, 255, 0.03) 25%, rgba(255, 255, 255, 0.09) 50%, rgba(255, 255, 255, 0.03) 75%);
+      background: linear-gradient(90deg, var(--surface-secondary) 25%, var(--surface-hover) 50%, var(--surface-secondary) 75%);
       background-size: 200% 100%;
       animation: shimmer 1.5s infinite linear;
       border-radius: 6px;
@@ -1248,17 +1269,19 @@ export const adminController = {
       height: 74px;
       border-radius: 10px;
       width: 100%;
+      border: 1px solid var(--border-subtle);
     }
     .skeleton-row {
       height: 44px;
       border-radius: 8px;
       width: 100%;
+      border: 1px solid var(--border-subtle);
     }
 
     /* Error Notification Container */
     .ai-error-box {
       display: none;
-      background: rgba(239, 68, 68, 0.1);
+      background: rgba(239, 68, 68, 0.08);
       border: 1px solid rgba(239, 68, 68, 0.28);
       border-radius: 10px;
       padding: 1rem 1.25rem;
@@ -1268,16 +1291,20 @@ export const adminController = {
       display: flex;
       align-items: center;
       gap: 0.5rem;
-      color: #f87171;
+      color: #dc2626;
       font-size: 0.85rem;
       font-weight: 700;
       margin-bottom: 0.4rem;
     }
+    .theme-spacegray .ai-error-header, .theme-purple .ai-error-header, .theme-pacific .ai-error-header {
+      color: #f87171;
+    }
     .ai-error-desc {
       font-size: 0.8rem;
-      color: #fca5a5;
+      color: var(--text-main);
       line-height: 1.5;
       margin-bottom: 0.85rem;
+      opacity: 0.9;
     }
     .ai-error-actions {
       display: flex;
@@ -1286,7 +1313,7 @@ export const adminController = {
       flex-wrap: wrap;
     }
     .btn-ai-retry {
-      background: #ef4444;
+      background: #dc2626;
       color: #ffffff;
       border: none;
       border-radius: 6px;
@@ -1299,10 +1326,13 @@ export const adminController = {
       gap: 0.4rem;
       touch-action: manipulation;
     }
+    .theme-spacegray .btn-ai-retry, .theme-purple .btn-ai-retry, .theme-pacific .btn-ai-retry {
+      background: #ef4444;
+    }
     .btn-ai-fallback {
-      background: rgba(255, 255, 255, 0.06);
-      color: #e2e8f0;
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: var(--surface-secondary);
+      color: var(--text-main);
+      border: 1px solid var(--border);
       border-radius: 6px;
       padding: 0.35rem 0.85rem;
       font-size: 0.75rem;
@@ -1319,10 +1349,11 @@ export const adminController = {
       margin-top: 0.5rem;
       border-radius: 0.75rem;
       border: 1px solid var(--border);
-      background: rgba(0, 0, 0, 0.18);
+      background: var(--card);
+      box-shadow: var(--shadow-subtle);
       position: relative;
       scrollbar-width: thin;
-      scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+      scrollbar-color: var(--border-subtle) transparent;
     }
     .table-container::-webkit-scrollbar {
       height: 6px;
@@ -1332,7 +1363,7 @@ export const adminController = {
       background: transparent;
     }
     .table-container::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.2);
+      background: var(--border-subtle);
       border-radius: 9999px;
     }
     table {
@@ -1341,41 +1372,50 @@ export const adminController = {
       border-collapse: collapse;
       text-align: left;
       font-size: 0.85rem;
+      color: var(--text-main);
     }
     th {
       padding: 0.75rem 0.9rem;
       font-size: 0.725rem;
       text-transform: uppercase;
       letter-spacing: 0.04em;
-      color: var(--muted);
+      color: var(--text-muted);
+      background: var(--surface-secondary);
       border-bottom: 1px solid var(--border);
       white-space: nowrap;
     }
     td {
       padding: 0.75rem 0.9rem;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--text-main);
       vertical-align: middle;
     }
     tr:hover td {
-      background: rgba(255, 255, 255, 0.02);
+      background: var(--surface-hover);
     }
     .badge-type { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 6px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; }
-    .badge-image { background: rgba(16, 185, 129, 0.15); color: #34d399; }
-    .badge-video { background: rgba(139, 92, 246, 0.15); color: #a78bfa; }
-    .badge-audio { background: rgba(236, 72, 153, 0.15); color: #f472b6; }
-    .badge-file { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
-    .session-tag { font-family: monospace; font-size: 0.75rem; color: var(--muted); background: rgba(255, 255, 255, 0.05); padding: 0.15rem 0.4rem; border-radius: 4px; }
+    .badge-image { background: rgba(16, 185, 129, 0.15); color: #059669; }
+    .badge-video { background: rgba(139, 92, 246, 0.15); color: #7c3aed; }
+    .badge-audio { background: rgba(236, 72, 153, 0.15); color: #db2777; }
+    .badge-file { background: rgba(245, 158, 11, 0.15); color: #d97706; }
+
+    .theme-spacegray .badge-image, .theme-purple .badge-image, .theme-pacific .badge-image { color: #34d399; }
+    .theme-spacegray .badge-video, .theme-purple .badge-video, .theme-pacific .badge-video { color: #a78bfa; }
+    .theme-spacegray .badge-audio, .theme-purple .badge-audio, .theme-pacific .badge-audio { color: #f472b6; }
+    .theme-spacegray .badge-file, .theme-purple .badge-file, .theme-pacific .badge-file { color: #fbbf24; }
+
+    .session-tag { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted); background: var(--surface-secondary); border: 1px solid var(--border-subtle); padding: 0.15rem 0.4rem; border-radius: 4px; }
     .link-view { color: var(--accent); text-decoration: none; font-weight: 600; }
     .link-view:hover { text-decoration: underline; }
 
-    /* iOS Alert & Confirmation Modal (Super Lightweight, No Backdrop-Blur) */
+    /* iOS Alert & Confirmation Modal (Super Lightweight, Adaptive to Themes) */
     .ios-modal-overlay {
       position: fixed;
       top: 0;
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(0, 0, 0, 0.75);
+      background: rgba(0, 0, 0, 0.7);
       z-index: 99999;
       display: flex;
       align-items: center;
@@ -1385,6 +1425,8 @@ export const adminController = {
       visibility: hidden;
       pointer-events: none; /* CRITICAL FIX: prevents touch blocking when modal is not active */
       transition: opacity 0.18s ease, visibility 0.18s ease;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
     }
     .ios-modal-overlay.active {
       opacity: 1;
@@ -1392,12 +1434,12 @@ export const adminController = {
       pointer-events: auto;
     }
     .ios-modal-box {
-      background: #18181b;
-      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: var(--card, #18181b);
+      border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
       border-radius: 14px;
       width: 100%;
       max-width: 320px;
-      box-shadow: 0 20px 40px -8px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.04);
+      box-shadow: 0 20px 40px -8px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.04);
       text-align: center;
       overflow: hidden;
       transform: scale(0.92);
@@ -1430,7 +1472,7 @@ export const adminController = {
     }
     .ios-modal-icon-info {
       background: rgba(59, 130, 246, 0.15);
-      color: #60a5fa;
+      color: var(--accent, #60a5fa);
       border: 1px solid rgba(59, 130, 246, 0.3);
     }
     .ios-modal-icon-success {
@@ -1441,20 +1483,20 @@ export const adminController = {
     .ios-modal-title {
       font-size: 1.05rem;
       font-weight: 700;
-      color: #ffffff;
+      color: var(--fg, #ffffff);
       line-height: 1.3;
       margin-bottom: 0.45rem;
     }
     .ios-modal-desc {
       font-size: 0.825rem;
-      color: #a1a1aa;
+      color: var(--subtle, #a1a1aa);
       line-height: 1.45;
       word-break: break-word;
       white-space: pre-line;
     }
     .ios-modal-actions-row {
       display: flex;
-      border-top: 1px solid rgba(255, 255, 255, 0.12);
+      border-top: 1px solid var(--border, rgba(255, 255, 255, 0.12));
     }
     .ios-modal-btn {
       flex: 1;
@@ -1470,19 +1512,19 @@ export const adminController = {
       font-family: inherit;
     }
     .ios-modal-btn:active, .ios-modal-btn:hover {
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(128, 128, 128, 0.1);
     }
     .ios-modal-btn-cancel {
-      color: #94a3b8;
+      color: var(--subtle, #94a3b8);
       font-weight: 500;
-      border-right: 1px solid rgba(255, 255, 255, 0.12);
+      border-right: 1px solid var(--border, rgba(255, 255, 255, 0.12));
     }
     .ios-modal-btn-danger {
       color: #f87171;
       font-weight: 700;
     }
     .ios-modal-btn-primary {
-      color: #60a5fa;
+      color: var(--accent, #60a5fa);
       font-weight: 700;
     }
 
@@ -1837,7 +1879,7 @@ export const adminController = {
               <div class="ai-rec-actions">
                 <span class="ai-badge-model" id="ai-rec-model-badge">
                   <span class="ai-badge-pulse"></span>
-                  <span id="ai-rec-model-label">Gemini 3.8 Flash</span>
+                  <span id="ai-rec-model-label">Gemini 2.5 Flash</span>
                 </span>
                 <button type="button" class="btn-ai-refresh" id="btn-refresh-ai-rec" title="Minta Gemini AI menganalisis data metrik sistem terkini">
                   <svg id="ai-refresh-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
@@ -2473,6 +2515,27 @@ export const adminController = {
       });
     };
 
+    // Aliases for admin operational components
+    window.showIosAdminConfirm = function(options) {
+      if (typeof options === 'object' && options !== null && (options.title || options.message)) {
+        return window.showIosConfirm(options);
+      }
+      return window.showIosConfirm({
+        title: arguments[0] || 'Konfirmasi',
+        message: arguments[1] || '',
+        isDestructive: arguments[2] !== false,
+        confirmText: arguments[3] || 'Konfirmasi'
+      });
+    };
+
+    window.showIosAdminAlert = function(title, message, type) {
+      return window.showIosAlert({
+        title: title || 'Pemberitahuan',
+        message: message || '',
+        icon: type || 'info'
+      });
+    };
+
     (function() {
       const panelPath = ${JSON.stringify(fullAdminPath)};
       const badgeDot = document.getElementById('live-sync-dot');
@@ -2666,29 +2729,53 @@ export const adminController = {
       function renderGeminiMarkup(raw) {
         if (!raw) return '';
         // 1. Escape HTML special characters for strict XSS prevention
-        let str = String(raw)
+        var str = String(raw)
           .replace(/&/g, '&amp;')
           .replace(/</g, '&lt;')
           .replace(/>/g, '&gt;')
           .replace(/"/g, '&quot;')
           .replace(/'/g, '&#039;');
 
-        // 2. Headings
-        str = str.replace(/^### (.*?)$/gm, '<h4 class="ai-heading-3">$1</h4>');
-        str = str.replace(/^## (.*?)$/gm, '<h3 class="ai-heading-3">$1</h3>');
+        // 2. Headings (### or ##)
+        var nl = String.fromCharCode(10);
+        var lines = str.split(nl);
+        for (var i = 0; i < lines.length; i++) {
+          if (lines[i].indexOf('### ') === 0) {
+            lines[i] = '<h4 class="ai-heading-3">' + lines[i].substring(4) + '</h4>';
+          } else if (lines[i].indexOf('## ') === 0) {
+            lines[i] = '<h3 class="ai-heading-3">' + lines[i].substring(3) + '</h3>';
+          }
+        }
+        str = lines.join(nl);
 
-        // 3. Bold text
-        str = str.replace(/\*\*(.*?)\*\*/g, '<strong class="ai-bold">$1</strong>');
-        str = str.replace(/__(.*?)__/g, '<strong class="ai-bold">$1</strong>');
+        // 3. Inline code blocks using backtick char code (96)
+        var tick = String.fromCharCode(96);
+        if (str.indexOf(tick) !== -1) {
+          str = str.split(tick).map(function(part, idx) {
+            return idx % 2 === 1 ? '<code class="ai-code">' + part + '</code>' : part;
+          }).join('');
+        }
 
-        // 4. Italic text
-        str = str.replace(/(^|[^*])\*([^*]+)\*([^*]|$)/g, '$1<em class="ai-italic">$2</em>$3');
+        // 4. Bold text: split by '**'
+        if (str.indexOf('**') !== -1) {
+          str = str.split('**').map(function(part, idx) {
+            return idx % 2 === 1 ? '<strong class="ai-bold">' + part + '</strong>' : part;
+          }).join('');
+        }
 
-        // 5. Code blocks / inline code (using safe char code to prevent template backtick clash)
-        const tick = String.fromCharCode(96);
-        str = str.split(tick).map(function(part, idx) {
-          return idx % 2 === 1 ? '<code class="ai-code">' + part + '</code>' : part;
-        }).join('');
+        // 5. Bold text: split by '__'
+        if (str.indexOf('__') !== -1) {
+          str = str.split('__').map(function(part, idx) {
+            return idx % 2 === 1 ? '<strong class="ai-bold">' + part + '</strong>' : part;
+          }).join('');
+        }
+
+        // 6. Italic text: split by remaining single '*'
+        if (str.indexOf('*') !== -1) {
+          str = str.split('*').map(function(part, idx) {
+            return idx % 2 === 1 ? '<em class="ai-italic">' + part + '</em>' : part;
+          }).join('');
+        }
 
         return str;
       }
@@ -2758,7 +2845,16 @@ export const adminController = {
 
           // Update Model Badge
           if (recModelLabel) {
-            recModelLabel.textContent = data.isAi ? 'Gemini 3.8 Flash • Real-Time AI' : 'Mesin Heuristik Sistem';
+            var rawModel = data.model || 'gemini-2.5-flash';
+            var formattedModel = 'Gemini 2.5 Flash';
+            if (rawModel.indexOf('2.5') !== -1) {
+              formattedModel = 'Gemini 2.5 Flash';
+            } else if (rawModel.indexOf('gemini') === 0) {
+              formattedModel = rawModel.split('-').map(function(w) {
+                return w.charAt(0).toUpperCase() + w.slice(1);
+              }).join(' ');
+            }
+            recModelLabel.textContent = data.isAi ? (formattedModel + ' • Real-Time AI') : 'Mesin Heuristik Sistem';
           }
 
           // Update Timestamp
@@ -4160,7 +4256,7 @@ export const adminController = {
 
   /**
    * POST /{ADMIN_PANEL_PATH}/api/ai-recommendations
-   * Real-time executive summary and strategic recommendations generated by Gemini 3.8 Flash.
+   * Real-time executive summary and strategic recommendations generated by Gemini 2.5 Flash.
    * Includes automated graceful fallback to heuristic engine if API key is not configured or fails.
    */
   async getAiRecommendations(req: Request, res: Response): Promise<void> {
@@ -4202,7 +4298,7 @@ export const adminController = {
             headers: {
               'User-Agent': 'aistudio-build',
             },
-            timeout: 20000,
+            timeout: 30000,
           },
         });
 
@@ -4250,15 +4346,32 @@ Pastikan rekomendasi berfokus pada optimasi bandwidth, proteksi kuota penyimpana
           if (usedModel !== 'gemini-2.5-flash') {
             console.warn(`[GEMINI_RECOMMENDATION_WARN] Model ${usedModel} mengalami kendala (${initialErr?.message || initialErr}), mencoba model cadangan gemini-2.5-flash...`);
             usedModel = 'gemini-2.5-flash';
-            response = await ai.models.generateContent({
-              model: usedModel,
-              contents: prompt,
-              config: {
-                responseMimeType: 'application/json',
-              },
-            });
+            try {
+              response = await ai.models.generateContent({
+                model: usedModel,
+                contents: prompt,
+                config: {
+                  responseMimeType: 'application/json',
+                },
+              });
+            } catch (fallbackErr: any) {
+              console.warn(`[GEMINI_RECOMMENDATION_WARN] Fallback JSON mode gagal, mencoba panggilan standar tanpa mimeType constraint...`);
+              response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash',
+                contents: prompt + '\n\nPERINGATAN: Berikan respons HANYA objek JSON valid.',
+              });
+            }
           } else {
-            throw initialErr;
+            // Attempt standard generation without mimeType constraint if json mode failed
+            console.warn(`[GEMINI_RECOMMENDATION_WARN] Mode JSON gemini-2.5-flash mengalami kendala (${initialErr?.message || initialErr}), mencoba panggilan standar...`);
+            try {
+              response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash',
+                contents: prompt + '\n\nPERINGATAN: Berikan respons HANYA objek JSON valid.',
+              });
+            } catch {
+              throw initialErr;
+            }
           }
         }
 

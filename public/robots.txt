@@ -1,6 +1,9 @@
 User-agent: *
 Allow: /
+Allow: /status
 Disallow: /api/
+Disallow: /admin/
+Disallow: /admin
 Disallow: /s/
 
 Sitemap: https://airshare-pro.vercel.app/sitemap.xml

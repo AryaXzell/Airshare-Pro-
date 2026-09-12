@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AnnouncementBannerInfo, ApiResponse, SystemStatusData } from '../types';
+import { AnnouncementBannerInfo, ApiResponse, MaintenanceLevel, SystemStatusData } from '../types';
 
 const DISMISS_TIMESTAMP_KEY = 'airshare_announcement_dismissed_at';
 const POLL_INTERVAL_MS = 8000; // Poll every 8s for snappy real-time synchronization
@@ -7,6 +7,9 @@ const POLL_INTERVAL_MS = 8000; // Poll every 8s for snappy real-time synchroniza
 export function useSystemStatus() {
   const [announcement, setAnnouncement] = useState<AnnouncementBannerInfo | null>(null);
   const [maintenanceMode, setMaintenanceMode] = useState<boolean>(false);
+  const [maintenanceLevel, setMaintenanceLevel] = useState<MaintenanceLevel>('off');
+  const [systemStatus, setSystemStatus] = useState<'operational' | 'degraded' | 'major_outage'>('operational');
+  const [services, setServices] = useState<SystemStatusData['services'] | null>(null);
   const [featureFlags, setFeatureFlags] = useState<{
     pasteToUpload: boolean;
     qrCode: boolean;
@@ -50,6 +53,11 @@ export function useSystemStatus() {
       if (data.success && isMountedRef.current) {
         const sysData = data.data;
         setMaintenanceMode(Boolean(sysData.maintenanceMode));
+        setMaintenanceLevel(sysData.maintenanceLevel || (sysData.maintenanceMode ? 'upload_only' : 'off'));
+        setSystemStatus(sysData.status || 'operational');
+        if (sysData.services) {
+          setServices(sysData.services);
+        }
         
         const activeAnnounce = sysData.announcement && sysData.announcement.enabled ? sysData.announcement : null;
         setAnnouncement(activeAnnounce);
@@ -108,7 +116,10 @@ export function useSystemStatus() {
 
   return {
     announcement,
+    maintenanceLevel,
     maintenanceMode,
+    systemStatus,
+    services,
     featureFlags,
     isDismissed,
     dismissAnnouncement,

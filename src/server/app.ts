@@ -180,12 +180,39 @@ export function createExpressApp(): Express {
     });
   });
 
-  // Dynamic robots.txt to strictly disallow crawling of admin path and sensitive endpoints
+  // Dynamic robots.txt to explicitly allow / and /status, while disallowing admin, api, and private share endpoints
   app.get('/robots.txt', (req: Request, res: Response) => {
-    let content = `User-agent: *\nAllow: /\nAllow: /status\nDisallow: /api/\nDisallow: /s/\nDisallow: /admin/\n\nSitemap: https://airshare-pro.vercel.app/sitemap.xml\n`;
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    const host = req.get('host') || 'airshare-pro.vercel.app';
+    const baseUrl = `${protocol}://${host}`;
+    const content = `User-agent: *\nAllow: /\nAllow: /status\nDisallow: /api/\nDisallow: /admin/\nDisallow: /admin\nDisallow: /s/\n\nSitemap: ${baseUrl}/sitemap.xml\n`;
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.send(content);
+  });
+
+  // Dynamic sitemap.xml with / and /status indexing support
+  app.get('/sitemap.xml', (req: Request, res: Response) => {
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    const host = req.get('host') || 'airshare-pro.vercel.app';
+    const baseUrl = `${protocol}://${host}`;
+    const sitemapContent = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>${baseUrl}/</loc>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>${baseUrl}/status</loc>
+    <changefreq>hourly</changefreq>
+    <priority>0.8</priority>
+  </url>
+</urlset>
+`;
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(sitemapContent);
   });
 
   // Mount Admin Panel (Enabled if ADMIN_SECRET_KEY is configured)

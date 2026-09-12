@@ -59,7 +59,7 @@ export default function App() {
   const [previewItem, setPreviewItem] = useState<MediaItem | null>(null);
 
   // Real-time system status & announcement synchronization
-  const { announcement, isDismissed, dismissAnnouncement, featureFlags } = useSystemStatus();
+  const { announcement, maintenanceLevel, isDismissed, dismissAnnouncement, featureFlags } = useSystemStatus();
 
   // Connection status & persistent toast tracking
   const prevOnlineRef = useRef<boolean>(isOnline);
@@ -136,13 +136,29 @@ export default function App() {
 
   // Enable clipboard paste-to-upload (Ctrl+V / Cmd+V anywhere on the page)
   usePasteUpload({
-    isEnabled: isOnline && !isStateUploading && featureFlags.pasteToUpload,
+    isEnabled:
+      isOnline &&
+      !isStateUploading &&
+      featureFlags.pasteToUpload &&
+      maintenanceLevel === 'off',
     onFilePasted: handlePastedFile,
   });
 
   const handleRequestActionSheet = React.useCallback(() => {
+    if (maintenanceLevel === 'full_lockdown') {
+      showToast('Website sedang dalam mode lockdown total untuk pemeliharaan sistem.', {
+        type: 'error',
+      });
+      return;
+    }
+    if (maintenanceLevel === 'upload_only') {
+      showToast('Layanan unggah berkas sedang dinonaktifkan sementara oleh administrator.', {
+        type: 'warning',
+      });
+      return;
+    }
     setIsActionSheetOpen(true);
-  }, []);
+  }, [maintenanceLevel, showToast]);
 
   const handleCloseActionSheet = React.useCallback(() => {
     setIsActionSheetOpen(false);
@@ -155,6 +171,18 @@ export default function App() {
   const handleActionSheetSelect = React.useCallback(
     (type: MediaType | 'any') => {
       setIsActionSheetOpen(false);
+      if (maintenanceLevel === 'full_lockdown') {
+        showToast('Website sedang dalam mode lockdown total untuk pemeliharaan sistem.', {
+          type: 'error',
+        });
+        return;
+      }
+      if (maintenanceLevel === 'upload_only') {
+        showToast('Layanan unggah berkas sedang dinonaktifkan sementara.', {
+          type: 'warning',
+        });
+        return;
+      }
       if (!isOnline) {
         showToast('Anda sedang offline. Hubungkan perangkat ke internet untuk mengunggah.', {
           type: 'warning',
@@ -169,11 +197,21 @@ export default function App() {
         else if (type === 'file') fileInputRef.current?.click();
       }, 150);
     },
-    [isOnline, showToast]
+    [isOnline, maintenanceLevel, showToast]
   );
 
   const handleDedicatedFileSelected = React.useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (maintenanceLevel !== 'off') {
+        showToast(
+          maintenanceLevel === 'full_lockdown'
+            ? 'Website sedang dalam mode lockdown total untuk pemeliharaan sistem.'
+            : 'Layanan unggah berkas sedang dinonaktifkan sementara.',
+          { type: 'warning' }
+        );
+        e.target.value = '';
+        return;
+      }
       if (!isOnline) {
         showToast('Anda sedang offline. Hubungkan perangkat ke internet untuk mengunggah.', {
           type: 'warning',
@@ -194,7 +232,7 @@ export default function App() {
         e.target.value = '';
       }
     },
-    [isOnline, isStateUploading, showToast, startUpload]
+    [isOnline, isStateUploading, maintenanceLevel, showToast, startUpload]
   );
 
   return (
@@ -204,7 +242,7 @@ export default function App() {
         ref={imageInputRef}
         type="file"
         accept="image/*"
-        disabled={uploadState.isUploading || !isOnline}
+        disabled={uploadState.isUploading || !isOnline || maintenanceLevel !== 'off'}
         onChange={handleDedicatedFileSelected}
         className="hidden"
       />
@@ -212,7 +250,7 @@ export default function App() {
         ref={videoInputRef}
         type="file"
         accept="video/*"
-        disabled={uploadState.isUploading || !isOnline}
+        disabled={uploadState.isUploading || !isOnline || maintenanceLevel !== 'off'}
         onChange={handleDedicatedFileSelected}
         className="hidden"
       />
@@ -220,7 +258,7 @@ export default function App() {
         ref={audioInputRef}
         type="file"
         accept="audio/*"
-        disabled={uploadState.isUploading || !isOnline}
+        disabled={uploadState.isUploading || !isOnline || maintenanceLevel !== 'off'}
         onChange={handleDedicatedFileSelected}
         className="hidden"
       />
@@ -228,7 +266,7 @@ export default function App() {
         ref={fileInputRef}
         type="file"
         accept=".zip,.rar,.7z,.tar,.gz,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json,application/zip,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.*"
-        disabled={uploadState.isUploading || !isOnline}
+        disabled={uploadState.isUploading || !isOnline || maintenanceLevel !== 'off'}
         onChange={handleDedicatedFileSelected}
         className="hidden"
       />
@@ -243,8 +281,9 @@ export default function App() {
 
       {/* Main App Content Container */}
       <main className="flex-grow max-w-2xl w-full mx-auto px-4 pt-7 pb-20">
-        {/* Real-time System Announcement Banner */}
+        {/* Real-time System Announcement Banner (with iOS stacked card support) */}
         <AnnouncementBanner
+          maintenanceLevel={maintenanceLevel}
           announcement={announcement}
           isDismissed={isDismissed}
           onDismiss={dismissAnnouncement}
@@ -273,6 +312,7 @@ export default function App() {
           onPreviewItem={setPreviewItem}
           onToast={showToast}
           isOnline={isOnline}
+          maintenanceLevel={maintenanceLevel}
         />
 
         {/* Media History / Library */}

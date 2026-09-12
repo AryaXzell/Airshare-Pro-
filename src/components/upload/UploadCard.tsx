@@ -4,7 +4,7 @@ import { AlertTriangle, RefreshCw, X } from 'lucide-react';
 import { UploadZone } from './UploadZone';
 import { UploadProgress } from './UploadProgress';
 import { UploadSuccess } from './UploadSuccess';
-import { MediaItem } from '../../types';
+import { MediaItem, MaintenanceLevel } from '../../types';
 import { UseUploadReturn } from '../../hooks/useUpload';
 
 interface UploadCardProps {
@@ -16,6 +16,7 @@ interface UploadCardProps {
     options?: { description?: string; type?: 'success' | 'error' | 'warning' | 'info' }
   ) => void;
   isOnline?: boolean;
+  maintenanceLevel?: MaintenanceLevel;
 }
 
 export const UploadCard: React.FC<UploadCardProps> = ({
@@ -24,6 +25,7 @@ export const UploadCard: React.FC<UploadCardProps> = ({
   onPreviewItem,
   onToast,
   isOnline = true,
+  maintenanceLevel = 'off',
 }) => {
   const {
     isUploading,
@@ -46,11 +48,22 @@ export const UploadCard: React.FC<UploadCardProps> = ({
   const videoInputRef = useRef<HTMLInputElement>(null);
   const audioInputRef = useRef<HTMLInputElement>(null);
 
-  const effectiveDisabled = isUploading || !isOnline;
+  const isUnderMaintenance = maintenanceLevel !== 'off';
+  const effectiveDisabled = isUploading || !isOnline || isUnderMaintenance;
 
   const handleSpecificFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!isOnline) {
       onToast('Anda sedang offline. Hubungkan perangkat ke internet untuk mengunggah.');
+      e.target.value = '';
+      return;
+    }
+    if (isUnderMaintenance) {
+      onToast(
+        maintenanceLevel === 'full_lockdown'
+          ? 'Website sedang dalam mode lockdown total untuk pemeliharaan sistem.'
+          : 'Layanan unggah berkas sedang dinonaktifkan sementara.',
+        { type: 'warning' }
+      );
       e.target.value = '';
       return;
     }
@@ -108,8 +121,9 @@ export const UploadCard: React.FC<UploadCardProps> = ({
       <UploadZone
         onFileSelected={startUpload}
         onRequestActionSheet={onRequestActionSheet}
-        disabled={isUploading}
+        disabled={isUploading || isUnderMaintenance}
         isOnline={isOnline}
+        maintenanceLevel={maintenanceLevel}
       />
 
       {/* Error Notice with Retry & Dismiss Recovery */}
