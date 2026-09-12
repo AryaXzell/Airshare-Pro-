@@ -87,6 +87,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
       />
 
       <div
+        id="main-upload-dropzone"
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}

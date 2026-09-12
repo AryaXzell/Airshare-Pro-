@@ -9,6 +9,7 @@ export const telegramWebhookController = {
    */
   async handleWebhook(req: Request, res: Response): Promise<void> {
     const config = getTelegramConfig();
+    console.log('[TELEGRAM_WEBHOOK] Request diterima, config.enabled =', config.enabled);
 
     // 1. If bot is disabled due to missing token, user IDs, or secret, return 200 without processing
     if (!config.enabled) {

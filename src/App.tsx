@@ -338,6 +338,7 @@ export default function App() {
           onDeleteItem={removeItem}
           onDeleteMultiple={removeMultiple}
           onClearAll={clearAll}
+          onRequestUpload={handleRequestActionSheet}
           onToast={showToast}
         />
       </main>

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, PanInfo, useMotionValue, useTransform } from 'motion/react';
 import {
   AlertTriangle,
   ArrowUpDown,
@@ -8,6 +8,7 @@ import {
   ChevronUp,
   ExternalLink,
   Layers,
+  Lock,
   Megaphone,
   ShieldAlert,
   X,
@@ -44,6 +45,359 @@ interface BannerItem {
   icon: React.ReactNode;
 }
 
+interface BannerFrontCardProps {
+  item: BannerItem;
+  isMultiBanner: boolean;
+  safeFrontIndex: number;
+  onSwap: () => void;
+  onDismissItem: (id: string, direction: 'left' | 'right') => void;
+  isTextExpanded: boolean;
+  onToggleExpand: (id: string, e?: React.MouseEvent) => void;
+}
+
+/**
+ * Interactive Front Card with iOS touch swipe-to-dismiss and swap gestures
+ */
+const BannerFrontCard: React.FC<BannerFrontCardProps> = ({
+  item,
+  isMultiBanner,
+  safeFrontIndex,
+  onSwap,
+  onDismissItem,
+  isTextExpanded,
+  onToggleExpand,
+}) => {
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const dragX = useMotionValue(0);
+
+  // Optical physics during touch gesture: subtle tilt and slight opacity fade as card is dragged
+  const rotate = useTransform(dragX, [-220, 0, 220], [-3, 0, 3]);
+  const cardOpacity = useTransform(dragX, [-250, -180, 0, 180, 250], [0.15, 0.75, 1, 0.75, 0.15]);
+
+  // Underlying action indicator reveal opacity
+  const actionOpacityLeft = useTransform(dragX, [20, 80], [0, 1]);
+  const actionOpacityRight = useTransform(dragX, [-80, -20], [1, 0]);
+
+  const hasTruncatedText = Boolean(item.shortMessage && item.shortMessage !== item.message);
+  const displayText = isTextExpanded || !hasTruncatedText ? item.message : item.shortMessage;
+
+  const handleDragEnd = (_: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => {
+    setIsDragging(false);
+    const offsetX = info.offset.x;
+    const velocityX = info.velocity.x;
+    const absOffset = Math.abs(offsetX);
+    const absVelocity = Math.abs(velocityX);
+
+    // Case 1: Dismissible announcement banner
+    if (item.dismissible) {
+      if (absOffset > 80 || absVelocity > 350) {
+        const direction = offsetX > 0 ? 'right' : 'left';
+        if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+          try {
+            navigator.vibrate(12);
+          } catch {
+            // Ignored if vibration is unsupported
+          }
+        }
+        onDismissItem(item.id, direction);
+        return;
+      }
+    } else if (isMultiBanner) {
+      // Case 2: Mandatory system status banner in a multi-banner stack
+      // Swiping left or right past threshold swaps to the secondary banner!
+      if (absOffset > 75 || absVelocity > 340) {
+        if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+          try {
+            navigator.vibrate(8);
+          } catch {
+            // Ignored
+          }
+        }
+        onSwap();
+        return;
+      }
+    }
+  };
+
+  return (
+    <div className="relative w-full rounded-xl sm:rounded-2xl overflow-hidden">
+      {/* Underlying iOS Action Layer (Revealed when card is swiped horizontally) */}
+      <div
+        className="absolute inset-0 rounded-xl sm:rounded-2xl flex items-center justify-between px-4 sm:px-6 pointer-events-none select-none z-0"
+        style={{
+          backgroundColor: item.dismissible ? 'rgba(239, 68, 68, 0.12)' : 'var(--surface-secondary)',
+          border: `1px dashed ${item.dismissible ? 'rgba(239, 68, 68, 0.35)' : 'var(--border-subtle)'}`,
+        }}
+      >
+        {/* Left Action (Revealed when dragged right) */}
+        <motion.div
+          style={{ opacity: actionOpacityLeft }}
+          className="flex items-center gap-1.5 font-bold text-[11px] sm:text-xs"
+        >
+          {item.dismissible ? (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/30 shadow-sm">
+              <X className="w-3.5 h-3.5" />
+              <span>Tutup</span>
+            </div>
+          ) : isMultiBanner ? (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-accent/20 text-accent border border-accent/30 shadow-sm">
+              <ArrowUpDown className="w-3.5 h-3.5" />
+              <span>Tukar Banner</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30 shadow-sm">
+              <Lock className="w-3.5 h-3.5" />
+              <span>Pemberitahuan Wajib</span>
+            </div>
+          )}
+        </motion.div>
+
+        {/* Right Action (Revealed when dragged left) */}
+        <motion.div
+          style={{ opacity: actionOpacityRight }}
+          className="flex items-center gap-1.5 font-bold text-[11px] sm:text-xs ml-auto"
+        >
+          {item.dismissible ? (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/30 shadow-sm">
+              <span>Tutup</span>
+              <X className="w-3.5 h-3.5" />
+            </div>
+          ) : isMultiBanner ? (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-accent/20 text-accent border border-accent/30 shadow-sm">
+              <span>Tukar Banner</span>
+              <ArrowUpDown className="w-3.5 h-3.5" />
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30 shadow-sm">
+              <span>Pemberitahuan Wajib</span>
+              <Lock className="w-3.5 h-3.5" />
+            </div>
+          )}
+        </motion.div>
+      </div>
+
+      {/* Foreground Draggable iOS Card */}
+      <motion.div
+        key={`front-${item.id}`}
+        layout="position"
+        drag="x"
+        dragConstraints={{ left: 0, right: 0 }}
+        dragElastic={item.dismissible ? 0.75 : isMultiBanner ? 0.5 : 0.15}
+        dragSnapToOrigin={true}
+        onDragStart={() => setIsDragging(true)}
+        onDragEnd={handleDragEnd}
+        initial={{ opacity: 0.65, y: 14, scale: 0.97 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: -10, scale: 0.98 }}
+        transition={{
+          type: 'spring',
+          stiffness: 340,
+          damping: 26,
+          mass: 0.75,
+        }}
+        style={{
+          x: dragX,
+          rotate,
+          opacity: cardOpacity,
+          backgroundColor: 'var(--surface-primary)',
+          border: `1px solid ${item.borderColor}`,
+          boxShadow: isMultiBanner
+            ? '0 12px 28px -6px rgba(0, 0, 0, 0.32), 0 4px 10px rgba(0, 0, 0, 0.08)'
+            : 'var(--shadow-subtle)',
+        }}
+        className={`w-full rounded-xl sm:rounded-2xl relative overflow-hidden backdrop-blur-md transition-shadow duration-200 touch-pan-y z-10 select-none ${
+          isDragging ? 'cursor-grabbing' : 'cursor-grab'
+        }`}
+        title={
+          item.dismissible
+            ? 'Geser ke samping (swipe) untuk menutup, atau ketuk tombol X'
+            : isMultiBanner
+            ? 'Geser ke samping atau ketuk kartu belakang untuk menukar banner'
+            : undefined
+        }
+      >
+        {/* Subtle accent top indicator line */}
+        <div
+          className="absolute top-0 left-0 right-0 h-[2px] opacity-80"
+          style={{
+            background: `linear-gradient(90deg, transparent, ${item.accentColor}, transparent)`,
+          }}
+        />
+
+        <div className="p-2.5 sm:p-3.5">
+          <div className="flex items-start justify-between gap-2.5 sm:gap-3">
+            <div className="flex items-start gap-2.5 min-w-0 flex-1">
+              {/* Compact Icon Avatar with pulsing beacon for system alerts */}
+              <div
+                className="p-1.5 sm:p-2 rounded-lg flex items-center justify-center shrink-0 mt-0.5 relative"
+                style={{
+                  backgroundColor: item.badgeBg,
+                  border: `1px solid ${item.badgeBorder}`,
+                }}
+              >
+                {item.icon}
+                {item.isSystemAuto && (
+                  <span
+                    className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full ring-2 ring-[var(--surface-primary)]"
+                    style={{ backgroundColor: item.accentColor }}
+                  >
+                    <span
+                      className="absolute inset-0 rounded-full animate-ping opacity-75"
+                      style={{ backgroundColor: item.accentColor }}
+                    />
+                  </span>
+                )}
+              </div>
+
+              {/* Message Body */}
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                  <span
+                    className="text-[9px] sm:text-[10px] font-bold tracking-wide uppercase px-1.5 py-0.2 rounded-md inline-flex items-center gap-1"
+                    style={{
+                      backgroundColor: item.badgeBg,
+                      color: item.badgeColor,
+                      border: `1px solid ${item.badgeBorder}`,
+                    }}
+                  >
+                    {item.badgeCategory}
+                  </span>
+
+                  <span
+                    className="text-[9px] sm:text-[10px] font-medium"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    {item.badgeSubText}
+                  </span>
+
+                  {/* Priority / Swipe Indicator Badge */}
+                  {isMultiBanner ? (
+                    <span
+                      className={`text-[8px] sm:text-[9px] font-bold px-1.5 py-0.2 rounded uppercase tracking-wide flex items-center gap-1 ${
+                        item.isSystemAuto
+                          ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30'
+                          : 'bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/30'
+                      }`}
+                    >
+                      <span>{safeFrontIndex === 0 ? '1/2' : '2/2'}</span>
+                      <span className="opacity-60">•</span>
+                      <span>Geser/Ketuk</span>
+                    </span>
+                  ) : item.dismissible ? (
+                    <span className="text-[8px] sm:text-[9px] font-medium px-1.5 py-0.2 rounded text-[var(--text-muted)] bg-[var(--surface-secondary)] border border-[var(--border-subtle)] hidden xs:inline-flex items-center gap-0.5">
+                      <span>Geser untuk tutup</span>
+                    </span>
+                  ) : null}
+                </div>
+
+                {/* Headline */}
+                {item.headline && (
+                  <h4
+                    className="text-xs sm:text-[13px] font-bold tracking-tight mb-0.5 leading-snug"
+                    style={{ color: 'var(--text-main)' }}
+                  >
+                    {item.headline}
+                  </h4>
+                )}
+
+                {/* Body message with inline "read more..." toggle */}
+                <p
+                  className="text-[11px] sm:text-xs font-medium leading-relaxed break-words"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  <span>{displayText}</span>
+                  {hasTruncatedText && (
+                    <button
+                      type="button"
+                      id={`btn-readmore-${item.id}`}
+                      onClick={(e) => onToggleExpand(item.id, e)}
+                      className="inline-flex items-center gap-0.5 ml-1.5 font-bold text-[10px] sm:text-[11px] text-accent hover:underline focus:outline-none cursor-pointer select-none transition-colors"
+                      title={isTextExpanded ? 'Ringkas pesan' : 'Lihat pesan lengkap'}
+                    >
+                      <span>{isTextExpanded ? 'ringkas' : 'read more..'}</span>
+                      {isTextExpanded ? (
+                        <ChevronUp className="w-2.5 h-2.5 opacity-90" />
+                      ) : (
+                        <ChevronDown className="w-2.5 h-2.5 opacity-90" />
+                      )}
+                    </button>
+                  )}
+                </p>
+
+                {/* Action Link (e.g. /status for system alerts) */}
+                {item.actionUrl && (
+                  <div className="mt-1.5 pt-1.5 border-t border-[var(--border-subtle)] flex items-center justify-between gap-2">
+                    <a
+                      href={item.actionUrl}
+                      id={`link-${item.id}-status`}
+                      className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-semibold hover:underline focus:outline-none rounded transition-colors"
+                      style={{ color: item.badgeColor }}
+                    >
+                      <span>{item.actionLabel || 'Lihat Status Server'}</span>
+                      <ExternalLink className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
+                    </a>
+                    <span className="text-[9px] sm:text-[10px] opacity-50" style={{ color: 'var(--text-muted)' }}>
+                      Pembaruan real-time
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Top-Right Controls: iOS Stack Switcher & Dismiss Button */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              {/* iOS Deck Swap Button */}
+              {isMultiBanner && (
+                <button
+                  type="button"
+                  id="btn-ios-stack-swap-top"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSwap();
+                  }}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 sm:py-1 rounded-lg text-[10px] font-bold tracking-tight transition-all duration-200 active:scale-95 cursor-pointer shadow-sm hover:brightness-110 select-none"
+                  style={{
+                    backgroundColor: 'var(--surface-secondary)',
+                    color: 'var(--text-main)',
+                    border: '1px solid var(--border-subtle)',
+                  }}
+                  title="Ketuk untuk menukar posisi banner (ala iOS)"
+                >
+                  <Layers className="w-3 h-3 text-accent" />
+                  <span>{safeFrontIndex + 1}/2</span>
+                  <ArrowUpDown className="w-2.5 h-2.5 opacity-75" />
+                </button>
+              )}
+
+              {/* Dismiss Button (for dismissible custom announcement) */}
+              {item.dismissible && (
+                <button
+                  type="button"
+                  id={`btn-dismiss-${item.id}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDismissItem(item.id, 'right');
+                  }}
+                  className="p-1 sm:p-1.5 rounded-lg text-muted-foreground hover:text-foreground transition-all duration-200 shrink-0 cursor-pointer focus:outline-none focus:ring-1 focus:ring-accent/40 active:scale-95"
+                  style={{
+                    backgroundColor: 'var(--surface-secondary)',
+                    color: 'var(--text-muted)',
+                    border: '1px solid var(--border-subtle)',
+                  }}
+                  title="Tutup pengumuman ini (atau geser ke samping)"
+                  aria-label="Tutup pengumuman ini"
+                >
+                  <X className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
 export const AnnouncementBanner: React.FC<AnnouncementBannerProps> = ({
   maintenanceLevel = 'off',
   announcement,
@@ -53,6 +407,7 @@ export const AnnouncementBanner: React.FC<AnnouncementBannerProps> = ({
   // Active front banner index (0 or 1 for iOS card swap)
   const [frontIndex, setFrontIndex] = useState<number>(0);
   const [expandedTextIds, setExpandedTextIds] = useState<Record<string, boolean>>({});
+  const [locallyDismissedIds, setLocallyDismissedIds] = useState<Record<string, boolean>>({});
 
   const toggleTextExpand = (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
@@ -116,8 +471,9 @@ export const AnnouncementBanner: React.FC<AnnouncementBannerProps> = ({
     : null;
 
   // 2. Build Custom Admin Announcement Banner (if configured, enabled, and not dismissed)
+  const isCustomDismissed = isDismissed || Boolean(locallyDismissedIds['custom-admin-announcement']);
   const hasCustomAnnouncement = Boolean(
-    announcement && announcement.enabled && announcement.message && announcement.message.trim() && !isDismissed
+    announcement && announcement.enabled && announcement.message && announcement.message.trim() && !isCustomDismissed
   );
 
   let customBanner: BannerItem | null = null;
@@ -182,8 +538,12 @@ export const AnnouncementBanner: React.FC<AnnouncementBannerProps> = ({
 
   // Active items ordered by priority: System Status Banner FIRST, Custom Announcement SECOND
   const activeBanners: BannerItem[] = [];
-  if (systemAutoBanner) activeBanners.push(systemAutoBanner);
-  if (customBanner) activeBanners.push(customBanner);
+  if (systemAutoBanner && !locallyDismissedIds[systemAutoBanner.id]) {
+    activeBanners.push(systemAutoBanner);
+  }
+  if (customBanner && !locallyDismissedIds[customBanner.id]) {
+    activeBanners.push(customBanner);
+  }
 
   // If no banners are active, render nothing
   if (activeBanners.length === 0) {
@@ -200,200 +560,13 @@ export const AnnouncementBanner: React.FC<AnnouncementBannerProps> = ({
     setFrontIndex((prev) => (prev === 0 ? 1 : 0));
   };
 
-  // Helper renderer for the Front Card (Full Content)
-  const renderFrontCard = (item: BannerItem) => {
-    const isTextExpanded = Boolean(expandedTextIds[item.id]);
-    const hasTruncatedText = item.shortMessage && item.shortMessage !== item.message;
-    const displayText = isTextExpanded || !hasTruncatedText ? item.message : item.shortMessage;
-
-    return (
-      <motion.div
-        key={`front-${item.id}`}
-        initial={{ opacity: 0.65, y: 14, scale: 0.97 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: -10, scale: 0.98 }}
-        transition={{
-          type: 'spring',
-          stiffness: 340,
-          damping: 26,
-          mass: 0.75,
-        }}
-        className="w-full rounded-xl sm:rounded-2xl relative overflow-hidden backdrop-blur-md transition-shadow duration-200"
-        style={{
-          backgroundColor: 'var(--surface-primary)',
-          border: `1px solid ${item.borderColor}`,
-          boxShadow: isMultiBanner
-            ? '0 12px 28px -6px rgba(0, 0, 0, 0.32), 0 4px 10px rgba(0, 0, 0, 0.08)'
-            : 'var(--shadow-subtle)',
-        }}
-      >
-        {/* Subtle accent top indicator line */}
-        <div
-          className="absolute top-0 left-0 right-0 h-[2px] opacity-80"
-          style={{
-            background: `linear-gradient(90deg, transparent, ${item.accentColor}, transparent)`,
-          }}
-        />
-
-        <div className="p-2.5 sm:p-3.5">
-          <div className="flex items-start justify-between gap-2.5 sm:gap-3">
-            <div className="flex items-start gap-2.5 min-w-0 flex-1">
-              {/* Compact Icon Avatar with pulsing beacon for system alerts */}
-              <div
-                className="p-1.5 sm:p-2 rounded-lg flex items-center justify-center shrink-0 mt-0.5 relative"
-                style={{
-                  backgroundColor: item.badgeBg,
-                  border: `1px solid ${item.badgeBorder}`,
-                }}
-              >
-                {item.icon}
-                {item.isSystemAuto && (
-                  <span
-                    className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full ring-2 ring-[var(--surface-primary)]"
-                    style={{ backgroundColor: item.accentColor }}
-                  >
-                    <span
-                      className="absolute inset-0 rounded-full animate-ping opacity-75"
-                      style={{ backgroundColor: item.accentColor }}
-                    />
-                  </span>
-                )}
-              </div>
-
-              {/* Message Body */}
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
-                  <span
-                    className="text-[9px] sm:text-[10px] font-bold tracking-wide uppercase px-1.5 py-0.2 rounded-md inline-flex items-center gap-1"
-                    style={{
-                      backgroundColor: item.badgeBg,
-                      color: item.badgeColor,
-                      border: `1px solid ${item.badgeBorder}`,
-                    }}
-                  >
-                    {item.badgeCategory}
-                  </span>
-
-                  <span
-                    className="text-[9px] sm:text-[10px] font-medium"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    {item.badgeSubText}
-                  </span>
-
-                  {/* Priority indicator when in a stacked deck */}
-                  {isMultiBanner && (
-                    <span
-                      className={`text-[8px] sm:text-[9px] font-bold px-1.5 py-0.2 rounded uppercase tracking-wide ${
-                        item.isSystemAuto
-                          ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30'
-                          : 'bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/30'
-                      }`}
-                    >
-                      {safeFrontIndex === 0 ? '1/2 • Aktif' : '2/2 • Aktif'}
-                    </span>
-                  )}
-                </div>
-
-                {/* Headline */}
-                {item.headline && (
-                  <h4
-                    className="text-xs sm:text-[13px] font-bold tracking-tight mb-0.5 leading-snug"
-                    style={{ color: 'var(--text-main)' }}
-                  >
-                    {item.headline}
-                  </h4>
-                )}
-
-                {/* Body message with inline "read more..." toggle */}
-                <p
-                  className="text-[11px] sm:text-xs font-medium leading-relaxed break-words"
-                  style={{ color: 'var(--text-main)' }}
-                >
-                  <span>{displayText}</span>
-                  {hasTruncatedText && (
-                    <button
-                      type="button"
-                      id={`btn-readmore-${item.id}`}
-                      onClick={(e) => toggleTextExpand(item.id, e)}
-                      className="inline-flex items-center gap-0.5 ml-1.5 font-bold text-[10px] sm:text-[11px] text-accent hover:underline focus:outline-none cursor-pointer select-none transition-colors"
-                      title={isTextExpanded ? 'Ringkas pesan' : 'Lihat pesan lengkap'}
-                    >
-                      <span>{isTextExpanded ? 'ringkas' : 'read more..'}</span>
-                      {isTextExpanded ? (
-                        <ChevronUp className="w-2.5 h-2.5 opacity-90" />
-                      ) : (
-                        <ChevronDown className="w-2.5 h-2.5 opacity-90" />
-                      )}
-                    </button>
-                  )}
-                </p>
-
-                {/* Action Link (e.g. /status for system alerts) */}
-                {item.actionUrl && (
-                  <div className="mt-1.5 pt-1.5 border-t border-[var(--border-subtle)] flex items-center justify-between gap-2">
-                    <a
-                      href={item.actionUrl}
-                      id={`link-${item.id}-status`}
-                      className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-semibold hover:underline focus:outline-none rounded transition-colors"
-                      style={{ color: item.badgeColor }}
-                    >
-                      <span>{item.actionLabel || 'Lihat Status Server'}</span>
-                      <ExternalLink className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
-                    </a>
-                    <span className="text-[9px] sm:text-[10px] opacity-50" style={{ color: 'var(--text-muted)' }}>
-                      Pembaruan real-time
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Top-Right Controls: iOS Stack Switcher & Dismiss Button */}
-            <div className="flex items-center gap-1.5 shrink-0">
-              {/* iOS Deck Swap Button */}
-              {isMultiBanner && (
-                <button
-                  type="button"
-                  id="btn-ios-stack-swap-top"
-                  onClick={handleSwap}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 sm:py-1 rounded-lg text-[10px] font-bold tracking-tight transition-all duration-200 active:scale-95 cursor-pointer shadow-sm hover:brightness-110 select-none"
-                  style={{
-                    backgroundColor: 'var(--surface-secondary)',
-                    color: 'var(--text-main)',
-                    border: '1px solid var(--border-subtle)',
-                  }}
-                  title="Ketuk untuk menukar posisi banner (ala iOS)"
-                >
-                  <Layers className="w-3 h-3 text-accent" />
-                  <span>{safeFrontIndex + 1}/2</span>
-                  <ArrowUpDown className="w-2.5 h-2.5 opacity-75" />
-                </button>
-              )}
-
-              {/* Dismiss Button (for dismissible custom announcement) */}
-              {item.dismissible && item.onDismiss && (
-                <button
-                  type="button"
-                  id={`btn-dismiss-${item.id}`}
-                  onClick={item.onDismiss}
-                  className="p-1 sm:p-1.5 rounded-lg text-muted-foreground hover:text-foreground transition-all duration-200 shrink-0 cursor-pointer focus:outline-none focus:ring-1 focus:ring-accent/40 active:scale-95"
-                  style={{
-                    backgroundColor: 'var(--surface-secondary)',
-                    color: 'var(--text-muted)',
-                    border: '1px solid var(--border-subtle)',
-                  }}
-                  title="Tutup pengumuman ini"
-                  aria-label="Tutup pengumuman ini"
-                >
-                  <X className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </motion.div>
-    );
+  const handleDismissItem = (id: string, _direction: 'left' | 'right') => {
+    setLocallyDismissedIds((prev) => ({ ...prev, [id]: true }));
+    if (id === 'custom-admin-announcement') {
+      onDismiss();
+    }
+    // Automatically reset frontIndex to 0 so remaining banner smoothly takes front
+    setFrontIndex(0);
   };
 
   return (
@@ -405,28 +578,60 @@ export const AnnouncementBanner: React.FC<AnnouncementBannerProps> = ({
     >
       {!isMultiBanner ? (
         /* =================================================================
-         * SCENARIO 1: SINGLE BANNER (Clean Standalone Card)
+         * SCENARIO 1: SINGLE BANNER (Interactive Card with Swipe Gestures)
          * ================================================================= */
-        renderFrontCard(activeBanners[0])
+        <BannerFrontCard
+          item={activeBanners[0]}
+          isMultiBanner={false}
+          safeFrontIndex={0}
+          onSwap={handleSwap}
+          onDismissItem={handleDismissItem}
+          isTextExpanded={Boolean(expandedTextIds[activeBanners[0].id])}
+          onToggleExpand={toggleTextExpand}
+        />
       ) : (
         /* =================================================================
-         * SCENARIO 2: TRUE iOS STACKED BANNER DECK
-         * Compact, layered cards where tapping the peeking back card
-         * smoothly promotes it to the front position with spring physics!
+         * SCENARIO 2: TRUE iOS STACKED BANNER DECK WITH TOUCH GESTURES
+         * Compact, layered cards where tapping/swiping the peeking card
+         * smoothly promotes it to the front position, and swiping the front card
+         * either dismisses it or swaps with spring physics!
          * ================================================================= */
         <div className="relative select-none">
           {/* Top Layer: Active Front Banner */}
           <div className="relative z-20">
             <AnimatePresence mode="wait" initial={false}>
-              {renderFrontCard(frontItem)}
+              <BannerFrontCard
+                key={`front-stack-${frontItem.id}`}
+                item={frontItem}
+                isMultiBanner={true}
+                safeFrontIndex={safeFrontIndex}
+                onSwap={handleSwap}
+                onDismissItem={handleDismissItem}
+                isTextExpanded={Boolean(expandedTextIds[frontItem.id])}
+                onToggleExpand={toggleTextExpand}
+              />
             </AnimatePresence>
           </div>
 
-          {/* Peeking Layer: Back Card (Clickable to Promote to Front) */}
+          {/* Peeking Layer: Back Card (Tap or swipe up to promote to Front) */}
           {backItem && (
             <AnimatePresence mode="wait" initial={false}>
               <motion.div
                 key={`back-${backItem.id}`}
+                drag="y"
+                dragConstraints={{ top: 0, bottom: 0 }}
+                dragElastic={0.25}
+                dragSnapToOrigin={true}
+                onDragEnd={(_, info) => {
+                  if (info.offset.y < -15 || info.velocity.y < -200) {
+                    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+                      try {
+                        navigator.vibrate(8);
+                      } catch {}
+                    }
+                    handleSwap();
+                  }
+                }}
                 initial={{ opacity: 0.6, y: -10, scale: 0.99 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 12, scale: 0.96 }}
@@ -446,14 +651,14 @@ export const AnnouncementBanner: React.FC<AnnouncementBannerProps> = ({
                     handleSwap();
                   }
                 }}
-                className="relative z-10 -mt-2 sm:-mt-2.5 mx-auto w-[96%] rounded-b-xl pt-3 pb-2.5 px-3 sm:px-3.5 backdrop-blur-md cursor-pointer transition-all duration-200 group flex items-center justify-between gap-2.5 select-none hover:translate-y-0.5 active:scale-[0.985]"
+                className="relative z-10 -mt-2 sm:-mt-2.5 mx-auto w-[96%] rounded-b-xl pt-3 pb-2.5 px-3 sm:px-3.5 backdrop-blur-md cursor-pointer transition-all duration-200 group flex items-center justify-between gap-2.5 select-none hover:translate-y-0.5 active:scale-[0.985] touch-pan-y"
                 style={{
                   backgroundColor: 'var(--surface-primary)',
                   border: `1px solid ${backItem.borderColor}`,
                   borderTop: 'none',
                   boxShadow: '0 8px 20px -4px rgba(0, 0, 0, 0.28)',
                 }}
-                title="Ketuk kartu ini untuk menaikkannya ke posisi depan (ala iOS)"
+                title="Ketuk atau geser ke atas untuk menaikkan kartu ini ke posisi depan (ala iOS)"
               >
                 {/* Left: Indicator, Category Badge, and Truncated Message Preview */}
                 <div className="flex items-center gap-2 min-w-0 flex-1 transition-opacity">
@@ -518,4 +723,5 @@ export const AnnouncementBanner: React.FC<AnnouncementBannerProps> = ({
     </aside>
   );
 };
+
 

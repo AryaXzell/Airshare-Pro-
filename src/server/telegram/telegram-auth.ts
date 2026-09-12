@@ -8,6 +8,8 @@ export interface TelegramConfig {
   webhookSecret: string;
 }
 
+let hasLoggedTelegramConfigStatus = false;
+
 /**
  * Parses and returns the Telegram configuration.
  * Disabled by default if either TELEGRAM_BOT_TOKEN or TELEGRAM_ADMIN_USER_IDS is missing.
@@ -27,6 +29,24 @@ export function getTelegramConfig(): TelegramConfig {
     adminUserIds.length > 0 &&
     webhookSecret.length >= 16
   );
+
+  // Diagnostic logging — hanya sekali per cold start, tidak membocorkan nilai penuh secret
+  if (!hasLoggedTelegramConfigStatus) {
+    hasLoggedTelegramConfigStatus = true;
+    console.log('[TELEGRAM_CONFIG_DIAGNOSTIC]', JSON.stringify({
+      botTokenPresent: botToken.length > 0,
+      botTokenLength: botToken.length,
+      botTokenPreview: botToken.length > 0 ? `${botToken.slice(0, 6)}...${botToken.slice(-4)}` : '(kosong)',
+      botTokenLooksValid: /^\d+:[A-Za-z0-9_-]{30,}$/.test(botToken),
+      rawAdminIdsInput: rawIds.length > 0 ? `"${rawIds}"` : '(kosong)',
+      adminUserIdsParsed: adminUserIds,
+      adminUserIdsCount: adminUserIds.length,
+      webhookSecretPresent: webhookSecret.length > 0,
+      webhookSecretLength: webhookSecret.length,
+      webhookSecretMeetsMinimum: webhookSecret.length >= 16,
+      finalEnabled: enabled,
+    }));
+  }
 
   return {
     enabled,

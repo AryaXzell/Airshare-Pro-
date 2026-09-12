@@ -161,18 +161,21 @@ export function useMediaLibrary() {
     setPage(1);
   }, []);
 
-  const removeItem = useCallback(async (id: string): Promise<{ success: boolean }> => {
-    // Delete from server repository
-    let success = false;
-    try {
-      await mediaApiClient.deleteMedia(id);
-      success = true;
-    } catch (err) {
-      console.warn(`Failed to delete media ${id} on server:`, err);
-    }
+  const removeItem = useCallback(
+    async (id: string, options?: { deleteFromServer?: boolean }): Promise<{ success: boolean; deletedFromServer: boolean }> => {
+      const shouldDeleteFromServer = options?.deleteFromServer ?? true;
+      let success = true;
 
-    // Revoke object URL and clean state if deletion succeeded or locally removed
-    if (success) {
+      if (shouldDeleteFromServer) {
+        try {
+          await mediaApiClient.deleteMedia(id);
+        } catch (err) {
+          console.warn(`Failed to delete media ${id} on server:`, err);
+          success = false;
+        }
+      }
+
+      // Always remove from local state (client UI)
       setItems((prev) => {
         const target = prev.find((i) => i.id === id);
         if (target?.blobUrl && target.blobUrl.startsWith('blob:')) {
@@ -191,27 +194,37 @@ export function useMediaLibrary() {
         next.delete(id);
         return next;
       });
-    }
 
-    return { success };
-  }, []);
+      return { success, deletedFromServer: shouldDeleteFromServer };
+    },
+    []
+  );
 
   const removeMultiple = useCallback(
-    async (ids: string[]): Promise<{ succeeded: number; failed: number }> => {
+    async (
+      ids: string[],
+      options?: { deleteFromServer?: boolean }
+    ): Promise<{ succeeded: number; failed: number; deletedFromServer: boolean }> => {
+      const shouldDeleteFromServer = options?.deleteFromServer ?? true;
       let succeeded = 0;
       let failed = 0;
       const successfulIds: string[] = [];
 
-      // Execute server deletions and track per-item outcome
-      for (const id of ids) {
-        try {
-          await mediaApiClient.deleteMedia(id);
-          succeeded++;
-          successfulIds.push(id);
-        } catch (err) {
-          failed++;
-          console.warn(`Failed to delete media ${id}:`, err);
+      if (shouldDeleteFromServer) {
+        // Execute server deletions and track per-item outcome
+        for (const id of ids) {
+          try {
+            await mediaApiClient.deleteMedia(id);
+            succeeded++;
+            successfulIds.push(id);
+          } catch (err) {
+            failed++;
+            console.warn(`Failed to delete media ${id}:`, err);
+          }
         }
+      } else {
+        succeeded = ids.length;
+        successfulIds.push(...ids);
       }
 
       if (successfulIds.length > 0) {
@@ -237,18 +250,28 @@ export function useMediaLibrary() {
         });
       }
 
-      return { succeeded, failed };
+      return { succeeded, failed, deletedFromServer: shouldDeleteFromServer };
     },
     []
   );
 
-  const clearAll = useCallback(async (): Promise<{ succeeded: number; failed: number }> => {
-    let succeeded = 0;
-    let failed = 0;
+  const clearAll = useCallback(
+    async (options?: { deleteFromServer?: boolean }): Promise<{ succeeded: number; failed: number; deletedFromServer: boolean }> => {
+      const shouldDeleteFromServer = options?.deleteFromServer ?? true;
+      let succeeded = 0;
+      let failed = 0;
 
-    try {
-      await mediaApiClient.clearAll();
-      succeeded = items.length;
+      if (shouldDeleteFromServer) {
+        try {
+          await mediaApiClient.clearAll();
+          succeeded = items.length;
+        } catch (err) {
+          failed = items.length || 1;
+          console.warn('Failed to clear all media on server:', err);
+        }
+      } else {
+        succeeded = items.length;
+      }
 
       setItems((prev) => {
         prev.forEach((item) => {
@@ -264,13 +287,11 @@ export function useMediaLibrary() {
       });
 
       setSelectedIds(new Set());
-    } catch (err) {
-      failed = items.length || 1;
-      console.warn('Failed to clear all media on server:', err);
-    }
 
-    return { succeeded, failed };
-  }, [items.length]);
+      return { succeeded, failed, deletedFromServer: shouldDeleteFromServer };
+    },
+    [items.length]
+  );
 
   // Multi-selection helpers
   const toggleSelect = useCallback((id: string) => {

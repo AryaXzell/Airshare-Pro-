@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { FolderArchive, SearchX, Trash2, ChevronDown, CheckSquare, Square } from 'lucide-react';
+import { SearchX, Trash2, ChevronDown, CheckSquare, Square } from 'lucide-react';
 import { MediaCard } from './MediaCard';
 import { MediaFilter } from './MediaFilter';
 import { BulkActionBar } from './BulkActionBar';
 import { MediaDetailModal } from './MediaDetailModal';
+import { MediaLibraryEmptyState } from './MediaLibraryEmptyState';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { MediaItem, MediaType, SortOption, ViewMode } from '../../types';
 import { getPublicShareUrl } from '../../lib/utils';
@@ -28,9 +29,10 @@ interface MediaLibraryProps {
   onSelectAllVisible: (ids: string[]) => void;
   onClearSelection: () => void;
   onPreviewItem: (item: MediaItem) => void;
-  onDeleteItem: (id: string) => Promise<{ success: boolean }> | void;
-  onDeleteMultiple: (ids: string[]) => Promise<{ succeeded: number; failed: number }> | void;
-  onClearAll: () => Promise<{ succeeded: number; failed: number }> | void;
+  onDeleteItem: (id: string, options?: { deleteFromServer?: boolean }) => Promise<{ success: boolean; deletedFromServer?: boolean }> | void;
+  onDeleteMultiple: (ids: string[], options?: { deleteFromServer?: boolean }) => Promise<{ succeeded: number; failed: number; deletedFromServer?: boolean }> | void;
+  onClearAll: (options?: { deleteFromServer?: boolean }) => Promise<{ succeeded: number; failed: number; deletedFromServer?: boolean }> | void;
+  onRequestUpload?: () => void;
   onToast: (
     msg: string,
     options?: {
@@ -63,12 +65,14 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
   onDeleteItem,
   onDeleteMultiple,
   onClearAll,
+  onRequestUpload,
   onToast,
 }) => {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<string | null>(null);
   const [inspectingItem, setInspectingItem] = useState<MediaItem | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteFromServer, setDeleteFromServer] = useState(true);
 
   const visibleIds = filteredItems.map((item) => item.id);
   const allVisibleSelected =
@@ -78,17 +82,22 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
     if (isDeleting) return;
     setIsDeleting(true);
     try {
-      const result = await onClearAll();
+      const result = await onClearAll({ deleteFromServer });
       setShowClearConfirm(false);
-      if (result && result.failed > 0 && result.succeeded === 0) {
+      if (result && result.failed > 0 && result.succeeded === 0 && deleteFromServer) {
         onToast('Gagal membersihkan riwayat dari server.', {
           type: 'error',
           description: 'Terjadi kesalahan saat menghubungi server. Silakan coba lagi.',
         });
       } else {
-        onToast('Semua riwayat berkas dibersihkan dari server.', {
-          type: 'success',
-        });
+        onToast(
+          deleteFromServer
+            ? 'Semua riwayat berkas dan penyimpanan dibersihkan dari server.'
+            : 'Semua berkas dibersihkan dari sesi lokal (tetap tersimpan di server).',
+          {
+            type: 'success',
+          }
+        );
       }
     } finally {
       setIsDeleting(false);
@@ -100,35 +109,45 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
     const id = itemToDelete;
     setIsDeleting(true);
     try {
-      const result = await onDeleteItem(id);
+      const result = await onDeleteItem(id, { deleteFromServer });
       setItemToDelete(null);
-      if (result && !result.success) {
+      if (result && !result.success && deleteFromServer) {
         onToast('Gagal menghapus berkas dari server.', {
           type: 'error',
           description: 'Periksa koneksi internet Anda dan coba lagi.',
         });
       } else {
-        onToast('Berkas berhasil dihapus dari riwayat.', {
-          type: 'success',
-        });
+        onToast(
+          deleteFromServer
+            ? 'Berkas berhasil dihapus dari server dan riwayat.'
+            : 'Berkas dihapus dari sesi lokal Anda (tetap ada di server).',
+          {
+            type: 'success',
+          }
+        );
       }
     } finally {
       setIsDeleting(false);
     }
   };
 
-  const handleDeleteSelected = async () => {
+  const handleDeleteSelected = async (fromServer: boolean = deleteFromServer) => {
     if (isDeleting) return;
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
     setIsDeleting(true);
     try {
-      const result = await onDeleteMultiple(ids);
+      const result = await onDeleteMultiple(ids, { deleteFromServer: fromServer });
       if (result) {
         if (result.failed === 0) {
-          onToast(`${result.succeeded} berkas berhasil dihapus dari riwayat.`, {
-            type: 'success',
-          });
+          onToast(
+            fromServer
+              ? `${result.succeeded} berkas berhasil dihapus dari server dan riwayat.`
+              : `${result.succeeded} berkas dihapus dari sesi lokal Anda.`,
+            {
+              type: 'success',
+            }
+          );
         } else if (result.succeeded > 0) {
           onToast(
             `${result.succeeded} berkas dihapus, tetapi ${result.failed} berkas gagal dihapus dari server.`,
@@ -245,38 +264,7 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
 
       {/* Empty State: No items uploaded yet */}
       {items.length === 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="rounded-[2rem] py-12 px-6 border-2 border-dashed flex flex-col items-center justify-center text-center transition-all"
-          style={{
-            borderColor: 'var(--border-subtle)',
-            backgroundColor: 'var(--surface-secondary)',
-          }}
-        >
-          <div
-            className="p-3.5 rounded-2xl mb-3 flex items-center justify-center border"
-            style={{
-              backgroundColor: 'var(--surface-elevated)',
-              borderColor: 'var(--border-subtle)',
-            }}
-          >
-            <FolderArchive className="w-6 h-6 opacity-40" />
-          </div>
-          <h3
-            className="text-sm font-extrabold mb-1"
-            style={{ color: 'var(--text-main)' }}
-          >
-            Belum Ada Media Terunggah
-          </h3>
-          <p
-            className="text-xs font-medium max-w-xs leading-relaxed"
-            style={{ color: 'var(--text-muted)' }}
-          >
-            Media yang Anda unggah akan tersimpan di pustaka ini untuk kemudahan
-            akses, filter, dan pratinjau instan.
-          </p>
-        </motion.div>
+        <MediaLibraryEmptyState onRequestUpload={onRequestUpload} />
       )}
 
       {/* Empty State: Search/filter query matches nothing */}
@@ -314,13 +302,14 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
       {filteredItems.length > 0 && (
         <div className="space-y-4">
           <div
-            className={
+            key={viewMode}
+            className={`relative ${
               viewMode === 'grid'
                 ? 'grid grid-cols-2 gap-3 sm:grid-cols-3'
                 : 'grid grid-cols-1 gap-2.5 sm:grid-cols-2'
-            }
+            }`}
           >
-            <AnimatePresence>
+            <AnimatePresence mode="popLayout" initial={false}>
               {filteredItems.map((item) => (
                 <MediaCard
                   key={item.id}
@@ -388,11 +377,20 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
       <ConfirmDialog
         isOpen={showClearConfirm}
         title="Bersihkan Semua Riwayat?"
-        description="Semua catatan riwayat berkas akan dihapus dari server aplikasi. Berkas yang tersimpan di Catbox tetap dapat diakses via tautan aslinya."
+        description={
+          deleteFromServer
+            ? 'Semua catatan riwayat dan berkas akan dibersihkan permanen dari server aplikasi & Catbox.'
+            : 'Semua berkas akan dibersihkan dari sesi lokal Anda (berkas tetap tersimpan di server).'
+        }
         confirmLabel="Ya, Bersihkan"
         cancelLabel="Batal"
         isDestructive={true}
         isLoading={isDeleting}
+        showServerToggle={true}
+        serverToggleLabel="Hapus di sisi server juga?"
+        serverToggleDescription="Hapus semua berkas dari server & Catbox."
+        deleteFromServer={deleteFromServer}
+        onServerToggleChange={setDeleteFromServer}
         onConfirm={handleConfirmClear}
         onCancel={() => !isDeleting && setShowClearConfirm(false)}
       />
@@ -401,11 +399,20 @@ export const MediaLibrary: React.FC<MediaLibraryProps> = ({
       <ConfirmDialog
         isOpen={itemToDelete !== null}
         title="Hapus Media dari Riwayat?"
-        description="Tautan ini akan dihapus dari riwayat server dan daftar media Anda."
+        description={
+          deleteFromServer
+            ? 'Tautan dan berkas akan dihapus permanen dari server dan penyimpanan Catbox.'
+            : 'Tautan hanya akan dihapus dari sesi lokal Anda (tetap tersimpan di server).'
+        }
         confirmLabel="Hapus"
         cancelLabel="Batal"
         isDestructive={true}
         isLoading={isDeleting}
+        showServerToggle={true}
+        serverToggleLabel="Hapus di sisi server juga?"
+        serverToggleDescription="Hapus berkas dari server & Catbox."
+        deleteFromServer={deleteFromServer}
+        onServerToggleChange={setDeleteFromServer}
         onConfirm={handleConfirmSingleDelete}
         onCancel={() => !isDeleting && setItemToDelete(null)}
       />

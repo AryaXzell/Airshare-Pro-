@@ -219,11 +219,23 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
   if (viewMode === 'grid') {
     return (
       <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
+        layout="position"
+        initial={{ opacity: 0, scale: 0.98 }}
         animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        transition={{ duration: 0.15 }}
-        className="media-card-grid clean-surface rounded-[1.8rem] p-3 flex flex-col justify-between transition-all group relative border"
+        exit={{
+          opacity: 0,
+          scale: 0.9,
+          transition: { duration: 0.15, ease: 'easeOut' },
+        }}
+        transition={{
+          layout: {
+            duration: 0.22,
+            ease: [0.25, 1, 0.5, 1],
+          },
+          opacity: { duration: 0.18 },
+          scale: { duration: 0.18 },
+        }}
+        className="media-card-grid clean-surface rounded-[1.8rem] p-3 flex flex-col justify-between group relative border transition-[border-color,box-shadow,background-color] duration-200"
         style={{
           backgroundColor: isSelected ? 'var(--surface-elevated)' : 'var(--surface-primary)',
           borderColor: isSelected ? 'var(--accent)' : 'var(--border-subtle)',
@@ -337,11 +349,23 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
   // ================= LIST VIEW =================
   return (
     <motion.div
-      initial={{ opacity: 0, scale: 0.97 }}
+      layout="position"
+      initial={{ opacity: 0, scale: 0.98 }}
       animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.95 }}
-      transition={{ duration: 0.15 }}
-      className="media-card-list clean-surface rounded-[1.6rem] sm:rounded-[1.8rem] p-3 sm:p-3.5 flex items-center justify-between space-x-3 transition-all group border"
+      exit={{
+        opacity: 0,
+        scale: 0.9,
+        transition: { duration: 0.15, ease: 'easeOut' },
+      }}
+      transition={{
+        layout: {
+          duration: 0.22,
+          ease: [0.25, 1, 0.5, 1],
+        },
+        opacity: { duration: 0.18 },
+        scale: { duration: 0.18 },
+      }}
+      className="media-card-list clean-surface rounded-[1.6rem] sm:rounded-[1.8rem] p-3 sm:p-3.5 flex items-center justify-between space-x-3 group border transition-[border-color,box-shadow,background-color] duration-200"
       style={{
         backgroundColor: isSelected ? 'var(--surface-elevated)' : 'var(--surface-primary)',
         borderColor: isSelected ? 'var(--accent)' : 'var(--border-subtle)',

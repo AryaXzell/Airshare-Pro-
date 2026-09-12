@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { AlertCircle } from 'lucide-react';
 
-interface ConfirmDialogProps {
+export interface ConfirmDialogProps {
   isOpen: boolean;
   title: string;
   description: string;
@@ -10,6 +10,11 @@ interface ConfirmDialogProps {
   cancelLabel?: string;
   isDestructive?: boolean;
   isLoading?: boolean;
+  showServerToggle?: boolean;
+  serverToggleLabel?: string;
+  serverToggleDescription?: string;
+  deleteFromServer?: boolean;
+  onServerToggleChange?: (checked: boolean) => void;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -22,6 +27,11 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   cancelLabel = 'Batal',
   isDestructive = false,
   isLoading = false,
+  showServerToggle = false,
+  serverToggleLabel,
+  serverToggleDescription,
+  deleteFromServer = true,
+  onServerToggleChange,
   onConfirm,
   onCancel,
 }) => {
@@ -142,11 +152,51 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             </h3>
             <p
               id="confirm-dialog-desc"
-              className="text-xs opacity-70 leading-relaxed mb-5"
+              className="text-xs opacity-70 leading-relaxed mb-4"
               style={{ color: 'var(--text-muted)' }}
             >
               {description}
             </p>
+
+            {showServerToggle && (
+              <div
+                className="mb-5 p-3.5 rounded-2xl border text-left flex items-center justify-between gap-3 transition-colors"
+                style={{
+                  backgroundColor: 'var(--surface-primary)',
+                  borderColor: 'var(--border-subtle)',
+                }}
+              >
+                <div className="flex-1 min-w-0 pr-1">
+                  <p className="text-xs font-bold leading-tight" style={{ color: 'var(--text-main)' }}>
+                    {serverToggleLabel || 'Hapus di sisi server juga?'}
+                  </p>
+                  <p className="text-[11px] font-medium leading-normal mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                    {deleteFromServer
+                      ? (serverToggleDescription || 'Berkas permanen dihapus dari server dan Catbox.')
+                      : 'Berkas hanya dihapus dari sesi lokal Anda (tetap ada di server).'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={deleteFromServer}
+                  onClick={() => onServerToggleChange?.(!deleteFromServer)}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
+                    deleteFromServer
+                      ? (isDestructive ? 'bg-rose-500' : 'bg-blue-600')
+                      : 'bg-neutral-300 dark:bg-neutral-700'
+                  }`}
+                  aria-label={serverToggleLabel || 'Hapus di sisi server juga?'}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                      deleteFromServer ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-2.5">
               <button

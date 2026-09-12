@@ -22,7 +22,10 @@ export async function sendTelegramMessage(
   htmlText: string
 ): Promise<boolean> {
   const { enabled, botToken } = getTelegramConfig();
-  if (!enabled || !botToken) return false;
+  if (!enabled || !botToken) {
+    console.warn(`[TELEGRAM_NOTIFIER] Pesan ke chat ${chatId} DIBATALKAN karena integrasi tidak aktif (enabled=${enabled}, botTokenPresent=${Boolean(botToken)}).`);
+    return false;
+  }
 
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
 

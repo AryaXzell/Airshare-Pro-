@@ -11,7 +11,7 @@ interface BulkActionBarProps {
   allVisibleSelected: boolean;
   onSelectAllVisible: () => void;
   onClearSelection: () => void;
-  onDeleteSelected: () => void;
+  onDeleteSelected: (deleteFromServer?: boolean) => void;
   getSelectedUrls: () => string[];
   onToast: ToastFunction;
 }
@@ -28,6 +28,7 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
 }) => {
   const [copied, setCopied] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [deleteFromServer, setDeleteFromServer] = useState(true);
   const shouldReduceMotion = useReducedMotion();
   const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -162,12 +163,21 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
       <ConfirmDialog
         isOpen={showConfirm}
         title={`Hapus ${displayCount} Media Terpilih?`}
-        description="Berkas yang dipilih akan dihapus dari daftar riwayat server aplikasi."
+        description={
+          deleteFromServer
+            ? 'Berkas yang dipilih akan dihapus permanen dari server dan penyimpanan Catbox.'
+            : 'Berkas yang dipilih hanya akan dihapus dari sesi lokal Anda (tetap ada di server).'
+        }
         confirmLabel={`Hapus ${displayCount} Berkas`}
         cancelLabel="Batal"
         isDestructive={true}
+        showServerToggle={true}
+        serverToggleLabel="Hapus di sisi server juga?"
+        serverToggleDescription="Hapus berkas terpilih dari penyimpanan Catbox & server."
+        deleteFromServer={deleteFromServer}
+        onServerToggleChange={setDeleteFromServer}
         onConfirm={() => {
-          onDeleteSelected();
+          onDeleteSelected(deleteFromServer);
           setShowConfirm(false);
         }}
         onCancel={() => setShowConfirm(false)}

@@ -16,7 +16,7 @@ export class CatboxStorageProvider implements StorageProvider {
     const configuredTimeout = options?.timeoutMs || parseInt(process.env.CATBOX_TIMEOUT_MS || `${defaultTimeout}`, 10);
     // On Vercel, cap timeout at 40s to guarantee the server responds before Vercel 60s hard kill
     this.timeoutMs = process.env.VERCEL ? Math.min(configuredTimeout, 40000) : configuredTimeout;
-    this.maxRetries = options?.maxRetries ?? (process.env.VERCEL ? 1 : 2);
+    this.maxRetries = options?.maxRetries ?? 2;
   }
 
   /**
@@ -87,8 +87,8 @@ export class CatboxStorageProvider implements StorageProvider {
           // ignore
         }
 
-        // Distinguish non-retryable 4xx errors vs retryable 5xx errors
-        const isTransient = response.status >= 500 && response.status < 600;
+        // Distinguish non-retryable 4xx errors vs retryable 5xx/429/408 errors
+        const isTransient = response.status >= 500 || response.status === 429 || response.status === 408;
         let errorMessage = `Catbox HTTP ${response.status}: ${bodyText || response.statusText || 'Gagal memproses berkas'}`;
         if (bodyText.includes('Invalid uploader')) {
           errorMessage = 'Catbox menolak unggahan anonim dari server cloud (Invalid uploader). Harap konfigurasikan CATBOX_USERHASH di Environment Variables Vercel Anda untuk menghubungkan akun Catbox resmi.';
@@ -107,9 +107,16 @@ export class CatboxStorageProvider implements StorageProvider {
         !trimmedResult.startsWith('http://') &&
         !trimmedResult.startsWith('https://')
       ) {
-        // Catbox returned an error string like "File is too large" or "Invalid userhash"
+        // Classify whether Catbox provider error is permanent vs transient
+        const lowerResult = trimmedResult.toLowerCase();
+        const isPermanent =
+          lowerResult.includes('file is too large') ||
+          lowerResult.includes('extension not allowed') ||
+          lowerResult.includes('file type not allowed') ||
+          lowerResult.includes('banned');
+
         const err = new Error(`Catbox provider: ${trimmedResult}`);
-        (err as unknown as { isTransient: boolean }).isTransient = false;
+        (err as unknown as { isTransient: boolean }).isTransient = !isPermanent;
         throw err;
       }
 
@@ -130,8 +137,11 @@ export class CatboxStorageProvider implements StorageProvider {
         const timeoutErr = new Error(
           `Unggahan ke Catbox melebihi batas waktu (${this.timeoutMs / 1000}s). Server upstream sedang lambat atau berkas terlalu besar untuk diproses dalam batas waktu serverless.`
         );
-        (timeoutErr as unknown as { isTransient: boolean }).isTransient = false;
+        (timeoutErr as unknown as { isTransient: boolean }).isTransient = true;
         throw timeoutErr;
+      }
+      if (err && typeof err === 'object' && !('isTransient' in err)) {
+        (err as unknown as { isTransient: boolean }).isTransient = true;
       }
       throw err;
     }
