@@ -7,7 +7,7 @@
   </url>
   <url>
     <loc>https://airshare-pro.vercel.app/status</loc>
-    <changefreq>hourly</changefreq>
-    <priority>0.8</priority>
+    <changefreq>daily</changefreq>
+    <priority>0.5</priority>
   </url>
 </urlset>

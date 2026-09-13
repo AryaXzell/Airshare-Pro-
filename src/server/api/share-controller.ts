@@ -1246,7 +1246,7 @@ export class ShareController {
       </div>`;
     } else if (isPdf) {
       ogType = 'website';
-      const defaultOgImage = `${protocol}://${host}/og-image.svg`;
+      const defaultOgImage = `${protocol}://${host}/og-image.png`;
       ogMediaTag = `<meta property="og:image" content="${defaultOgImage}" />
   <meta name="twitter:card" content="summary" />`;
       previewTag = `
@@ -1269,13 +1269,13 @@ export class ShareController {
       </div>`;
     } else if (hasCodePreview) {
       ogType = 'website';
-      const defaultOgImage = `${protocol}://${host}/og-image.svg`;
+      const defaultOgImage = `${protocol}://${host}/og-image.png`;
       ogMediaTag = `<meta property="og:image" content="${defaultOgImage}" />
   <meta name="twitter:card" content="summary" />`;
       previewTag = codePreviewHtml;
     } else if (isFile) {
       ogType = 'website';
-      const defaultOgImage = `${protocol}://${host}/og-image.svg`;
+      const defaultOgImage = `${protocol}://${host}/og-image.png`;
       ogMediaTag = `<meta property="og:image" content="${defaultOgImage}" />
   <meta name="twitter:card" content="summary" />`;
       const fileIcon = getFileCategoryIcon(item.mimeType, item.name);

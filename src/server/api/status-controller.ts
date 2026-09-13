@@ -250,14 +250,14 @@ export const statusController = {
   <meta property="og:description" content="Pantau status operasional real-time layanan AirShare Pro, ketersediaan penyimpanan cloud Catbox, database Redis, uptime server, dan performa jaringan.">
   <meta property="og:site_name" content="AirShare Pro">
   <meta property="og:locale" content="id_ID">
-  <meta property="og:image" content="${siteRootUrl}vite.svg">
+  <meta property="og:image" content="${siteRootUrl}og-image.png">
 
   <!-- Twitter Meta Tags -->
   <meta name="twitter:card" content="summary">
   <meta name="twitter:url" content="${canonicalUrl}">
   <meta name="twitter:title" content="AirShare Pro — Status Layanan &amp; Kinerja Sistem Real-Time">
   <meta name="twitter:description" content="Pantau status operasional real-time layanan AirShare Pro, ketersediaan penyimpanan cloud Catbox, database Redis, uptime server, dan performa jaringan.">
-  <meta name="twitter:image" content="${siteRootUrl}vite.svg">
+  <meta name="twitter:image" content="${siteRootUrl}og-image.png">
 
   <!-- JSON-LD Structured Data for Search Engines -->
   <script type="application/ld+json">
@@ -286,7 +286,7 @@ export const statusController = {
   }
   </script>
 
-  <link rel="icon" type="image/svg+xml" href="/vite.svg">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
   ${GOOGLE_FONTS_TAGS}
   ${THEME_HEAD_SCRIPT}
   <style>

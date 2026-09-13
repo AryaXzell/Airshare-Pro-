@@ -205,8 +205,8 @@ export function createExpressApp(): Express {
   </url>
   <url>
     <loc>${baseUrl}/status</loc>
-    <changefreq>hourly</changefreq>
-    <priority>0.8</priority>
+    <changefreq>daily</changefreq>
+    <priority>0.5</priority>
   </url>
 </urlset>
 `;

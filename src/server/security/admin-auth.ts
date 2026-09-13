@@ -53,7 +53,7 @@ export function getAdminConfig(): {
   secretKey: string;
 } {
   const rawSecret = process.env.ADMIN_SECRET_KEY?.trim() || '';
-  const isSecretValid = rawSecret.length > 0;
+  const isSecretValid = rawSecret.length >= 16;
 
   if (!isSecretValid) {
     return {

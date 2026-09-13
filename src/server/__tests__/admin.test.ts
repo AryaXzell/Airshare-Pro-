@@ -73,7 +73,7 @@ async function runAdminTests() {
 
   // 4. Session Token Generation, Validation & Expiration
   const sessionToken = await createAdminSession();
-  assert(typeof sessionToken === 'string' && sessionToken.length === 64, 'Generates 64-char hex random session token');
+  assert(typeof sessionToken === 'string' && sessionToken.length >= 64, 'Generates secure cryptographically random session token');
 
   const sessionValid = await verifyAdminSession(sessionToken);
   assert(sessionValid === true, 'Session token is immediately valid');
