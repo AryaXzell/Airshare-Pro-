@@ -1,6 +1,6 @@
 /**
- * Single Source of Truth for Dynamic Themes in Server-Side Rendered Pages.
- * Re-exports centralized definition from src/server/admin-html/styles/theme.css.ts.
+ * Re-export theme definitions for Public Share Landing (/s/:id).
+ * Single Source of Truth remains in src/server/admin-html/styles/theme.css.ts.
  */
 export {
   GOOGLE_FONTS_TAGS,
@@ -11,5 +11,4 @@ export {
   getThemeStylesCss,
   getThemeLoaderScript,
   getThemeSyncScript,
-} from '../admin-html/styles/theme.css';
-
+} from '../../admin-html/styles/theme.css';
