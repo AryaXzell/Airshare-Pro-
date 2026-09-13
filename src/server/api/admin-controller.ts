@@ -509,7 +509,7 @@ export const adminController = {
       res.cookie(ADMIN_COOKIE_NAME, sessionToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
+        sameSite: 'lax',
         maxAge: 3600 * 1000, // 1 hour
         path: '/',
       });
@@ -548,16 +548,15 @@ export const adminController = {
       res.clearCookie(ADMIN_COOKIE_NAME, {
         path: '/',
         httpOnly: true,
-        sameSite: 'strict',
+        sameSite: 'lax',
       });
-
       res.redirect(`/${fullAdminPath}/login`);
     } catch (err: unknown) {
       console.error('[HANDLE_LOGOUT_ERROR]', err);
       res.clearCookie(ADMIN_COOKIE_NAME, {
         path: '/',
         httpOnly: true,
-        sameSite: 'strict',
+        sameSite: 'lax',
       });
       res.redirect(`/${fullAdminPath}/login`);
     }
@@ -693,7 +692,7 @@ export const adminController = {
       min-height: 100vh;
       transition: background-color 0.25s ease, color 0.25s ease;
     }
-    .container { max-width: 1280px; margin: 0 auto; }
+    .container { max-width: 1280px; width: 100%; margin: 0 auto; }
 
     /* Header & Navigation */
     .top-nav {
@@ -855,6 +854,7 @@ export const adminController = {
     .admin-main {
       flex: 1;
       min-width: 0;
+      width: 100%;
     }
 
     /* Mobile Category Tabs */
@@ -1010,6 +1010,9 @@ export const adminController = {
       box-shadow: var(--shadow-subtle);
       position: relative;
       overflow: hidden;
+      overflow-wrap: break-word;
+      word-break: break-word;
+      max-width: 100%;
     }
     .ai-rec-box::before {
       content: '';
@@ -1127,6 +1130,14 @@ export const adminController = {
       line-height: 1.65;
       color: var(--text-main);
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+      overflow-wrap: break-word;
+      word-break: break-word;
+      max-width: 100%;
+    }
+    #ai-rec-summary-text {
+      overflow-wrap: break-word;
+      word-break: break-word;
+      max-width: 100%;
     }
     .ai-summary-label {
       font-size: 0.75rem;
@@ -1161,6 +1172,9 @@ export const adminController = {
       padding: 0.75rem 0.95rem;
       border-radius: 8px;
       transition: background 0.15s ease;
+      overflow-wrap: break-word;
+      word-break: break-word;
+      max-width: 100%;
     }
     .ai-list-item:hover {
       background: var(--surface-hover);
@@ -1189,6 +1203,9 @@ export const adminController = {
       flex: 1;
       min-width: 0;
       color: var(--text-main);
+      overflow-wrap: break-word;
+      word-break: break-word;
+      max-width: 100%;
     }
     .ai-bold {
       font-weight: 700;
@@ -1208,6 +1225,10 @@ export const adminController = {
       padding: 0.15rem 0.45rem;
       border-radius: 4px;
       border: 1px solid var(--border-subtle);
+      overflow-wrap: break-word;
+      word-break: break-all;
+      max-width: 100%;
+      display: inline-block;
     }
     .ai-heading-3 {
       font-size: 0.9rem;
@@ -1286,6 +1307,9 @@ export const adminController = {
       border-radius: 10px;
       padding: 1rem 1.25rem;
       margin-top: 0.5rem;
+      max-width: 100%;
+      overflow-wrap: break-word;
+      word-break: break-word;
     }
     .ai-error-header {
       display: flex;
@@ -1305,6 +1329,9 @@ export const adminController = {
       line-height: 1.5;
       margin-bottom: 0.85rem;
       opacity: 0.9;
+      overflow-wrap: break-word;
+      word-break: break-word;
+      max-width: 100%;
     }
     .ai-error-actions {
       display: flex;
@@ -1665,6 +1692,12 @@ export const adminController = {
     .status-ok { background: var(--success); box-shadow: 0 0 6px var(--success); }
     .status-warn { background: var(--warning); box-shadow: 0 0 6px var(--warning); }
 
+    #admin-toast-banner {
+      overflow-wrap: break-word;
+      word-break: break-word;
+      max-width: 100%;
+    }
+
     /* Media Queries */
     @media (max-width: 900px) {
       .admin-layout {
@@ -1672,6 +1705,9 @@ export const adminController = {
       }
       .admin-sidebar {
         display: none;
+      }
+      .admin-main {
+        width: 100%;
       }
       .admin-mobile-tabs {
         display: flex;
@@ -2747,10 +2783,11 @@ export const adminController = {
         toast.innerHTML = '';
         const msgSpan = document.createElement('span');
         msgSpan.textContent = msg;
+        msgSpan.style.cssText = 'overflow-wrap: break-word; word-break: break-word; max-width: 100%; min-width: 0; flex: 1;';
         const closeBtn = document.createElement('button');
         closeBtn.type = 'button';
         closeBtn.innerHTML = '&times;';
-        closeBtn.style.cssText = 'background:none; border:none; color:inherit; font-size:1.1rem; cursor:pointer; padding:0 0.5rem;';
+        closeBtn.style.cssText = 'background:none; border:none; color:inherit; font-size:1.1rem; cursor:pointer; padding:0 0.5rem; flex-shrink: 0;';
         closeBtn.addEventListener('click', function() {
           toast.style.display = 'none';
         });

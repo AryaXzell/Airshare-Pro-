@@ -53,7 +53,7 @@ export function getAdminConfig(): {
   secretKey: string;
 } {
   const rawSecret = process.env.ADMIN_SECRET_KEY?.trim() || '';
-  const isSecretValid = rawSecret.length >= 16;
+  const isSecretValid = rawSecret.length > 0;
 
   if (!isSecretValid) {
     return {
@@ -68,6 +68,24 @@ export function getAdminConfig(): {
     panelPath: ADMIN_PANEL_PATH,
     secretKey: rawSecret,
   };
+}
+
+/**
+ * Generates an HMAC-SHA256 signature for stateless session validation across serverless instances.
+ */
+function generateSessionHmac(data: string, secret: string): string {
+  return crypto.createHmac('sha256', secret || 'airshare-admin-salt').update(data).digest('hex');
+}
+
+/**
+ * Constant-time string comparison to prevent timing attacks.
+ */
+function safeEqual(a: string, b: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
 }
 
 /**
@@ -106,10 +124,14 @@ export async function verifyAdminPassword(inputPassword: string): Promise<boolea
 
 /**
  * Creates a cryptographically random admin session token with 1-hour TTL.
+ * Uses HMAC signature to allow stateless verification across distributed Serverless instances.
  */
 export async function createAdminSession(req?: Request): Promise<string> {
-  const token = crypto.randomBytes(32).toString('hex');
+  const rawRandom = crypto.randomBytes(32).toString('hex');
   const now = Date.now();
+  const { secretKey } = getAdminConfig();
+  const hmacSig = generateSessionHmac(`${rawRandom}.${now}`, secretKey);
+  const token = `${rawRandom}_${now}_${hmacSig}`;
   const clientIp = req ? getClientIp(req) : '127.0.0.1';
   const userAgent = (req?.headers['user-agent'] as string) || 'Unknown Client';
 
@@ -128,7 +150,7 @@ export async function createAdminSession(req?: Request): Promise<string> {
       await pipeline.exec();
       return token;
     } catch (err) {
-      console.warn('[ADMIN_SESSION_REDIS_ERROR] Gagal menyimpan sesi admin di Redis, fallback memory:', err);
+      console.warn('[ADMIN_SESSION_REDIS_ERROR] Gagal menyimpan sesi admin di Redis, fallback memory/hmac:', err);
     }
   }
 
@@ -145,6 +167,7 @@ export async function createAdminSession(req?: Request): Promise<string> {
 
 /**
  * Validates whether an admin session token is active and not expired.
+ * Supports Redis distributed state, in-memory cache, and stateless HMAC cryptographic verification.
  */
 export async function verifyAdminSession(token: string): Promise<boolean> {
   if (!token || typeof token !== 'string' || token.length < 32) {
@@ -156,21 +179,42 @@ export async function verifyAdminSession(token: string): Promise<boolean> {
   if (redis) {
     try {
       const val = await redis.get<string>(`admin_session:${token}`);
-      return val === 'valid';
+      if (val === 'valid') return true;
+      if (val === 'revoked') return false;
     } catch (err) {
-      console.warn('[ADMIN_SESSION_REDIS_ERROR] Gagal memverifikasi sesi admin di Redis, fallback memory:', err);
+      console.warn('[ADMIN_SESSION_REDIS_ERROR] Gagal memverifikasi sesi admin di Redis, fallback memory/hmac:', err);
     }
   }
 
+  // 1. Check in-memory session cache
   cleanupMemorySessions();
   const session = inMemoryAdminSessions.get(token);
-  if (!session) return false;
-  if (session.expiresAt <= Date.now()) {
-    inMemoryAdminSessions.delete(token);
-    return false;
+  if (session) {
+    if (session.expiresAt <= Date.now()) {
+      inMemoryAdminSessions.delete(token);
+      return false;
+    }
+    return true;
   }
 
-  return true;
+  // 2. Stateless HMAC cryptographic verification for distributed serverless multi-instance support
+  const parts = token.split('_');
+  if (parts.length === 3) {
+    const [rawRandom, timestampStr, providedSig] = parts;
+    const timestamp = parseInt(timestampStr, 10);
+    if (!isNaN(timestamp)) {
+      const ageMs = Date.now() - timestamp;
+      if (ageMs >= 0 && ageMs <= ADMIN_SESSION_TTL_SECONDS * 1000) {
+        const { secretKey } = getAdminConfig();
+        const expectedSig = generateSessionHmac(`${rawRandom}.${timestampStr}`, secretKey);
+        if (safeEqual(providedSig, expectedSig)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -179,21 +223,20 @@ export async function verifyAdminSession(token: string): Promise<boolean> {
 export async function destroyAdminSession(token: string): Promise<void> {
   if (!token) return;
 
-  const redis = isUpstashConfigured() ? getRedisClient() : null;
+  inMemoryAdminSessions.delete(token);
 
+  const redis = isUpstashConfigured() ? getRedisClient() : null;
   if (redis) {
     try {
       const pipeline = redis.pipeline();
-      pipeline.del(`admin_session:${token}`);
+      pipeline.set(`admin_session:${token}`, 'revoked', { ex: ADMIN_SESSION_TTL_SECONDS });
       pipeline.del(`admin_session_meta:${token}`);
       pipeline.srem('admin_active_sessions', token);
       await pipeline.exec();
     } catch (err) {
-      console.warn('[ADMIN_SESSION_REDIS_ERROR] Gagal menghapus sesi admin dari Redis:', err);
+      console.warn('[ADMIN_SESSION_DESTROY_ERROR] Gagal menghapus sesi dari Redis:', err);
     }
   }
-
-  inMemoryAdminSessions.delete(token);
 }
 
 /**

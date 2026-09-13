@@ -170,7 +170,23 @@ async function runVercelRoutingTests() {
     const adminToken = tokenMatch ? tokenMatch[1] : '';
     console.log('✅ PASS: Vercel /admin/login succeeds and issues admin_auth_token cookie');
 
-    // 17. Test protected admin endpoints via Vercel rewrite with authentication
+    // 17. Test protected admin dashboard via Vercel rewrite with authentication
+    const authDashboardRes = await fetch(`${baseUrl}/api?__vpath=/admin/dashboard`, {
+      headers: { Cookie: `admin_auth_token=${adminToken}` },
+    });
+    assert.strictEqual(authDashboardRes.status, 200, 'Authenticated /admin/dashboard returns 200');
+    const dashboardHtml = await authDashboardRes.text();
+    assert(dashboardHtml.includes('AirShare Pro') && dashboardHtml.includes('admin-layout'), 'Dashboard HTML rendered properly');
+    console.log('✅ PASS: Authenticated Vercel /admin/dashboard returns 200 HTML');
+
+    // 18. Test protected admin dashboard with trailing slash
+    const authDashboardSlashRes = await fetch(`${baseUrl}/api?__vpath=/admin/dashboard/`, {
+      headers: { Cookie: `admin_auth_token=${adminToken}` },
+    });
+    assert.strictEqual(authDashboardSlashRes.status, 200, 'Authenticated /admin/dashboard/ returns 200');
+    console.log('✅ PASS: Authenticated Vercel /admin/dashboard/ (trailing slash) returns 200 HTML');
+
+    // 19. Test protected admin endpoints via Vercel rewrite with authentication
     const authLiveStatsRes = await fetch(`${baseUrl}/api?__vpath=/admin/api/live-stats`, {
       headers: { Cookie: `admin_auth_token=${adminToken}` },
     });
@@ -179,7 +195,7 @@ async function runVercelRoutingTests() {
     assert.strictEqual(liveStatsJson.success, true, 'Live stats returns success: true');
     console.log('✅ PASS: Authenticated Vercel /admin/api/live-stats returns 200 JSON');
 
-    // 18. Test AI recommendations via Vercel rewrite with authentication
+    // 20. Test AI recommendations via Vercel rewrite with authentication
     const authAiRes = await fetch(`${baseUrl}/api?__vpath=/admin/api/ai-recommendations`, {
       method: 'POST',
       headers: { Cookie: `admin_auth_token=${adminToken}` },
@@ -189,7 +205,7 @@ async function runVercelRoutingTests() {
     assert.strictEqual(aiJson.success, true, 'AI recommendations returns success: true');
     console.log('✅ PASS: Authenticated Vercel /admin/api/ai-recommendations returns 200 JSON');
 
-    // 19. Test sync-check via Vercel rewrite with authentication
+    // 21. Test sync-check via Vercel rewrite with authentication
     const authSyncRes = await fetch(`${baseUrl}/api?__vpath=/admin/api/sync-check`, {
       method: 'POST',
       headers: { Cookie: `admin_auth_token=${adminToken}` },
@@ -197,7 +213,21 @@ async function runVercelRoutingTests() {
     assert.strictEqual(authSyncRes.status, 200, 'Authenticated sync check returns 200');
     console.log('✅ PASS: Authenticated Vercel /admin/api/sync-check returns 200 JSON');
 
-    // 20. Test logout via Vercel rewrite clears session
+    // 22. Test /robots.txt via Vercel rewrite
+    const robotsRes = await fetch(`${baseUrl}/api?__vpath=/robots.txt`);
+    assert.strictEqual(robotsRes.status, 200, 'Vercel /robots.txt returns 200');
+    const robotsTxt = await robotsRes.text();
+    assert(robotsTxt.includes('User-agent:') && robotsTxt.includes('Sitemap:'), 'robots.txt content is valid');
+    console.log('✅ PASS: Vercel /robots.txt returns 200 text/plain');
+
+    // 23. Test /sitemap.xml via Vercel rewrite
+    const sitemapRes = await fetch(`${baseUrl}/api?__vpath=/sitemap.xml`);
+    assert.strictEqual(sitemapRes.status, 200, 'Vercel /sitemap.xml returns 200');
+    const sitemapXml = await sitemapRes.text();
+    assert(sitemapXml.includes('<urlset') && sitemapXml.includes('<loc>'), 'sitemap.xml content is valid');
+    console.log('✅ PASS: Vercel /sitemap.xml returns 200 XML');
+
+    // 24. Test logout via Vercel rewrite clears session
     const logoutRes = await fetch(`${baseUrl}/api?__vpath=/admin/logout`, {
       headers: { Cookie: `admin_auth_token=${adminToken}` },
       redirect: 'manual',
@@ -206,7 +236,7 @@ async function runVercelRoutingTests() {
     console.log('✅ PASS: Vercel /admin/logout clears session and redirects cleanly');
 
     console.log('========================================');
-    console.log('Vercel Routing Tests: All 20 Passed, 0 Failed');
+    console.log('Vercel Routing Tests: All 24 Passed, 0 Failed');
     console.log('========================================');
   } finally {
     server.close();

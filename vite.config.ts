@@ -68,6 +68,8 @@ export default defineConfig(() => {
             /^\/api(\/.*)?$/,
             /^\/admin(\/.*)?$/,
             /^\/status(\/.*)?$/,
+            /^\/robots\.txt$/,
+            /^\/sitemap\.xml$/,
           ],
           runtimeCaching: [
             // 1. Strict Online-First: Never cache API endpoints with stale data

@@ -215,122 +215,16 @@ export function createExpressApp(): Express {
     res.send(sitemapContent);
   });
 
-  // Mount Admin Panel (Enabled if ADMIN_SECRET_KEY is configured)
-  const adminConfig = getAdminConfig();
-  if (adminConfig.enabled) {
-    const basePath = '/admin';
+  // Mount Admin Panel with Dynamic Runtime Configuration Check
+  const basePath = '/admin';
 
-    // Root of admin path -> redirect to dashboard (will hit requireAdminAuth)
-    app.get([basePath, `${basePath}/`], (req: Request, res: Response) => {
-      res.redirect(`${basePath}/dashboard`);
-    });
-
-    // Admin Authentication Endpoints
-    app.get(`${basePath}/login`, (req: Request, res: Response) => {
-      return adminController.renderLoginPage(req, res);
-    });
-    app.post(`${basePath}/login`, (req: Request, res: Response) => {
-      return adminController.handleLogin(req, res);
-    });
-    app.all(`${basePath}/logout`, (req: Request, res: Response) => {
-      return adminController.handleLogout(req, res);
-    });
-
-    // Admin Dashboard (Strictly protected by requireAdminAuth middleware)
-    app.get(`${basePath}/dashboard`, requireAdminAuth, (req: Request, res: Response) => {
-      return adminController.renderDashboard(req, res);
-    });
-
-    // Admin Real-Time Live Stats API (Strictly protected by requireAdminAuth middleware)
-    app.get(`${basePath}/api/live-stats`, requireAdminAuth, (req: Request, res: Response) => {
-      return adminController.getLiveStats(req, res);
-    });
-
-    // Admin Permanent Delete from Catbox & Database (Strictly protected by requireAdminAuth)
-    app.post(`${basePath}/api/delete-permanent`, requireAdminAuth, (req: Request, res: Response) => {
-      return adminController.deletePermanent(req, res);
-    });
-
-    // Admin Delete from History Only (Strictly protected by requireAdminAuth)
-    app.post(`${basePath}/api/delete-history-only`, requireAdminAuth, (req: Request, res: Response) => {
-      return adminController.deleteHistoryOnly(req, res);
-    });
-
-    // Admin Health-Check Synchronization with Catbox (Strictly protected by requireAdminAuth)
-    app.post(`${basePath}/api/sync-check`, requireAdminAuth, (req: Request, res: Response) => {
-      return adminController.runSyncCheck(req, res);
-    });
-
-    // Admin Purge Broken / 404 Files
-    app.post(`${basePath}/api/purge-broken`, requireAdminAuth, (req: Request, res: Response) => {
-      return adminController.purgeBrokenFiles(req, res);
-    });
-
-    // Admin Dynamic System Config API
-    app.post(`${basePath}/api/config`, requireAdminAuth, (req: Request, res: Response) => {
-      return adminController.updateConfig(req, res);
-    });
-
-    // Admin Toggle Maintenance Kill Switch
-    app.post(`${basePath}/api/maintenance`, requireAdminAuth, (req: Request, res: Response) => {
-      return adminController.toggleMaintenance(req, res);
-    });
-
-    // Admin Session Management APIs
-    app.post(`${basePath}/api/revoke-session`, requireAdminAuth, (req: Request, res: Response) => {
-      return adminController.revokeSession(req, res);
-    });
-    app.post(`${basePath}/api/revoke-all-sessions`, requireAdminAuth, (req: Request, res: Response) => {
-      return adminController.revokeAllSessions(req, res);
-    });
-
-    // Admin Search Files in Repository
-    app.get(`${basePath}/api/search`, requireAdminAuth, (req: Request, res: Response) => {
-      return adminController.searchFiles(req, res);
-    });
-
-    // Admin Bulk Cleanup (Preview & Execute)
-    app.post(`${basePath}/api/bulk-cleanup/preview`, requireAdminAuth, (req: Request, res: Response) => {
-      return adminController.previewBulkCleanup(req, res);
-    });
-    app.post(`${basePath}/api/bulk-cleanup`, requireAdminAuth, (req: Request, res: Response) => {
-      return adminController.executeBulkCleanup(req, res);
-    });
-
-    // Admin Telegram Bot status
-    app.get(`${basePath}/api/telegram-status`, requireAdminAuth, (req: Request, res: Response) => {
-      const config = getTelegramConfig();
-      res.json({
-        success: true,
-        data: {
-          enabled: config.enabled,
-          adminCount: config.adminUserIds.length,
-          hasSecret: Boolean(config.webhookSecret),
-        },
-      });
-    });
-
-    // Admin Deleted Files Management APIs
-    app.get(`${basePath}/api/deleted-files`, requireAdminAuth, (req: Request, res: Response) => {
-      return adminController.getDeletedFiles(req, res);
-    });
-    app.post(`${basePath}/api/clear-deleted-history`, requireAdminAuth, (req: Request, res: Response) => {
-      return adminController.clearDeletedHistory(req, res);
-    });
-
-    // Admin Real-Time Gemini AI System Recommendations & Summary API
-    app.all(`${basePath}/api/ai-recommendations`, requireAdminAuth, (req: Request, res: Response) => {
-      return adminController.getAiRecommendations(req, res);
-    });
-
-    // Fallback for unhandled subroutes under /admin
-    app.all(`${basePath}/*`, requireAdminAuth, (req: Request, res: Response) => {
-      res.status(404).send('<!DOCTYPE html><html><body>404 Not Found</body></html>');
-    });
-  } else {
-    // If admin panel is not yet configured, render a clean setup guidance page
-    app.all(['/admin', '/admin/*'], (req: Request, res: Response) => {
-      res.status(503).send(`<!DOCTYPE html>
+  // Dynamic admin status check middleware
+  const checkAdminEnabled = (req: Request, res: Response, next: NextFunction) => {
+    const config = getAdminConfig();
+    if (!config.enabled) {
+      const cleanPath = (req.path || '').replace(/\/+$/, '');
+      if (cleanPath === basePath || cleanPath === `${basePath}/login` || cleanPath === '') {
+        res.status(503).send(`<!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8">
@@ -360,8 +254,121 @@ export function createExpressApp(): Express {
   </div>
 </body>
 </html>`);
+        return;
+      }
+      res.status(404).send('<!DOCTYPE html><html><body>404 Not Found</body></html>');
+      return;
+    }
+    next();
+  };
+
+  // Root of admin path -> redirect to dashboard (will hit requireAdminAuth)
+  app.get([basePath, `${basePath}/`], checkAdminEnabled, (req: Request, res: Response) => {
+    res.redirect(`${basePath}/dashboard`);
+  });
+
+  // Admin Authentication Endpoints
+  app.get([`${basePath}/login`, `${basePath}/login/`], checkAdminEnabled, (req: Request, res: Response) => {
+    return adminController.renderLoginPage(req, res);
+  });
+  app.post([`${basePath}/login`, `${basePath}/login/`], checkAdminEnabled, (req: Request, res: Response) => {
+    return adminController.handleLogin(req, res);
+  });
+  app.all([`${basePath}/logout`, `${basePath}/logout/`], checkAdminEnabled, (req: Request, res: Response) => {
+    return adminController.handleLogout(req, res);
+  });
+
+  // Admin Dashboard (Strictly protected by requireAdminAuth middleware)
+  app.get([`${basePath}/dashboard`, `${basePath}/dashboard/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.renderDashboard(req, res);
+  });
+
+  // Admin Real-Time Live Stats API (Strictly protected by requireAdminAuth middleware)
+  app.get([`${basePath}/api/live-stats`, `${basePath}/api/live-stats/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.getLiveStats(req, res);
+  });
+
+  // Admin Permanent Delete from Catbox & Database (Strictly protected by requireAdminAuth)
+  app.post([`${basePath}/api/delete-permanent`, `${basePath}/api/delete-permanent/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.deletePermanent(req, res);
+  });
+
+  // Admin Delete from History Only (Strictly protected by requireAdminAuth)
+  app.post([`${basePath}/api/delete-history-only`, `${basePath}/api/delete-history-only/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.deleteHistoryOnly(req, res);
+  });
+
+  // Admin Health-Check Synchronization with Catbox (Strictly protected by requireAdminAuth)
+  app.post([`${basePath}/api/sync-check`, `${basePath}/api/sync-check/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.runSyncCheck(req, res);
+  });
+
+  // Admin Purge Broken / 404 Files
+  app.post([`${basePath}/api/purge-broken`, `${basePath}/api/purge-broken/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.purgeBrokenFiles(req, res);
+  });
+
+  // Admin Dynamic System Config API
+  app.post([`${basePath}/api/config`, `${basePath}/api/config/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.updateConfig(req, res);
+  });
+
+  // Admin Toggle Maintenance Kill Switch
+  app.post([`${basePath}/api/maintenance`, `${basePath}/api/maintenance/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.toggleMaintenance(req, res);
+  });
+
+  // Admin Session Management APIs
+  app.post([`${basePath}/api/revoke-session`, `${basePath}/api/revoke-session/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.revokeSession(req, res);
+  });
+  app.post([`${basePath}/api/revoke-all-sessions`, `${basePath}/api/revoke-all-sessions/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.revokeAllSessions(req, res);
+  });
+
+  // Admin Search Files in Repository
+  app.get([`${basePath}/api/search`, `${basePath}/api/search/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.searchFiles(req, res);
+  });
+
+  // Admin Bulk Cleanup (Preview & Execute)
+  app.post([`${basePath}/api/bulk-cleanup/preview`, `${basePath}/api/bulk-cleanup/preview/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.previewBulkCleanup(req, res);
+  });
+  app.post([`${basePath}/api/bulk-cleanup`, `${basePath}/api/bulk-cleanup/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.executeBulkCleanup(req, res);
+  });
+
+  // Admin Telegram Bot status
+  app.get([`${basePath}/api/telegram-status`, `${basePath}/api/telegram-status/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    const config = getTelegramConfig();
+    res.json({
+      success: true,
+      data: {
+        enabled: config.enabled,
+        adminCount: config.adminUserIds.length,
+        hasSecret: Boolean(config.webhookSecret),
+      },
     });
-  }
+  });
+
+  // Admin Deleted Files Management APIs
+  app.get([`${basePath}/api/deleted-files`, `${basePath}/api/deleted-files/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.getDeletedFiles(req, res);
+  });
+  app.post([`${basePath}/api/clear-deleted-history`, `${basePath}/api/clear-deleted-history/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.clearDeletedHistory(req, res);
+  });
+
+  // Admin Real-Time Gemini AI System Recommendations & Summary API
+  app.all([`${basePath}/api/ai-recommendations`, `${basePath}/api/ai-recommendations/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.getAiRecommendations(req, res);
+  });
+
+  // Fallback for unhandled subroutes under /admin
+  app.all([`${basePath}/*`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    res.status(404).send('<!DOCTYPE html><html><body>404 Not Found</body></html>');
+  });
 
   // Public System Status HTML Page (Accessible even in full lockdown)
   app.get(['/status', '/status/'], (req: Request, res: Response) => {

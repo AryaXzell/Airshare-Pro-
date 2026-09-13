@@ -82,7 +82,9 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
     } else {
       req.url = normalizedPath;
     }
+    // Synchronize originalUrl so Express route matching and request logging reflect the actual restored path
+    (req as unknown as { originalUrl: string }).originalUrl = req.url;
   }
 
-  return app(req, res);
+  return app(req as any, res as any);
 }

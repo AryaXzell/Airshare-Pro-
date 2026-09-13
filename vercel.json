@@ -54,6 +54,14 @@
     {
       "source": "/admin/(.*)",
       "destination": "/api?__vpath=/admin/$1"
+    },
+    {
+      "source": "/robots.txt",
+      "destination": "/api?__vpath=/robots.txt"
+    },
+    {
+      "source": "/sitemap.xml",
+      "destination": "/api?__vpath=/sitemap.xml"
     }
   ]
 }

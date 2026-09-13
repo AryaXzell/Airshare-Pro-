@@ -66,10 +66,16 @@ export default function App() {
   const offlineToastIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    // Failsafe: If a server-rendered route (/s/:id or /admin) was served index.html
+    // Failsafe: If a server-rendered route (/s/:id, /admin, /status, /robots.txt, /sitemap.xml) was served index.html
     // by an outdated browser cache or stale service worker, force a hard reload once to get the SSR response.
     const pathname = window.location.pathname;
-    if (pathname.startsWith('/s/') || pathname.startsWith('/admin')) {
+    if (
+      pathname.startsWith('/s/') ||
+      pathname.startsWith('/admin') ||
+      pathname.startsWith('/status') ||
+      pathname === '/robots.txt' ||
+      pathname === '/sitemap.xml'
+    ) {
       const retryKey = `ssr_nav_${pathname}`;
       if (!sessionStorage.getItem(retryKey)) {
         sessionStorage.setItem(retryKey, '1');

@@ -14,7 +14,7 @@ var CatboxStorageProvider = class {
     const defaultTimeout = process.env.VERCEL ? 35e3 : 45e3;
     const configuredTimeout = options?.timeoutMs || parseInt(process.env.CATBOX_TIMEOUT_MS || `${defaultTimeout}`, 10);
     this.timeoutMs = process.env.VERCEL ? Math.min(configuredTimeout, 4e4) : configuredTimeout;
-    this.maxRetries = options?.maxRetries ?? (process.env.VERCEL ? 1 : 2);
+    this.maxRetries = options?.maxRetries ?? 2;
   }
   /**
    * Reads userhash securely only on the server runtime.
@@ -68,7 +68,7 @@ var CatboxStorageProvider = class {
           bodyText = (await response.text()).trim();
         } catch {
         }
-        const isTransient = response.status >= 500 && response.status < 600;
+        const isTransient = response.status >= 500 || response.status === 429 || response.status === 408;
         let errorMessage = `Catbox HTTP ${response.status}: ${bodyText || response.statusText || "Gagal memproses berkas"}`;
         if (bodyText.includes("Invalid uploader")) {
           errorMessage = "Catbox menolak unggahan anonim dari server cloud (Invalid uploader). Harap konfigurasikan CATBOX_USERHASH di Environment Variables Vercel Anda untuk menghubungkan akun Catbox resmi.";
@@ -80,8 +80,10 @@ var CatboxStorageProvider = class {
       const rawResult = await response.text();
       const trimmedResult = rawResult.trim();
       if (!trimmedResult.startsWith("http://") && !trimmedResult.startsWith("https://")) {
+        const lowerResult = trimmedResult.toLowerCase();
+        const isPermanent = lowerResult.includes("file is too large") || lowerResult.includes("extension not allowed") || lowerResult.includes("file type not allowed") || lowerResult.includes("banned");
         const err = new Error(`Catbox provider: ${trimmedResult}`);
-        err.isTransient = false;
+        err.isTransient = !isPermanent;
         throw err;
       }
       try {
@@ -99,8 +101,11 @@ var CatboxStorageProvider = class {
         const timeoutErr = new Error(
           `Unggahan ke Catbox melebihi batas waktu (${this.timeoutMs / 1e3}s). Server upstream sedang lambat atau berkas terlalu besar untuk diproses dalam batas waktu serverless.`
         );
-        timeoutErr.isTransient = false;
+        timeoutErr.isTransient = true;
         throw timeoutErr;
+      }
+      if (err && typeof err === "object" && !("isTransient" in err)) {
+        err.isTransient = true;
       }
       throw err;
     }
@@ -455,49 +460,64 @@ var UpstashMediaRepository = class {
       isTextPreviewable: media.isTextPreviewable,
       textLanguageHint: media.textLanguageHint
     };
-    const pipeline = this.redis.pipeline();
-    pipeline.set(itemKey, JSON.stringify(media));
-    pipeline.set(publicKey, JSON.stringify(publicMedia));
-    pipeline.set(idToSessionKey, sessionId);
-    pipeline.zadd(indexKey, { score: media.createdAt, member: media.id });
-    pipeline.expire(itemKey, 30 * 24 * 60 * 60);
-    pipeline.expire(publicKey, 30 * 24 * 60 * 60);
-    pipeline.expire(idToSessionKey, 30 * 24 * 60 * 60);
-    pipeline.expire(indexKey, 30 * 24 * 60 * 60);
-    const tombstoneKey = this.getTombstoneKey(media.id);
-    pipeline.del(tombstoneKey);
-    await pipeline.exec();
-    return media;
+    try {
+      const pipeline = this.redis.pipeline();
+      pipeline.set(itemKey, JSON.stringify(media));
+      pipeline.set(publicKey, JSON.stringify(publicMedia));
+      pipeline.set(idToSessionKey, sessionId);
+      pipeline.zadd(indexKey, { score: media.createdAt, member: media.id });
+      pipeline.expire(itemKey, 30 * 24 * 60 * 60);
+      pipeline.expire(publicKey, 30 * 24 * 60 * 60);
+      pipeline.expire(idToSessionKey, 30 * 24 * 60 * 60);
+      pipeline.expire(indexKey, 30 * 24 * 60 * 60);
+      const tombstoneKey = this.getTombstoneKey(media.id);
+      pipeline.del(tombstoneKey);
+      await pipeline.exec();
+      return media;
+    } catch (err) {
+      console.error("[UPSTASH_CREATE_ERROR] Gagal menyimpan record media ke Redis setelah upload:", err);
+      throw new Error(`Gagal menyimpan data berkas ke database setelah upload berhasil ke penyimpanan. Detail: ${err?.message || "Kesalahan tidak diketahui"}`);
+    }
   }
   async list(sessionId, limit = 100) {
     assertValidSessionId2(sessionId, "list");
-    const indexKey = this.getIndexKey(sessionId);
-    const ids = await this.redis.zrange(indexKey, 0, limit - 1, { rev: true });
-    if (!ids || ids.length === 0) {
+    try {
+      const indexKey = this.getIndexKey(sessionId);
+      const ids = await this.redis.zrange(indexKey, 0, limit - 1, { rev: true });
+      if (!ids || ids.length === 0) {
+        return [];
+      }
+      const itemKeys = ids.map((id) => this.getItemKey(sessionId, id));
+      const rawItems = await this.redis.mget(...itemKeys);
+      const result = [];
+      rawItems.forEach((raw) => {
+        if (raw) {
+          try {
+            const item = typeof raw === "string" ? JSON.parse(raw) : raw;
+            result.push(item);
+          } catch {
+          }
+        }
+      });
+      return result;
+    } catch (err) {
+      console.error("[UPSTASH_LIST_ERROR] Gagal membaca daftar media dari Redis:", err);
       return [];
     }
-    const itemKeys = ids.map((id) => this.getItemKey(sessionId, id));
-    const rawItems = await this.redis.mget(...itemKeys);
-    const result = [];
-    rawItems.forEach((raw) => {
-      if (raw) {
-        try {
-          const item = typeof raw === "string" ? JSON.parse(raw) : raw;
-          result.push(item);
-        } catch {
-        }
-      }
-    });
-    return result;
   }
   async get(id, sessionId) {
     assertValidSessionId2(sessionId, "get");
-    const itemKey = this.getItemKey(sessionId, id);
-    const raw = await this.redis.get(itemKey);
-    if (!raw) return null;
     try {
-      return typeof raw === "string" ? JSON.parse(raw) : raw;
-    } catch {
+      const itemKey = this.getItemKey(sessionId, id);
+      const raw = await this.redis.get(itemKey);
+      if (!raw) return null;
+      try {
+        return typeof raw === "string" ? JSON.parse(raw) : raw;
+      } catch {
+        return null;
+      }
+    } catch (err) {
+      console.error("[UPSTASH_GET_ERROR] Gagal membaca media dari Redis:", err);
       return null;
     }
   }
@@ -506,109 +526,124 @@ var UpstashMediaRepository = class {
       return null;
     }
     const cleanId = id.trim();
-    const tombstone = await this.getTombstone(cleanId);
-    if (tombstone) {
-      return null;
-    }
-    const publicKey = this.getPublicKey(cleanId);
-    const raw = await this.redis.get(publicKey);
-    let publicMedia = null;
-    if (raw) {
-      try {
-        publicMedia = typeof raw === "string" ? JSON.parse(raw) : raw;
-      } catch {
-        publicMedia = null;
+    try {
+      const tombstone = await this.getTombstone(cleanId);
+      if (tombstone) {
+        return null;
       }
-    }
-    if (publicMedia && (!publicMedia.uploaderCountryCode || !publicMedia.createdAt)) {
-      try {
-        const fullRaw = await this.redis.get(`stats:media_obj:${cleanId}`);
-        if (fullRaw) {
-          const full = typeof fullRaw === "string" ? JSON.parse(fullRaw) : fullRaw;
-          if (full && typeof full === "object") {
-            if (!publicMedia.uploaderCountryCode && full.uploaderCountryCode) {
-              publicMedia.uploaderCountryCode = full.uploaderCountryCode;
-              publicMedia.uploaderCountryName = full.uploaderCountryName;
-            }
-            if ((!publicMedia.createdAt || isNaN(publicMedia.createdAt)) && full.createdAt) {
-              publicMedia.createdAt = full.createdAt;
-            }
-            if (!publicMedia.audioMeta && full.audioMeta && full.type === "audio") {
-              publicMedia.audioMeta = full.audioMeta;
-            }
-            if (!publicMedia.videoMeta && full.videoMeta && full.type === "video") {
-              publicMedia.videoMeta = full.videoMeta;
-            }
-            if (!publicMedia.imageMeta && full.imageMeta && full.type === "image") {
-              publicMedia.imageMeta = full.imageMeta;
-            }
-            if (publicMedia.isTextPreviewable === void 0 && full.isTextPreviewable !== void 0) {
-              publicMedia.isTextPreviewable = full.isTextPreviewable;
-              publicMedia.textLanguageHint = full.textLanguageHint;
+      const publicKey = this.getPublicKey(cleanId);
+      const raw = await this.redis.get(publicKey);
+      let publicMedia = null;
+      if (raw) {
+        try {
+          publicMedia = typeof raw === "string" ? JSON.parse(raw) : raw;
+        } catch {
+          publicMedia = null;
+        }
+      }
+      if (publicMedia && (!publicMedia.uploaderCountryCode || !publicMedia.createdAt)) {
+        try {
+          const fullRaw = await this.redis.get(`stats:media_obj:${cleanId}`);
+          if (fullRaw) {
+            const full = typeof fullRaw === "string" ? JSON.parse(fullRaw) : fullRaw;
+            if (full && typeof full === "object") {
+              if (!publicMedia.uploaderCountryCode && full.uploaderCountryCode) {
+                publicMedia.uploaderCountryCode = full.uploaderCountryCode;
+                publicMedia.uploaderCountryName = full.uploaderCountryName;
+              }
+              if ((!publicMedia.createdAt || isNaN(publicMedia.createdAt)) && full.createdAt) {
+                publicMedia.createdAt = full.createdAt;
+              }
+              if (!publicMedia.audioMeta && full.audioMeta && full.type === "audio") {
+                publicMedia.audioMeta = full.audioMeta;
+              }
+              if (!publicMedia.videoMeta && full.videoMeta && full.type === "video") {
+                publicMedia.videoMeta = full.videoMeta;
+              }
+              if (!publicMedia.imageMeta && full.imageMeta && full.type === "image") {
+                publicMedia.imageMeta = full.imageMeta;
+              }
+              if (publicMedia.isTextPreviewable === void 0 && full.isTextPreviewable !== void 0) {
+                publicMedia.isTextPreviewable = full.isTextPreviewable;
+                publicMedia.textLanguageHint = full.textLanguageHint;
+              }
             }
           }
+        } catch {
         }
-      } catch {
       }
+      return publicMedia;
+    } catch (err) {
+      console.error("[UPSTASH_GET_BY_ID_PUBLIC_ERROR] Gagal membaca berkas publik dari Redis:", err);
+      return null;
     }
-    return publicMedia;
   }
   async delete(id, sessionId) {
-    assertValidSessionId2(sessionId, "delete");
-    const cleanId = id.trim();
-    const itemKey = this.getItemKey(sessionId, cleanId);
-    const publicKey = this.getPublicKey(cleanId);
-    const indexKey = this.getIndexKey(sessionId);
-    const idToSessionKey = this.getIdToSessionKey(cleanId);
-    const tombstoneKey = this.getTombstoneKey(cleanId);
-    const tombstoneData = {
-      id: cleanId,
-      deletedAt: Date.now(),
-      reason: "USER_DELETED"
-    };
-    const pipeline = this.redis.pipeline();
-    pipeline.del(itemKey);
-    pipeline.del(publicKey);
-    pipeline.del(idToSessionKey);
-    pipeline.del(`stats:media_obj:${cleanId}`);
-    pipeline.zrem(indexKey, cleanId);
-    pipeline.zrem("stats:recent_uploads", cleanId);
-    if (typeof pipeline.set === "function") {
-      pipeline.set(tombstoneKey, JSON.stringify(tombstoneData), { ex: 14 * 24 * 60 * 60 });
+    try {
+      assertValidSessionId2(sessionId, "delete");
+      const cleanId = id.trim();
+      const itemKey = this.getItemKey(sessionId, cleanId);
+      const publicKey = this.getPublicKey(cleanId);
+      const indexKey = this.getIndexKey(sessionId);
+      const idToSessionKey = this.getIdToSessionKey(cleanId);
+      const tombstoneKey = this.getTombstoneKey(cleanId);
+      const tombstoneData = {
+        id: cleanId,
+        deletedAt: Date.now(),
+        reason: "USER_DELETED"
+      };
+      const pipeline = this.redis.pipeline();
+      pipeline.del(itemKey);
+      pipeline.del(publicKey);
+      pipeline.del(idToSessionKey);
+      pipeline.del(`stats:media_obj:${cleanId}`);
+      pipeline.zrem(indexKey, cleanId);
+      pipeline.zrem("stats:recent_uploads", cleanId);
+      if (typeof pipeline.set === "function") {
+        pipeline.set(tombstoneKey, JSON.stringify(tombstoneData), { ex: 14 * 24 * 60 * 60 });
+      }
+      const results = await pipeline.exec();
+      if (typeof pipeline.set !== "function") {
+        this.recordTombstone(cleanId, "USER_DELETED").catch(() => {
+        });
+      }
+      const delCount = results[0];
+      return typeof delCount === "number" && delCount > 0;
+    } catch (err) {
+      console.error("[UPSTASH_DELETE_ERROR] Gagal menghapus media dari Redis:", err);
+      throw new Error(`Gagal menghapus berkas dari database. Detail: ${err?.message || "Kesalahan tidak diketahui"}`);
     }
-    const results = await pipeline.exec();
-    if (typeof pipeline.set !== "function") {
-      this.recordTombstone(cleanId, "USER_DELETED").catch(() => {
-      });
-    }
-    const delCount = results[0];
-    return typeof delCount === "number" && delCount > 0;
   }
   async clearAll(sessionId) {
-    assertValidSessionId2(sessionId, "clearAll");
-    const indexKey = this.getIndexKey(sessionId);
-    const ids = await this.redis.zrange(indexKey, 0, -1);
-    const pipeline = this.redis.pipeline();
-    if (ids && ids.length > 0) {
-      const now = Date.now();
-      ids.forEach((id) => {
-        const cleanId = id.trim();
-        pipeline.del(this.getItemKey(sessionId, cleanId));
-        pipeline.del(this.getPublicKey(cleanId));
-        pipeline.del(this.getIdToSessionKey(cleanId));
-        pipeline.del(`stats:media_obj:${cleanId}`);
-        pipeline.zrem("stats:recent_uploads", cleanId);
-        if (typeof pipeline.set === "function") {
-          pipeline.set(
-            this.getTombstoneKey(cleanId),
-            JSON.stringify({ id: cleanId, deletedAt: now, reason: "USER_CLEARED" }),
-            { ex: 14 * 24 * 60 * 60 }
-          );
-        }
-      });
+    try {
+      assertValidSessionId2(sessionId, "clearAll");
+      const indexKey = this.getIndexKey(sessionId);
+      const ids = await this.redis.zrange(indexKey, 0, -1);
+      const pipeline = this.redis.pipeline();
+      if (ids && ids.length > 0) {
+        const now = Date.now();
+        ids.forEach((id) => {
+          const cleanId = id.trim();
+          pipeline.del(this.getItemKey(sessionId, cleanId));
+          pipeline.del(this.getPublicKey(cleanId));
+          pipeline.del(this.getIdToSessionKey(cleanId));
+          pipeline.del(`stats:media_obj:${cleanId}`);
+          pipeline.zrem("stats:recent_uploads", cleanId);
+          if (typeof pipeline.set === "function") {
+            pipeline.set(
+              this.getTombstoneKey(cleanId),
+              JSON.stringify({ id: cleanId, deletedAt: now, reason: "USER_CLEARED" }),
+              { ex: 14 * 24 * 60 * 60 }
+            );
+          }
+        });
+      }
+      pipeline.del(indexKey);
+      await pipeline.exec();
+    } catch (err) {
+      console.error("[UPSTASH_CLEAR_ALL_ERROR] Gagal membersihkan semua riwayat dari Redis:", err);
+      throw new Error(`Gagal membersihkan riwayat berkas dari database. Detail: ${err?.message || "Kesalahan tidak diketahui"}`);
     }
-    pipeline.del(indexKey);
-    await pipeline.exec();
   }
   /**
    * Internal Administrative Method ONLY.
@@ -620,82 +655,92 @@ var UpstashMediaRepository = class {
       return null;
     }
     const cleanId = id.trim();
-    const idToSessionKey = this.getIdToSessionKey(cleanId);
-    const sessionId = await this.redis.get(idToSessionKey);
-    if (sessionId) {
-      const itemKey = this.getItemKey(sessionId, cleanId);
-      const raw = await this.redis.get(itemKey);
-      if (raw) {
+    try {
+      const idToSessionKey = this.getIdToSessionKey(cleanId);
+      const sessionId = await this.redis.get(idToSessionKey);
+      if (sessionId) {
+        const itemKey = this.getItemKey(sessionId, cleanId);
+        const raw = await this.redis.get(itemKey);
+        if (raw) {
+          try {
+            return typeof raw === "string" ? JSON.parse(raw) : raw;
+          } catch {
+          }
+        }
+      }
+      const publicKey = this.getPublicKey(cleanId);
+      const pubRaw = await this.redis.get(publicKey);
+      if (pubRaw) {
         try {
-          return typeof raw === "string" ? JSON.parse(raw) : raw;
+          const pub = typeof pubRaw === "string" ? JSON.parse(pubRaw) : pubRaw;
+          if (pub) {
+            return {
+              ...pub,
+              sessionId: sessionId || "admin_recovered_session"
+            };
+          }
         } catch {
         }
       }
-    }
-    const publicKey = this.getPublicKey(cleanId);
-    const pubRaw = await this.redis.get(publicKey);
-    if (pubRaw) {
-      try {
-        const pub = typeof pubRaw === "string" ? JSON.parse(pubRaw) : pubRaw;
-        if (pub) {
-          return {
-            ...pub,
-            sessionId: sessionId || "admin_recovered_session"
-          };
+      const statsRaw = await this.redis.get(`stats:media_obj:${cleanId}`);
+      if (statsRaw) {
+        try {
+          const statsObj = typeof statsRaw === "string" ? JSON.parse(statsRaw) : statsRaw;
+          if (statsObj) {
+            return {
+              ...statsObj,
+              sessionId: sessionId || "admin_recovered_session"
+            };
+          }
+        } catch {
         }
-      } catch {
       }
+      return null;
+    } catch (err) {
+      console.error("[UPSTASH_GET_BY_ID_ADMIN_ERROR] Gagal membaca media admin dari Redis:", err);
+      return null;
     }
-    const statsRaw = await this.redis.get(`stats:media_obj:${cleanId}`);
-    if (statsRaw) {
-      try {
-        const statsObj = typeof statsRaw === "string" ? JSON.parse(statsRaw) : statsRaw;
-        if (statsObj) {
-          return {
-            ...statsObj,
-            sessionId: sessionId || "admin_recovered_session"
-          };
-        }
-      } catch {
-      }
-    }
-    return null;
   }
   /**
    * Internal Administrative Method ONLY.
    * Permanently deletes all Redis keys for an item across all sessions, indices, and lookups.
    */
   async deleteForAdmin(id) {
-    if (!id || typeof id !== "string" || !id.trim()) {
-      return false;
+    try {
+      if (!id || typeof id !== "string" || !id.trim()) {
+        return false;
+      }
+      const cleanId = id.trim();
+      const idToSessionKey = this.getIdToSessionKey(cleanId);
+      const sessionId = await this.redis.get(idToSessionKey);
+      const tombstoneKey = this.getTombstoneKey(cleanId);
+      const tombstoneData = {
+        id: cleanId,
+        deletedAt: Date.now(),
+        reason: "ADMIN_DELETED"
+      };
+      const pipeline = this.redis.pipeline();
+      pipeline.del(this.getPublicKey(cleanId));
+      pipeline.del(idToSessionKey);
+      pipeline.del(`stats:media_obj:${cleanId}`);
+      pipeline.zrem("stats:recent_uploads", cleanId);
+      if (typeof pipeline.set === "function") {
+        pipeline.set(tombstoneKey, JSON.stringify(tombstoneData), { ex: 14 * 24 * 60 * 60 });
+      }
+      if (sessionId) {
+        pipeline.del(this.getItemKey(sessionId, cleanId));
+        pipeline.zrem(this.getIndexKey(sessionId), cleanId);
+      }
+      const results = await pipeline.exec();
+      if (typeof pipeline.set !== "function") {
+        this.recordTombstone(cleanId, "ADMIN_DELETED").catch(() => {
+        });
+      }
+      return results.some((r) => typeof r === "number" && r > 0);
+    } catch (err) {
+      console.error("[UPSTASH_DELETE_FOR_ADMIN_ERROR] Gagal menghapus media admin dari Redis:", err);
+      throw new Error(`Gagal menghapus data berkas di level admin. Detail: ${err?.message || "Kesalahan tidak diketahui"}`);
     }
-    const cleanId = id.trim();
-    const idToSessionKey = this.getIdToSessionKey(cleanId);
-    const sessionId = await this.redis.get(idToSessionKey);
-    const tombstoneKey = this.getTombstoneKey(cleanId);
-    const tombstoneData = {
-      id: cleanId,
-      deletedAt: Date.now(),
-      reason: "ADMIN_DELETED"
-    };
-    const pipeline = this.redis.pipeline();
-    pipeline.del(this.getPublicKey(cleanId));
-    pipeline.del(idToSessionKey);
-    pipeline.del(`stats:media_obj:${cleanId}`);
-    pipeline.zrem("stats:recent_uploads", cleanId);
-    if (typeof pipeline.set === "function") {
-      pipeline.set(tombstoneKey, JSON.stringify(tombstoneData), { ex: 14 * 24 * 60 * 60 });
-    }
-    if (sessionId) {
-      pipeline.del(this.getItemKey(sessionId, cleanId));
-      pipeline.zrem(this.getIndexKey(sessionId), cleanId);
-    }
-    const results = await pipeline.exec();
-    if (typeof pipeline.set !== "function") {
-      this.recordTombstone(cleanId, "ADMIN_DELETED").catch(() => {
-      });
-    }
-    return results.some((r) => typeof r === "number" && r > 0);
   }
 };
 
@@ -1803,11 +1848,26 @@ function isValidMediaId(id) {
 }
 
 // src/server/security/system-config.ts
+var VERCEL_SAFE_MAX_UPLOAD_SIZE = 42e5;
+var DEFAULT_MAX_UPLOAD_SIZE = 4 * 1024 * 1024;
+function resolveInitialMaxUploadSize() {
+  const configured = parseInt(process.env.MAX_UPLOAD_SIZE || `${DEFAULT_MAX_UPLOAD_SIZE}`, 10);
+  const parsed = isNaN(configured) || configured <= 0 ? DEFAULT_MAX_UPLOAD_SIZE : configured;
+  if (process.env.VERCEL) {
+    if (parsed > VERCEL_SAFE_MAX_UPLOAD_SIZE) {
+      console.warn(
+        `[CONFIG_WARN_CRITICAL] MAX_UPLOAD_SIZE (${parsed} bytes) melebihi batas aman Vercel Serverless (maks ~4.2MB). Vercel memiliki hard limit 4.5MB untuk seluruh request body yang akan memutus koneksi dengan error 413 sebelum sampai ke aplikasi. Otomatis membatasi (clamp) maxUploadSize ke ${VERCEL_SAFE_MAX_UPLOAD_SIZE} bytes (4.2 MB).`
+      );
+      return VERCEL_SAFE_MAX_UPLOAD_SIZE;
+    }
+  }
+  return parsed;
+}
 var inMemoryConfig = {
+  maintenanceLevel: "off",
   maintenanceMode: false,
   announcement: null,
-  maxUploadSize: parseInt(process.env.MAX_UPLOAD_SIZE || "209715200", 10),
-  // default 200MB
+  maxUploadSize: resolveInitialMaxUploadSize(),
   rateLimit: {
     limit: parseInt(process.env.RATE_LIMIT_MAX_UPLOADS_PER_MIN || "20", 10),
     windowMs: 60 * 1e3
@@ -1825,30 +1885,46 @@ function formatBytes2(bytes) {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
 }
-async function isMaintenanceModeActive() {
-  const redis = isUpstashConfigured() ? getRedisClient() : null;
-  if (redis) {
-    try {
-      const val = await redis.get("config:maintenance_mode");
-      if (val !== null && val !== void 0) {
-        return val === "true" || val === "1";
-      }
-    } catch (err) {
-      console.warn("[SYSTEM_CONFIG] Gagal membaca maintenance mode dari Redis, fail-safe false:", err);
-    }
-  }
-  return inMemoryConfig.maintenanceMode;
+function normalizeMaintenanceLevel(raw) {
+  if (raw === "full_lockdown") return "full_lockdown";
+  if (raw === "upload_only" || raw === "true" || raw === "1") return "upload_only";
+  return "off";
 }
-async function setMaintenanceMode(active) {
-  inMemoryConfig.maintenanceMode = active;
+async function getMaintenanceLevel() {
   const redis = isUpstashConfigured() ? getRedisClient() : null;
   if (redis) {
     try {
-      await redis.set("config:maintenance_mode", active ? "true" : "false");
+      const raw = await redis.get("config:maintenance_mode");
+      const level = normalizeMaintenanceLevel(raw);
+      inMemoryConfig.maintenanceLevel = level;
+      inMemoryConfig.maintenanceMode = level !== "off";
+      return level;
     } catch (err) {
-      console.warn("[SYSTEM_CONFIG] Gagal menyimpan maintenance mode ke Redis:", err);
+      console.warn("[SYSTEM_CONFIG] Gagal membaca maintenance level dari Redis, memakai cache lokal:", err);
     }
   }
+  return inMemoryConfig.maintenanceLevel ?? "off";
+}
+async function setMaintenanceLevel(level) {
+  const redis = isUpstashConfigured() ? getRedisClient() : null;
+  if (redis) {
+    try {
+      await redis.set("config:maintenance_mode", level);
+      inMemoryConfig.maintenanceLevel = level;
+      inMemoryConfig.maintenanceMode = level !== "off";
+      return;
+    } catch (err) {
+      console.error("[SYSTEM_CONFIG_CRITICAL] Gagal menyimpan maintenance level ke Redis:", err);
+      throw new Error("Gagal menyimpan status Kill Switch ke database persisten (Redis). Perubahan TIDAK tersimpan.");
+    }
+  }
+  inMemoryConfig.maintenanceLevel = level;
+  inMemoryConfig.maintenanceMode = level !== "off";
+  console.warn("[SYSTEM_CONFIG_WARN] Redis tidak dikonfigurasi. Kill Switch hanya tersimpan sementara di memori instance ini.");
+}
+async function isMaintenanceModeActive() {
+  const level = await getMaintenanceLevel();
+  return level !== "off";
 }
 async function getAnnouncement() {
   const redis = isUpstashConfigured() ? getRedisClient() : null;
@@ -1869,24 +1945,36 @@ async function getAnnouncement() {
             message: String(parsed.message || ""),
             type: ["info", "warning", "success"].includes(parsed.type) ? parsed.type : "info",
             enabled: parsed.enabled === true || parsed.enabled === "true",
-            updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : Date.now()
+            updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : Date.now(),
+            expiresAt: typeof parsed.expiresAt === "number" ? parsed.expiresAt : null
           };
           inMemoryConfig.announcement = announcement;
-          return announcement;
+          if (announcement.expiresAt != null && Date.now() >= announcement.expiresAt) {
+            return null;
+          }
+          return announcement.enabled ? announcement : null;
         }
+      } else {
+        inMemoryConfig.announcement = null;
+        return null;
       }
     } catch (err) {
       console.warn("[SYSTEM_CONFIG] Gagal membaca pengumuman dari Redis:", err);
     }
   }
-  return inMemoryConfig.announcement;
+  const cached = inMemoryConfig.announcement;
+  if (cached && cached.expiresAt != null && Date.now() >= cached.expiresAt) {
+    return null;
+  }
+  return cached && cached.enabled ? cached : null;
 }
 async function setAnnouncement(announcement) {
   const finalAnnouncement = {
     message: String(announcement.message || "").trim(),
     type: ["info", "warning", "success"].includes(announcement.type) ? announcement.type : "info",
     enabled: announcement.enabled === true || announcement.enabled === "true",
-    updatedAt: Date.now()
+    updatedAt: Date.now(),
+    expiresAt: typeof announcement.expiresAt === "number" ? announcement.expiresAt : null
   };
   inMemoryConfig.announcement = finalAnnouncement;
   const redis = isUpstashConfigured() ? getRedisClient() : null;
@@ -1894,7 +1982,20 @@ async function setAnnouncement(announcement) {
     try {
       await redis.set("config:announcement", JSON.stringify(finalAnnouncement));
     } catch (err) {
-      console.warn("[SYSTEM_CONFIG] Gagal menyimpan pengumuman ke Redis:", err);
+      console.error("[SYSTEM_CONFIG_CRITICAL] Gagal menyimpan pengumuman ke Redis:", err);
+      throw new Error("Gagal menyimpan konfigurasi banner ke database persisten (Redis).");
+    }
+  }
+}
+async function clearAnnouncement() {
+  inMemoryConfig.announcement = null;
+  const redis = isUpstashConfigured() ? getRedisClient() : null;
+  if (redis) {
+    try {
+      await redis.del("config:announcement");
+    } catch (err) {
+      console.error("[SYSTEM_CONFIG_CRITICAL] Gagal menghapus pengumuman dari Redis:", err);
+      throw new Error("Gagal menghapus konfigurasi banner dari database persisten (Redis).");
     }
   }
 }
@@ -1906,6 +2007,9 @@ async function getMaxUploadSize() {
       if (val !== null && val !== void 0) {
         const num = typeof val === "number" ? val : parseInt(val, 10);
         if (!isNaN(num) && num > 0) {
+          if (process.env.VERCEL && num > VERCEL_SAFE_MAX_UPLOAD_SIZE) {
+            return VERCEL_SAFE_MAX_UPLOAD_SIZE;
+          }
           return num;
         }
       }
@@ -1917,8 +2021,8 @@ async function getMaxUploadSize() {
 }
 async function setMaxUploadSize(bytes) {
   const MIN_SIZE = 1024 * 1024;
-  const MAX_SIZE = 500 * 1024 * 1024;
-  const clamped = Math.max(MIN_SIZE, Math.min(MAX_SIZE, bytes));
+  const maxLimit = process.env.VERCEL ? VERCEL_SAFE_MAX_UPLOAD_SIZE : 500 * 1024 * 1024;
+  const clamped = Math.max(MIN_SIZE, Math.min(maxLimit, bytes));
   inMemoryConfig.maxUploadSize = clamped;
   const redis = isUpstashConfigured() ? getRedisClient() : null;
   if (redis) {
@@ -1999,15 +2103,16 @@ async function setFeatureFlags(flags) {
   }
 }
 async function getAllSystemConfig() {
-  const [maintenanceMode, announcement, maxUploadSize, rateLimit, featureFlags] = await Promise.all([
-    isMaintenanceModeActive(),
+  const [maintenanceLevel, announcement, maxUploadSize, rateLimit, featureFlags] = await Promise.all([
+    getMaintenanceLevel(),
     getAnnouncement(),
     getMaxUploadSize(),
     getUploadRateLimit(),
     getFeatureFlags()
   ]);
   return {
-    maintenanceMode,
+    maintenanceLevel,
+    maintenanceMode: maintenanceLevel !== "off",
     announcement,
     maxUploadSize,
     formattedMaxSize: formatBytes2(maxUploadSize),
@@ -2022,11 +2127,7 @@ function getClientIp(req) {
   if (typeof vercelIp === "string" && vercelIp.trim()) {
     return vercelIp.split(",")[0].trim();
   }
-  const forwardedFor = req.headers["x-forwarded-for"];
-  if (typeof forwardedFor === "string" && forwardedFor.trim()) {
-    return forwardedFor.split(",")[0].trim();
-  }
-  if (req.ip) {
+  if (req.ip && req.ip !== "::1" && req.ip !== "127.0.0.1") {
     return req.ip;
   }
   return req.socket?.remoteAddress || "unknown-ip";
@@ -2287,6 +2388,9 @@ var SlidingWindowRateLimiter = class {
     this.buckets = /* @__PURE__ */ new Map();
     this.lastCleanup = Date.now();
   }
+  resetKey(key) {
+    this.buckets.delete(key);
+  }
   cleanup(now) {
     if (now - this.lastCleanup < 3e4) return;
     this.lastCleanup = now;
@@ -2332,6 +2436,12 @@ var SlidingWindowRateLimiter = class {
 var RedisRateLimiter = class {
   constructor(redis) {
     this.redis = redis;
+  }
+  async resetKey(key) {
+    try {
+      await this.redis.del(`rl:${key}`);
+    } catch {
+    }
   }
   async check(key, limit, windowMs) {
     const now = Date.now();
@@ -2435,12 +2545,31 @@ var standardRateLimiter = rateLimitMiddleware({
 });
 
 // src/server/telegram/telegram-auth.ts
+var hasLoggedTelegramConfigStatus = false;
 function getTelegramConfig() {
   const botToken = process.env.TELEGRAM_BOT_TOKEN?.trim() || "";
   const rawIds = process.env.TELEGRAM_ADMIN_USER_IDS || "";
   const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim() || "";
   const adminUserIds = rawIds.split(",").map((idStr) => parseInt(idStr.trim(), 10)).filter((id) => !isNaN(id) && id > 0);
-  const enabled = Boolean(botToken.length > 0 && adminUserIds.length > 0);
+  const enabled = Boolean(
+    botToken.length > 0 && adminUserIds.length > 0 && webhookSecret.length >= 16
+  );
+  if (!hasLoggedTelegramConfigStatus) {
+    hasLoggedTelegramConfigStatus = true;
+    console.log("[TELEGRAM_CONFIG_DIAGNOSTIC]", JSON.stringify({
+      botTokenPresent: botToken.length > 0,
+      botTokenLength: botToken.length,
+      botTokenPreview: botToken.length > 0 ? `${botToken.slice(0, 6)}...${botToken.slice(-4)}` : "(kosong)",
+      botTokenLooksValid: /^\d+:[A-Za-z0-9_-]{30,}$/.test(botToken),
+      rawAdminIdsInput: rawIds.length > 0 ? `"${rawIds}"` : "(kosong)",
+      adminUserIdsParsed: adminUserIds,
+      adminUserIdsCount: adminUserIds.length,
+      webhookSecretPresent: webhookSecret.length > 0,
+      webhookSecretLength: webhookSecret.length,
+      webhookSecretMeetsMinimum: webhookSecret.length >= 16,
+      finalEnabled: enabled
+    }));
+  }
   return {
     enabled,
     botToken,
@@ -2484,7 +2613,10 @@ function sanitizeForTelegramHtml(text) {
 }
 async function sendTelegramMessage(chatId, htmlText) {
   const { enabled, botToken } = getTelegramConfig();
-  if (!enabled || !botToken) return false;
+  if (!enabled || !botToken) {
+    console.warn(`[TELEGRAM_NOTIFIER] Pesan ke chat ${chatId} DIBATALKAN karena integrasi tidak aktif (enabled=${enabled}, botTokenPresent=${Boolean(botToken)}).`);
+    return false;
+  }
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 7e3);
@@ -2581,8 +2713,15 @@ async function alertAdminLoginFailed(ip) {
   ].join("\n");
   await sendTelegramAlert(msg);
 }
-async function alertMaintenanceModeChanged(active, channel, operatorInfo) {
-  const statusText = active ? "\u{1F534} DIAKTIFKAN (Unggahan Ditutup)" : "\u{1F7E2} DINONAKTIFKAN (Layanan Normal)";
+async function alertMaintenanceModeChanged(levelOrActive, channel, operatorInfo) {
+  let statusText = "";
+  if (levelOrActive === "full_lockdown") {
+    statusText = "\u{1F534} LOCKDOWN TOTAL (Upload & Share Link Ditutup)";
+  } else if (levelOrActive === "upload_only" || levelOrActive === true) {
+    statusText = "\u{1F7E1} UPLOAD DITUTUP (Hanya Upload Dinonaktifkan)";
+  } else {
+    statusText = "\u{1F7E2} DINONAKTIFKAN (Layanan Normal)";
+  }
   const op = operatorInfo ? `
 Operator: <code>${sanitizeForTelegramHtml(operatorInfo)}</code>` : "";
   const msg = [
@@ -2631,19 +2770,31 @@ var mediaController = {
    * Provides non-sensitive upload configuration to client
    */
   async getConfig(req, res) {
-    const currentMaxSize = await getMaxUploadSize();
-    const currentRateLimit = await getUploadRateLimit();
-    const response = {
-      success: true,
-      data: {
-        maxUploadSize: currentMaxSize,
-        formattedMaxSize: formatBytes3(currentMaxSize),
-        provider: storageProvider.name,
-        isDeleteSupported: storageProvider.isDeleteSupported(),
-        rateLimitUploadsPerMinute: currentRateLimit.limit
-      }
-    };
-    res.json(response);
+    try {
+      const currentMaxSize = await getMaxUploadSize();
+      const currentRateLimit = await getUploadRateLimit();
+      const response = {
+        success: true,
+        data: {
+          maxUploadSize: currentMaxSize,
+          formattedMaxSize: formatBytes3(currentMaxSize),
+          provider: storageProvider.name,
+          isDeleteSupported: storageProvider.isDeleteSupported(),
+          rateLimitUploadsPerMinute: currentRateLimit.limit
+        }
+      };
+      res.json(response);
+    } catch (error) {
+      console.error("[MEDIA_GET_CONFIG_ERROR]", error);
+      const err = {
+        success: false,
+        error: {
+          code: "CONFIG_ERROR",
+          message: "Gagal memuat konfigurasi sistem."
+        }
+      };
+      res.status(500).json(err);
+    }
   },
   /**
    * POST /api/media/upload
@@ -2655,7 +2806,7 @@ var mediaController = {
         success: false,
         error: {
           code: "MAINTENANCE_MODE",
-          message: "Layanan sedang dalam pemeliharaan. Silakan coba beberapa saat lagi."
+          message: "Layanan unggah sedang dalam pemeliharaan. Silakan coba beberapa saat lagi atau pantau status di /status."
         }
       };
       res.status(503).json(err);
@@ -3002,7 +3153,7 @@ var mediaController = {
 
 // src/server/api/routes.ts
 var router = Router();
-var MULTER_CEILING_SIZE = 500 * 1024 * 1024;
+var MULTER_CEILING_SIZE = process.env.VERCEL ? 4.5 * 1024 * 1024 : 500 * 1024 * 1024;
 var upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -3419,6 +3570,13 @@ function getFileCategoryIcon(mimeType, filename) {
 }
 var ShareController = class _ShareController {
   async renderShareLanding(req, res) {
+    const level = await getMaintenanceLevel();
+    if (level === "full_lockdown") {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.status(503).send(_ShareController.renderFullLockdownHtml());
+      return;
+    }
     const rawId = req.params.id;
     const requestId = req.id || res.getHeader("X-Request-ID") || `req_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
     if (!rawId || typeof rawId !== "string" || !rawId.trim()) {
@@ -3538,6 +3696,241 @@ var ShareController = class _ShareController {
       errorCode: "ERR_MEDIA_NOT_FOUND",
       httpStatus: 404
     });
+  }
+  static renderFullLockdownHtml() {
+    return `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>Layanan Sedang Ditutup Sementara \u2014 AirShare Pro</title>
+  <style>
+    :root {
+      --bg: #09090b;
+      --card: #121216;
+      --card-inner: #181820;
+      --border: #27272a;
+      --border-subtle: #202025;
+      --text: #f4f4f5;
+      --text-muted: #a1a1aa;
+      --accent: #f87171;
+      --accent-glow: rgba(239, 68, 68, 0.15);
+      --blue: #3b82f6;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      position: relative;
+      overflow-x: hidden;
+    }
+    body::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 360px;
+      background: radial-gradient(circle at 50% 10%, rgba(239, 68, 68, 0.08) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+    .wrapper {
+      position: relative;
+      z-index: 1;
+      max-width: 520px;
+      width: 100%;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.625rem;
+      margin-bottom: 1.5rem;
+      text-decoration: none;
+      color: var(--text);
+    }
+    .brand-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #ef4444, #b91c1c);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+    }
+    .brand-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .brand-tag {
+      font-size: 0.7rem;
+      padding: 0.15rem 0.45rem;
+      border-radius: 9999px;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #f87171;
+      font-weight: 600;
+    }
+    .card {
+      background-color: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 1.25rem;
+      padding: 2rem;
+      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.03);
+      text-align: center;
+    }
+    .status-badge-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1.25rem;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      background-color: var(--accent-glow);
+      color: var(--accent);
+      border: 1px solid rgba(239, 68, 68, 0.25);
+      border-radius: 9999px;
+      padding: 0.35rem 0.85rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background-color: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+    }
+    .hero-icon-container {
+      width: 60px;
+      height: 60px;
+      border-radius: 1rem;
+      background-color: var(--accent-glow);
+      color: var(--accent);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 1.25rem;
+    }
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.6rem;
+      color: var(--text);
+      line-height: 1.3;
+    }
+    .desc {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      line-height: 1.6;
+      margin-bottom: 1.5rem;
+    }
+    .status-info-box {
+      background: var(--card-inner);
+      border: 1px solid var(--border-subtle);
+      border-radius: 0.85rem;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1rem;
+      border-radius: 0.75rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s;
+      cursor: pointer;
+      border: 1px solid transparent;
+    }
+    .btn-primary {
+      background-color: #2563eb;
+      color: #fff;
+    }
+    .btn-primary:hover {
+      background-color: #1d4ed8;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+        </svg>
+      </div>
+      <span class="brand-title">AirShare Pro</span>
+      <span class="brand-tag">Maintenance</span>
+    </div>
+
+    <div class="card">
+      <div class="status-badge-row">
+        <div class="status-badge">
+          <span class="status-dot"></span>
+          <span>503 SERVICE UNAVAILABLE</span>
+        </div>
+      </div>
+
+      <div class="hero-icon-container">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+        </svg>
+      </div>
+
+      <h1>Layanan Sedang Ditutup Sementara</h1>
+      <p class="desc">Saat ini seluruh akses layanan berbagi berkas sedang ditutup sementara untuk pemeliharaan sistem.</p>
+
+      <div class="status-info-box">
+        Silakan coba beberapa saat lagi. Anda dapat memantau perkembangan pemeliharaan melalui halaman status publik kami.
+      </div>
+
+      <div class="actions">
+        <a href="/status" class="btn btn-primary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+          </svg>
+          Cek status layanan di sini
+        </a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
   }
   static renderThemedErrorHtml(options) {
     const {
@@ -5355,7 +5748,7 @@ var cachedAdminSecretKey = null;
 var cachedAdminSecretHash = null;
 function getAdminConfig() {
   const rawSecret = process.env.ADMIN_SECRET_KEY?.trim() || "";
-  const isSecretValid = rawSecret.length >= 16;
+  const isSecretValid = rawSecret.length > 0;
   if (!isSecretValid) {
     return {
       enabled: false,
@@ -5368,6 +5761,16 @@ function getAdminConfig() {
     panelPath: ADMIN_PANEL_PATH,
     secretKey: rawSecret
   };
+}
+function generateSessionHmac(data, secret) {
+  return crypto2.createHmac("sha256", secret || "airshare-admin-salt").update(data).digest("hex");
+}
+function safeEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto2.timingSafeEqual(bufA, bufB);
 }
 async function hashPassword(password) {
   const salt = await bcrypt.genSalt(12);
@@ -5388,8 +5791,11 @@ async function verifyAdminPassword(inputPassword) {
   return verifyPassword(inputPassword, cachedAdminSecretHash);
 }
 async function createAdminSession(req) {
-  const token = crypto2.randomBytes(32).toString("hex");
+  const rawRandom = crypto2.randomBytes(32).toString("hex");
   const now = Date.now();
+  const { secretKey } = getAdminConfig();
+  const hmacSig = generateSessionHmac(`${rawRandom}.${now}`, secretKey);
+  const token = `${rawRandom}_${now}_${hmacSig}`;
   const clientIp = req ? getClientIp(req) : "127.0.0.1";
   const userAgent = req?.headers["user-agent"] || "Unknown Client";
   const redis = isUpstashConfigured() ? getRedisClient() : null;
@@ -5406,7 +5812,7 @@ async function createAdminSession(req) {
       await pipeline.exec();
       return token;
     } catch (err) {
-      console.warn("[ADMIN_SESSION_REDIS_ERROR] Gagal menyimpan sesi admin di Redis, fallback memory:", err);
+      console.warn("[ADMIN_SESSION_REDIS_ERROR] Gagal menyimpan sesi admin di Redis, fallback memory/hmac:", err);
     }
   }
   cleanupMemorySessions();
@@ -5426,35 +5832,53 @@ async function verifyAdminSession(token) {
   if (redis) {
     try {
       const val = await redis.get(`admin_session:${token}`);
-      return val === "valid";
+      if (val === "valid") return true;
+      if (val === "revoked") return false;
     } catch (err) {
-      console.warn("[ADMIN_SESSION_REDIS_ERROR] Gagal memverifikasi sesi admin di Redis, fallback memory:", err);
+      console.warn("[ADMIN_SESSION_REDIS_ERROR] Gagal memverifikasi sesi admin di Redis, fallback memory/hmac:", err);
     }
   }
   cleanupMemorySessions();
   const session = inMemoryAdminSessions.get(token);
-  if (!session) return false;
-  if (session.expiresAt <= Date.now()) {
-    inMemoryAdminSessions.delete(token);
-    return false;
+  if (session) {
+    if (session.expiresAt <= Date.now()) {
+      inMemoryAdminSessions.delete(token);
+      return false;
+    }
+    return true;
   }
-  return true;
+  const parts = token.split("_");
+  if (parts.length === 3) {
+    const [rawRandom, timestampStr, providedSig] = parts;
+    const timestamp = parseInt(timestampStr, 10);
+    if (!isNaN(timestamp)) {
+      const ageMs = Date.now() - timestamp;
+      if (ageMs >= 0 && ageMs <= ADMIN_SESSION_TTL_SECONDS * 1e3) {
+        const { secretKey } = getAdminConfig();
+        const expectedSig = generateSessionHmac(`${rawRandom}.${timestampStr}`, secretKey);
+        if (safeEqual(providedSig, expectedSig)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 async function destroyAdminSession(token) {
   if (!token) return;
+  inMemoryAdminSessions.delete(token);
   const redis = isUpstashConfigured() ? getRedisClient() : null;
   if (redis) {
     try {
       const pipeline = redis.pipeline();
-      pipeline.del(`admin_session:${token}`);
+      pipeline.set(`admin_session:${token}`, "revoked", { ex: ADMIN_SESSION_TTL_SECONDS });
       pipeline.del(`admin_session_meta:${token}`);
       pipeline.srem("admin_active_sessions", token);
       await pipeline.exec();
     } catch (err) {
-      console.warn("[ADMIN_SESSION_REDIS_ERROR] Gagal menghapus sesi admin dari Redis:", err);
+      console.warn("[ADMIN_SESSION_DESTROY_ERROR] Gagal menghapus sesi dari Redis:", err);
     }
   }
-  inMemoryAdminSessions.delete(token);
 }
 async function getAllActiveSessions(currentToken) {
   const sessions = [];
@@ -5604,10 +6028,79 @@ function formatAbsoluteTime(timestamp) {
     second: "2-digit"
   });
 }
+function renderIosDropdown(id, labelText, options, selectedValue) {
+  const selectedOption = options.find((o) => o.value === selectedValue) || options[0];
+  const optionsHtml = options.map((opt) => {
+    const isSel = opt.value === selectedOption.value;
+    return `
+      <div class="ios-sheet-item ${isSel ? "selected" : ""}" role="option" aria-selected="${isSel}" data-value="${escapeHtml2(opt.value)}" data-label="${escapeHtml2(opt.label)}" tabindex="0">
+        <div style="display: flex; align-items: center; gap: 0.6rem;">
+          ${opt.badgeColor ? `<span class="ios-sheet-dot" style="background: ${opt.badgeColor};"></span>` : ""}
+          <div>
+            <div style="font-weight: 600; font-size: 0.85rem; color: var(--text-main);">${escapeHtml2(opt.label)}</div>
+            ${opt.sublabel ? `<div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 0.1rem;">${escapeHtml2(opt.sublabel)}</div>` : ""}
+          </div>
+        </div>
+        <svg class="ios-sheet-check ${isSel ? "visible" : ""}" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+    `;
+  }).join("");
+  return `
+    <div class="ios-select-wrapper" data-dropdown-id="${escapeHtml2(id)}">
+      <input type="hidden" id="${escapeHtml2(id)}" value="${escapeHtml2(selectedOption.value)}" />
+      <button type="button" class="ios-select-trigger" id="${escapeHtml2(id)}-trigger" aria-haspopup="listbox" aria-expanded="false" aria-label="${escapeHtml2(labelText)}">
+        <span class="ios-select-trigger-label" id="${escapeHtml2(id)}-trigger-label">
+          ${selectedOption.badgeColor ? `<span class="ios-sheet-dot" style="background: ${selectedOption.badgeColor}; margin-right: 0.4rem;"></span>` : ""}
+          <span>${escapeHtml2(selectedOption.label)}</span>
+        </span>
+        <svg class="ios-select-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+
+      <!-- Desktop Popover & Mobile Action Sheet -->
+      <div class="ios-sheet-backdrop" id="${escapeHtml2(id)}-backdrop" style="display: none;"></div>
+      <div class="ios-sheet-modal" id="${escapeHtml2(id)}-modal" role="listbox" aria-label="${escapeHtml2(labelText)}" style="display: none;">
+        <div class="ios-sheet-header">
+          <div class="ios-sheet-handle"></div>
+          <div class="ios-sheet-title">${escapeHtml2(labelText)}</div>
+        </div>
+        <div class="ios-sheet-body">
+          ${optionsHtml}
+        </div>
+        <div class="ios-sheet-footer">
+          <button type="button" class="ios-sheet-btn-cancel">Batal</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
 function renderOperationalControlsHtml(config2) {
-  const isMaintenance = config2.maintenanceMode;
-  const announcement = config2.announcement || { message: "", type: "info", enabled: false, updatedAt: 0 };
+  const currentLevel = config2.maintenanceLevel || (config2.maintenanceMode ? "upload_only" : "off");
+  const announcement = config2.announcement || { message: "", type: "info", enabled: false, updatedAt: 0, expiresAt: null };
   const maxMb = Math.round(config2.maxUploadSize / (1024 * 1024));
+  const announcementTypeOptions = [
+    { value: "info", label: "Info (Biru)", sublabel: "Pemberitahuan umum & informasi rilis", badgeColor: "#38bdf8" },
+    { value: "warning", label: "Peringatan (Kuning/Oranye)", sublabel: "Jadwal pemeliharaan & limitasi", badgeColor: "#fbbf24" },
+    { value: "success", label: "Sukses (Hijau)", sublabel: "Pembaruan fitur & promosi", badgeColor: "#34d399" }
+  ];
+  const expiryOptions = [
+    { value: "0", label: "Tanpa Batas Waktu (Permanen)", sublabel: "Tetap tayang sampai dinonaktifkan manual" },
+    { value: "3600000", label: "1 Jam", sublabel: "Otomatis berakhir dalam 60 menit" },
+    { value: "21600000", label: "6 Jam", sublabel: "Otomatis berakhir dalam 6 jam" },
+    { value: "43200000", label: "12 Jam", sublabel: "Otomatis berakhir dalam 12 jam" },
+    { value: "86400000", label: "24 Jam (1 Hari)", sublabel: "Otomatis berakhir besok di jam yang sama" },
+    { value: "259200000", label: "3 Hari", sublabel: "Otomatis berakhir dalam 72 jam" },
+    { value: "604800000", label: "7 Hari (1 Minggu)", sublabel: "Otomatis berakhir dalam 7 hari" },
+    { value: "custom", label: "Pilih Tanggal & Waktu Khusus...", sublabel: "Tentukan tanggal kedaluwarsa spesifik" }
+  ];
+  let selectedExpiryValue = "0";
+  let customExpiresIso = "";
+  if (announcement.expiresAt && announcement.expiresAt > Date.now()) {
+    selectedExpiryValue = "custom";
+    const expDate = new Date(announcement.expiresAt);
+    customExpiresIso = expDate.toISOString().slice(0, 16);
+  }
+  const hasActiveAnnouncement = Boolean(announcement.message && announcement.message.trim().length > 0);
+  const isExpired = Boolean(announcement.expiresAt && announcement.expiresAt <= Date.now());
   return `
   <!-- Kontrol Operasional & Konfigurasi Dinamis Panel -->
   <section class="panel" style="margin-bottom: 1.5rem;" id="operational-panel">
@@ -5619,32 +6112,49 @@ function renderOperationalControlsHtml(config2) {
       <span class="panel-badge">Tanpa Redeploy</span>
     </div>
 
+    <!-- Redis Warning Banner (Shown if Upstash is not configured) -->
+    ${!isUpstashConfigured() ? `
+    <div style="background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 8px; padding: 0.85rem 1rem; margin-bottom: 1.25rem; display: flex; align-items: flex-start; gap: 0.75rem; color: #fbbf24; font-size: 0.825rem; line-height: 1.5;">
+      <svg style="flex-shrink: 0; margin-top: 2px;" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <div>
+        <strong>Peringatan Database Persisten:</strong> Upstash Redis belum terhubung. Konfigurasi operasional saat ini berjalan dalam memori lokal dan <em>tidak tersinkronisasi lintas worker serverless Vercel</em>. Tambahkan <code>UPSTASH_REDIS_REST_URL</code> dan <code>UPSTASH_REDIS_REST_TOKEN</code> di Vercel Environment Variables.
+      </div>
+    </div>
+    ` : ""}
+
     <!-- Kill Switch Section -->
-    <div style="background: ${isMaintenance ? "rgba(239, 68, 68, 0.12)" : "rgba(16, 185, 129, 0.08)"}; border: 1px solid ${isMaintenance ? "rgba(239, 68, 68, 0.35)" : "rgba(16, 185, 129, 0.25)"}; border-radius: 10px; padding: 1.25rem; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+    <div id="kill-switch-card" style="background: ${currentLevel === "full_lockdown" ? "rgba(239, 68, 68, 0.16)" : currentLevel === "upload_only" ? "rgba(245, 158, 11, 0.12)" : "rgba(16, 185, 129, 0.08)"}; border: 1px solid ${currentLevel === "full_lockdown" ? "rgba(239, 68, 68, 0.45)" : currentLevel === "upload_only" ? "rgba(245, 158, 11, 0.35)" : "rgba(16, 185, 129, 0.25)"}; border-radius: 10px; padding: 1.25rem; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; transition: all 0.3s ease;">
       <div style="display: flex; align-items: center; gap: 0.85rem;">
-        <span class="status-indicator ${isMaintenance ? "status-err pulsing" : "status-ok"}"></span>
+        <span id="kill-switch-indicator" class="status-indicator ${currentLevel === "off" ? "status-ok" : "status-err pulsing"}"></span>
         <div>
-          <div style="font-weight: 700; font-size: 0.95rem; color: ${isMaintenance ? "#f87171" : "#34d399"};">
-            ${isMaintenance ? "KILL SWITCH AKTIF \u2014 Unggahan Dinonaktifkan (503)" : "Layanan Normal \u2014 Unggahan Terbuka"}
+          <div id="kill-switch-title" style="font-weight: 700; font-size: 0.95rem; color: ${currentLevel === "full_lockdown" ? "#f87171" : currentLevel === "upload_only" ? "#fbbf24" : "#34d399"};">
+            ${currentLevel === "full_lockdown" ? "LOCKDOWN TOTAL \u2014 Seluruh Akses Publik Ditutup (503)" : currentLevel === "upload_only" ? "TUTUP UPLOAD \u2014 Unggahan Dinonaktifkan (503), Share Link Tetap Aktif" : "Layanan Normal \u2014 Unggahan &amp; Berbagi Terbuka"}
           </div>
-          <div style="font-size: 0.8rem; color: var(--muted); margin-top: 0.2rem;">
-            ${isMaintenance ? "Pengguna yang mencoba mengunggah akan menerima respon HTTP 503 Maintenance Mode." : "Semua pengguna dapat mengunggah berkas sesuai kapasitas yang ditentukan."}
+          <div id="kill-switch-desc" style="font-size: 0.8rem; color: var(--muted); margin-top: 0.2rem;">
+            ${currentLevel === "full_lockdown" ? "Seluruh unggahan baru DAN akses share landing publik diblokir (503). Hanya admin yang dapat mengakses sistem." : currentLevel === "upload_only" ? "Pengguna publik yang mencoba mengunggah akan menerima respon HTTP 503. Tautan share yang sudah ada tetap dapat dibuka." : "Semua pengguna dapat mengunggah dan mengakses berkas sesuai kapasitas yang ditentukan."}
           </div>
         </div>
       </div>
-      <button type="button" id="btn-toggle-maintenance" class="${isMaintenance ? "btn-maint-disable" : "btn-maint-enable"}" data-active="${isMaintenance ? "true" : "false"}">
-        ${isMaintenance ? "Nonaktifkan Maintenance Mode" : "Aktifkan Kill Switch (Tutup Unggah)"}
-      </button>
+      <div>
+        <label style="font-size: 0.75rem; font-weight: 600; color: var(--muted); display: block; margin-bottom: 0.35rem;">Status Kill Switch</label>
+        <button type="button" id="killswitch-level-trigger" class="ios-select-trigger" data-value="${currentLevel}">
+          <span id="killswitch-level-label">${currentLevel === "full_lockdown" ? "Lockdown Total" : currentLevel === "upload_only" ? "Tutup Upload Saja" : "Normal (Aktif)"}</span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+      </div>
     </div>
 
     <!-- 2 Column Config Forms -->
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.25rem;">
       <!-- Announcement Banner Config -->
       <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem;">
-        <h3 style="font-size: 0.9rem; font-weight: 700; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>
-          Banner Pengumuman Sistem
-        </h3>
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+          <h3 style="font-size: 0.9rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem; margin: 0;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>
+            Banner Pengumuman Sistem
+          </h3>
+          ${announcement.expiresAt && !isExpired ? `<span id="banner-expiry-badge" style="font-size: 0.7rem; font-weight: 700; color: #38bdf8; background: rgba(56, 189, 248, 0.15); padding: 0.2rem 0.5rem; border-radius: 4px;">Berakhir: ${formatAbsoluteTime(announcement.expiresAt)}</span>` : isExpired ? `<span id="banner-expiry-badge" style="font-size: 0.7rem; font-weight: 700; color: #f87171; background: rgba(239, 68, 68, 0.15); padding: 0.2rem 0.5rem; border-radius: 4px;">Expired (${formatRelativeTime2(announcement.expiresAt)})</span>` : ""}
+        </div>
 
         <div style="display: flex; flex-direction: column; gap: 0.85rem;">
           <div>
@@ -5655,25 +6165,38 @@ function renderOperationalControlsHtml(config2) {
           <div class="config-form-grid">
             <div>
               <label style="font-size: 0.75rem; font-weight: 600; color: var(--muted); display: block; margin-bottom: 0.35rem;">Tipe Tampilan</label>
-              <select id="announcement-type" style="width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.5rem 0.6rem; font-size: 0.825rem;">
-                <option value="info" ${announcement.type === "info" ? "selected" : ""}>Info (Biru)</option>
-                <option value="warning" ${announcement.type === "warning" ? "selected" : ""}>Peringatan (Kuning/Oranye)</option>
-                <option value="success" ${announcement.type === "success" ? "selected" : ""}>Sukses (Hijau)</option>
-              </select>
+              ${renderIosDropdown("announcement-type", "Pilih Tipe Tampilan", announcementTypeOptions, announcement.type || "info")}
             </div>
 
             <div>
-              <label style="font-size: 0.75rem; font-weight: 600; color: var(--muted); display: block; margin-bottom: 0.35rem;">Status Banner</label>
-              <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.825rem; font-weight: 600; height: 36px; cursor: pointer;">
-                <input type="checkbox" id="announcement-enabled" ${announcement.enabled ? "checked" : ""} style="width: 16px; height: 16px; accent-color: var(--accent);" />
-                <span>Tampilkan Banner</span>
-              </label>
+              <label style="font-size: 0.75rem; font-weight: 600; color: var(--muted); display: block; margin-bottom: 0.35rem;">Batas Waktu Tayang (Expiry)</label>
+              ${renderIosDropdown("announcement-expiry", "Pilih Batas Waktu Tayang", expiryOptions, selectedExpiryValue)}
             </div>
           </div>
 
-          <button type="button" id="btn-save-announcement" class="btn-primary-config" style="margin-top: 0.5rem;">
-            Simpan Pengumuman
-          </button>
+          <!-- Custom Expiry Datetime (Shown when custom is selected) -->
+          <div id="announcement-custom-expiry-container" style="display: ${selectedExpiryValue === "custom" ? "block" : "none"};">
+            <label style="font-size: 0.75rem; font-weight: 600; color: var(--muted); display: block; margin-bottom: 0.35rem;">Waktu Kedaluwarsa Spesifik</label>
+            <input type="datetime-local" id="announcement-custom-expiry-input" value="${customExpiresIso}" style="width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.5rem 0.6rem; font-size: 0.825rem;" />
+            <span style="font-size: 0.7rem; color: var(--muted);">Banner otomatis hilang setelah melewati waktu ini.</span>
+          </div>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; padding-top: 0.25rem;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.825rem; font-weight: 600; cursor: pointer;">
+              <input type="checkbox" id="announcement-enabled" ${announcement.enabled ? "checked" : ""} style="width: 16px; height: 16px; accent-color: var(--accent);" />
+              <span>Tampilkan Banner di Frontend</span>
+            </label>
+          </div>
+
+          <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap;">
+            <button type="button" id="btn-save-announcement" class="btn-primary-config" style="flex: 1; min-width: 140px;">
+              Simpan Pengumuman
+            </button>
+            <button type="button" id="btn-delete-announcement" class="btn-danger-subtle" style="display: ${hasActiveAnnouncement ? "inline-flex" : "none"}; align-items: center; justify-content: center; gap: 0.35rem;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              Hapus Pengumuman
+            </button>
+          </div>
         </div>
       </div>
 
@@ -5703,87 +6226,88 @@ function renderOperationalControlsHtml(config2) {
             <div style="font-size: 0.75rem; font-weight: 600; color: var(--muted); margin-bottom: 0.5rem;">Feature Toggles Frontend:</div>
             <div style="display: flex; flex-direction: column; gap: 0.4rem;">
               <label style="display: flex; align-items: center; gap: 0.6rem; font-size: 0.8rem; cursor: pointer;">
-                <input type="checkbox" id="flag-paste" ${config2.featureFlags.pasteToUpload ? "checked" : ""} style="accent-color: var(--accent);" />
-                <span>Paste-to-Upload (Ctrl+V di halaman)</span>
+                <input type="checkbox" id="flag-paste" ${config2.featureFlags.pasteToUpload ? "checked" : ""} style="width: 15px; height: 15px; accent-color: var(--accent);" />
+                <span>Aktifkan Paste-to-Upload (Ctrl+V)</span>
               </label>
               <label style="display: flex; align-items: center; gap: 0.6rem; font-size: 0.8rem; cursor: pointer;">
-                <input type="checkbox" id="flag-qrcode" ${config2.featureFlags.qrCode ? "checked" : ""} style="accent-color: var(--accent);" />
-                <span>Tombol &amp; Modal Kode QR Publik</span>
+                <input type="checkbox" id="flag-qrcode" ${config2.featureFlags.qrCode ? "checked" : ""} style="width: 15px; height: 15px; accent-color: var(--accent);" />
+                <span>Tampilkan Generator QR Code Tautan</span>
               </label>
               <label style="display: flex; align-items: center; gap: 0.6rem; font-size: 0.8rem; cursor: pointer;">
-                <input type="checkbox" id="flag-pwa" ${config2.featureFlags.pwaInstallPrompt ? "checked" : ""} style="accent-color: var(--accent);" />
-                <span>Prompt Instalasi PWA di Header</span>
+                <input type="checkbox" id="flag-pwa" ${config2.featureFlags.pwaInstallPrompt ? "checked" : ""} style="width: 15px; height: 15px; accent-color: var(--accent);" />
+                <span>Tampilkan Banner Instalasi PWA</span>
               </label>
             </div>
           </div>
 
           <button type="button" id="btn-save-limits-flags" class="btn-primary-config" style="margin-top: 0.5rem;">
-            Simpan Konfigurasi Dinamis
+            Simpan Batas &amp; Flags
           </button>
         </div>
       </div>
     </div>
   </section>`;
 }
-function renderActiveSessionsHtml(sessions) {
-  const otherSessionsCount = sessions.filter((s) => !s.isCurrent).length;
+function renderActiveSessionsHtml(sessions, currentToken = "") {
   return `
-  <!-- Manajemen Sesi Admin Panel -->
+  <!-- Sesi Admin Aktif Panel -->
   <section class="panel" style="margin-bottom: 1.5rem;" id="sessions-panel">
     <div class="panel-header">
       <h2 class="panel-title">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-        Sesi Admin Aktif (${sessions.length} Sesi Terbuka)
+        Sesi Admin Aktif (${sessions.length})
       </h2>
-      <div style="display: flex; align-items: center; gap: 0.75rem;">
-        <span class="panel-badge">TTL: 1 Jam</span>
-        ${otherSessionsCount > 0 ? `<button type="button" id="btn-revoke-all-sessions" class="btn-revoke-all" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); padding: 0.35rem 0.75rem; border-radius: 6px; font-size: 0.75rem; font-weight: 700; cursor: pointer; transition: all 0.2s;">Cabut Semua Sesi Lain (${otherSessionsCount})</button>` : ""}
-      </div>
+      <button type="button" id="btn-revoke-all-sessions" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); padding: 0.35rem 0.75rem; border-radius: 6px; font-size: 0.75rem; font-weight: 700; cursor: pointer;">
+        Cabut Semua Sesi Lain
+      </button>
     </div>
 
     <div class="table-container">
-      <table style="min-width: 660px;">
+      <table style="min-width: 600px;">
         <thead>
           <tr>
-            <th style="width: 120px;">Token Sesi</th>
-            <th style="width: 140px;">Waktu Login</th>
-            <th style="width: 130px;">IP Klien</th>
-            <th style="min-width: 160px;">User Agent</th>
-            <th style="width: 100px;">Status</th>
-            <th style="width: 80px; text-align: center;">Aksi</th>
+            <th>Status / Perangkat</th>
+            <th>IP Address</th>
+            <th>Waktu Login</th>
+            <th>Aksi</th>
           </tr>
         </thead>
         <tbody>
-          ${sessions.length === 0 ? `<tr><td colspan="6" style="text-align: center; color: var(--muted); padding: 2rem;">Tidak ada sesi aktif.</td></tr>` : sessions.map((s) => `
-            <tr id="session-row-${escapeHtml2(s.token)}">
+          ${sessions.length === 0 ? `<tr><td colspan="4" style="text-align: center; color: var(--muted); padding: 2rem;">Tidak ada sesi aktif lain.</td></tr>` : sessions.map((s) => {
+    const isCurrent = s.isCurrent || s.token === currentToken;
+    return `
+            <tr id="session-row-${s.token}">
               <td>
-                <code style="background: rgba(255,255,255,0.06); padding: 0.25rem 0.45rem; border-radius: 4px; font-size: 0.75rem; color: #a5b4fc; font-weight: 600; white-space: nowrap;">
-                  ${escapeHtml2(s.tokenPreview)}
-                </code>
-              </td>
-              <td>
-                <div style="font-weight: 600; font-size: 0.8rem; white-space: nowrap;">${formatRelativeTime2(s.loginAt)}</div>
-                <div style="font-size: 0.7rem; color: var(--muted); white-space: nowrap;">${formatAbsoluteTime(s.loginAt)}</div>
-              </td>
-              <td style="font-weight: 600; font-size: 0.8rem; white-space: nowrap;">${escapeHtml2(s.ip)}</td>
-              <td>
-                <div style="font-size: 0.75rem; color: var(--muted); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml2(s.userAgent)}">
-                  ${escapeHtml2(s.userAgent)}
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                  <span class="status-indicator ${isCurrent ? "status-ok" : "status-warn"}"></span>
+                  <div>
+                    <div style="font-weight: 600; font-size: 0.8rem;">${isCurrent ? "Sesi Ini (Perangkat Anda)" : "Sesi Lain"}</div>
+                    <div style="font-size: 0.7rem; color: var(--muted); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml2(s.userAgent)}">
+                      ${escapeHtml2(s.userAgent.split(" ")[0] || "Unknown Client")}
+                    </div>
+                  </div>
                 </div>
               </td>
+              <td style="font-size: 0.8rem; font-weight: 600;">${escapeHtml2(s.ip)}</td>
+              <td style="font-size: 0.75rem; color: var(--muted);">${formatRelativeTime2(s.loginAt)}</td>
               <td>
-                ${s.isCurrent ? `<span style="display: inline-block; background: rgba(16, 185, 129, 0.2); color: #34d399; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700; white-space: nowrap;">Sesi Ini</span>` : `<span style="display: inline-block; background: rgba(255, 255, 255, 0.08); color: var(--muted); padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; white-space: nowrap;">Perangkat Lain</span>`}
+                ${isCurrent ? `<span style="font-size: 0.75rem; color: var(--muted); font-style: italic;">Sedang Digunakan</span>` : `<button type="button" class="btn-revoke-single" data-token="${s.token}" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); padding: 0.25rem 0.6rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; cursor: pointer;">Cabut</button>`}
               </td>
-              <td style="text-align: center;">
-                ${s.isCurrent ? `<span style="font-size: 0.75rem; color: var(--muted);">-</span>` : `<button type="button" class="btn-revoke-single" data-token="${escapeHtml2(s.token)}" style="background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); padding: 0.25rem 0.55rem; border-radius: 4px; font-size: 0.75rem; font-weight: 700; cursor: pointer; transition: all 0.2s;">Cabut</button>`}
-              </td>
-            </tr>`).join("")}
+            </tr>`;
+  }).join("")}
         </tbody>
       </table>
     </div>
   </section>`;
 }
 function renderBulkCleanupHtml() {
+  const cleanupAgeOptions = [
+    { value: "7", label: "Lebih dari 7 Hari Lalu", sublabel: "Unggahan yang lebih tua dari 1 minggu" },
+    { value: "30", label: "Lebih dari 30 Hari Lalu", sublabel: "Unggahan yang lebih tua dari 1 bulan (Direkomendasikan)" },
+    { value: "60", label: "Lebih dari 60 Hari Lalu", sublabel: "Unggahan yang lebih tua dari 2 bulan" },
+    { value: "90", label: "Lebih dari 90 Hari Lalu", sublabel: "Unggahan yang lebih tua dari 3 bulan" },
+    { value: "0", label: "Semua Usia Berkas (Tanpa Batas)", sublabel: "Hanya berdasarkan kriteria jumlah tayangan (views)" }
+  ];
   return `
   <!-- Pembersihan Massal (Bulk Cleanup) Panel -->
   <section class="panel" style="margin-bottom: 1.5rem;" id="bulk-cleanup-panel">
@@ -5795,58 +6319,52 @@ function renderBulkCleanupHtml() {
       <span class="panel-badge">Two-Phase Safe Execution</span>
     </div>
 
-    <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem;">
-      <p style="font-size: 0.8rem; color: var(--muted); margin-bottom: 1rem;">
+    <div style="background: var(--surface-primary); border: 1px solid var(--border-subtle); border-radius: 1.25rem; padding: 1.25rem;">
+      <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1rem;">
         Bersihkan berkas lama yang tidak aktif dalam jumlah banyak sekaligus. Setiap eksekusi wajib melalui tahap <strong>Pratinjau Dampak</strong> dan <strong>Ketik Konfirmasi Teks</strong> sebelum penghapusan permanen dijalankan.
       </p>
 
       <!-- Filter Controls -->
       <div style="display: flex; align-items: flex-end; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.25rem;">
-        <div style="flex: 1; min-width: 160px;">
-          <label style="font-size: 0.75rem; font-weight: 600; color: var(--muted); display: block; margin-bottom: 0.35rem;">Usia Berkas (Diunggah Sebelum)</label>
-          <select id="cleanup-older-than" style="width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.5rem 0.6rem; font-size: 0.825rem;">
-            <option value="7">Lebih dari 7 Hari Lalu</option>
-            <option value="30" selected>Lebih dari 30 Hari Lalu</option>
-            <option value="60">Lebih dari 60 Hari Lalu</option>
-            <option value="90">Lebih dari 90 Hari Lalu</option>
-            <option value="0">Semua Usia Berkas</option>
-          </select>
+        <div style="flex: 1; min-width: 220px;">
+          <label style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.35rem;">Usia Berkas (Diunggah Sebelum)</label>
+          ${renderIosDropdown("cleanup-older-than", "Pilih Usia Berkas", cleanupAgeOptions, "30")}
         </div>
 
         <div style="flex: 1; min-width: 160px;">
-          <label style="font-size: 0.75rem; font-weight: 600; color: var(--muted); display: block; margin-bottom: 0.35rem;">Maksimal Jumlah Tayangan (Views)</label>
-          <input type="number" id="cleanup-max-views" min="0" value="0" style="width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.5rem 0.6rem; font-size: 0.825rem;" />
-          <span style="font-size: 0.7rem; color: var(--muted);">0 = tidak pernah dilihat siapapun</span>
+          <label style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.35rem;">Maksimal Jumlah Tayangan (Views)</label>
+          <input type="number" id="cleanup-max-views" min="0" value="0" style="width: 100%; background: var(--bg-primary); border: 1px solid var(--border-subtle); border-radius: 0.75rem; color: var(--text-main); padding: 0.5rem 0.6rem; font-size: 0.825rem;" />
+          <span style="font-size: 0.7rem; color: var(--text-muted);">0 = tidak pernah dilihat siapapun</span>
         </div>
 
-        <button type="button" id="btn-preview-cleanup" style="background: var(--accent); color: var(--accent-text, #fff); border: none; padding: 0.55rem 1.25rem; border-radius: 6px; font-size: 0.825rem; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; height: 38px;">
+        <button type="button" id="btn-preview-cleanup" style="background: var(--accent); color: var(--accent-text, #fff); border: none; padding: 0.55rem 1.25rem; border-radius: 0.75rem; font-size: 0.825rem; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; height: 38px;">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
           Pratinjau Berkas Terdampak
         </button>
       </div>
 
       <!-- Preview Results Container (Hidden initially) -->
-      <div id="cleanup-preview-container" style="display: none; border-top: 1px solid var(--border); padding-top: 1.25rem;">
-        <div id="cleanup-preview-summary" style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 6px; padding: 1rem; margin-bottom: 1rem; font-size: 0.85rem; color: #fbbf24;">
+      <div id="cleanup-preview-container" style="display: none; border-top: 1px solid var(--border-subtle); padding-top: 1.25rem;">
+        <div id="cleanup-preview-summary" style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 0.75rem; padding: 1rem; margin-bottom: 1rem; font-size: 0.85rem; color: #fbbf24;">
           <!-- Populated dynamically via JS -->
         </div>
 
         <!-- Matched Items List (Collapsible) -->
-        <div id="cleanup-preview-items" style="max-height: 220px; overflow-y: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 1rem; padding: 0.5rem;">
+        <div id="cleanup-preview-items" style="max-height: 220px; overflow-y: auto; background: var(--bg-primary); border: 1px solid var(--border-subtle); border-radius: 0.75rem; margin-bottom: 1rem; padding: 0.5rem;">
           <!-- Populated dynamically via JS -->
         </div>
 
         <!-- Safety Confirmation Input & Execute Button -->
-        <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px; padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">
+        <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 0.75rem; padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">
           <div style="font-size: 0.8rem; font-weight: 700; color: #f87171;">
             PERINGATAN: Penghapusan bersifat ireversibel dari server Catbox &amp; database AirShare!
           </div>
-          <div style="font-size: 0.75rem; color: var(--muted);">
+          <div style="font-size: 0.75rem; color: var(--text-muted);">
             Ketik teks berikut persis untuk mengaktifkan tombol eksekusi: <code style="color: #fff; background: rgba(0,0,0,0.4); padding: 0.15rem 0.4rem; border-radius: 3px; font-weight: 800;">KONFIRMASI HAPUS MASSAL</code>
           </div>
           <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
-            <input type="text" id="cleanup-confirm-text" placeholder="KONFIRMASI HAPUS MASSAL" style="flex: 1; min-width: 240px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.5rem 0.75rem; font-size: 0.825rem;" />
-            <button type="button" id="btn-execute-cleanup" disabled style="background: #ef4444; color: #fff; border: none; padding: 0.55rem 1.25rem; border-radius: 6px; font-size: 0.825rem; font-weight: 700; cursor: not-allowed; opacity: 0.5;">
+            <input type="text" id="cleanup-confirm-text" placeholder="KONFIRMASI HAPUS MASSAL" style="flex: 1; min-width: 240px; background: var(--bg-primary); border: 1px solid var(--border-subtle); border-radius: 0.75rem; color: var(--text-main); padding: 0.5rem 0.75rem; font-size: 0.825rem;" />
+            <button type="button" id="btn-execute-cleanup" disabled style="background: #ef4444; color: #fff; border: none; padding: 0.55rem 1.25rem; border-radius: 0.75rem; font-size: 0.825rem; font-weight: 700; cursor: not-allowed; opacity: 0.5;">
               Jalankan Hapus Massal Permanen
             </button>
           </div>
@@ -5871,10 +6389,10 @@ function renderAuditLogsHtml(logs) {
       <table style="min-width: 680px;">
         <thead>
           <tr>
-            <th style="width: 140px; position: sticky; top: 0; background: var(--card); z-index: 2;">Waktu</th>
-            <th style="width: 150px; position: sticky; top: 0; background: var(--card); z-index: 2;">Jenis Tindakan</th>
-            <th style="min-width: 260px; position: sticky; top: 0; background: var(--card); z-index: 2;">Detail &amp; Dampak</th>
-            <th style="width: 120px; position: sticky; top: 0; background: var(--card); z-index: 2;">IP Admin</th>
+            <th>Waktu &amp; Tanggal</th>
+            <th>Tipe Aksi</th>
+            <th>Rincian Aktivitas</th>
+            <th>IP Address</th>
           </tr>
         </thead>
         <tbody>
@@ -5928,29 +6446,37 @@ function getOperationalPanelStyles() {
       }
     }
     .btn-maint-enable {
-      background: rgba(239, 68, 68, 0.2);
-      color: #f87171;
-      border: 1px solid rgba(239, 68, 68, 0.4);
+      background: rgba(239, 68, 68, 0.15);
+      color: #dc2626;
+      border: 1px solid rgba(239, 68, 68, 0.35);
       padding: 0.45rem 1rem;
       border-radius: 6px;
       font-size: 0.825rem;
       font-weight: 700;
       cursor: pointer;
       transition: all 0.2s;
+    }
+    .theme-spacegray .btn-maint-enable, .theme-purple .btn-maint-enable, .theme-pacific .btn-maint-enable {
+      color: #f87171;
+      background: rgba(239, 68, 68, 0.2);
     }
     .btn-maint-enable:hover {
       background: rgba(239, 68, 68, 0.35);
     }
     .btn-maint-disable {
-      background: rgba(16, 185, 129, 0.2);
-      color: #34d399;
-      border: 1px solid rgba(16, 185, 129, 0.4);
+      background: rgba(16, 185, 129, 0.15);
+      color: #059669;
+      border: 1px solid rgba(16, 185, 129, 0.35);
       padding: 0.45rem 1rem;
       border-radius: 6px;
       font-size: 0.825rem;
       font-weight: 700;
       cursor: pointer;
       transition: all 0.2s;
+    }
+    .theme-spacegray .btn-maint-disable, .theme-purple .btn-maint-disable, .theme-pacific .btn-maint-disable {
+      color: #34d399;
+      background: rgba(16, 185, 129, 0.2);
     }
     .btn-maint-disable:hover {
       background: rgba(16, 185, 129, 0.35);
@@ -5969,6 +6495,24 @@ function getOperationalPanelStyles() {
     .btn-primary-config:hover {
       opacity: 0.9;
     }
+    .btn-danger-subtle {
+      background: rgba(239, 68, 68, 0.12);
+      color: #dc2626;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      font-size: 0.825rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .theme-spacegray .btn-danger-subtle, .theme-purple .btn-danger-subtle, .theme-pacific .btn-danger-subtle {
+      color: #f87171;
+    }
+    .btn-danger-subtle:hover {
+      background: rgba(239, 68, 68, 0.25);
+      border-color: rgba(239, 68, 68, 0.5);
+    }
     .pulsing {
       animation: pulse-dot 1.5s infinite;
     }
@@ -5977,82 +6521,602 @@ function getOperationalPanelStyles() {
       50% { opacity: 0.4; transform: scale(1.2); }
       100% { opacity: 1; transform: scale(1); }
     }
+
+    /* iOS Custom Action Sheet & Popover Select Styling */
+    .ios-select-wrapper {
+      position: relative;
+      width: 100%;
+    }
+    .ios-select-trigger {
+      width: 100%;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 0.75rem;
+      color: var(--text-main);
+      padding: 0.55rem 0.75rem;
+      font-size: 0.825rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      cursor: pointer;
+      text-align: left;
+      transition: border-color 0.15s, background-color 0.15s;
+    }
+    .ios-select-trigger:hover, .ios-select-trigger:focus-visible {
+      border-color: var(--accent);
+      outline: none;
+    }
+    .ios-select-trigger-label {
+      display: flex;
+      align-items: center;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+    .ios-select-chevron {
+      color: var(--text-muted);
+      flex-shrink: 0;
+      transition: transform 0.2s ease;
+    }
+    .ios-select-wrapper.open .ios-select-chevron {
+      transform: rotate(180deg);
+    }
+    .ios-sheet-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      flex-shrink: 0;
+    }
+
+    /* Desktop Popover mode (screen >= 641px) */
+    @media (min-width: 641px) {
+      .ios-sheet-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+        background: transparent;
+      }
+      .ios-sheet-modal {
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 0;
+        right: 0;
+        z-index: 1001;
+        background: var(--surface-elevated);
+        border: 1px solid var(--border-subtle);
+        border-radius: 0.75rem;
+        box-shadow: var(--shadow-modal, 0 10px 25px -5px rgba(0, 0, 0, 0.2));
+        padding: 0.35rem;
+        max-height: 280px;
+        overflow-y: auto;
+        animation: iosDropdownFadeIn 0.15s ease-out;
+      }
+      .ios-sheet-header, .ios-sheet-footer {
+        display: none !important;
+      }
+      .ios-sheet-item {
+        padding: 0.5rem 0.65rem;
+        border-radius: 0.5rem;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        transition: background-color 0.15s;
+        outline: none;
+        color: var(--text-main);
+      }
+      .ios-sheet-item:hover, .ios-sheet-item:focus-visible {
+        background: var(--surface-hover);
+      }
+      .ios-sheet-item.selected {
+        background: var(--accent-soft);
+      }
+      .ios-sheet-check {
+        color: var(--accent);
+        opacity: 0;
+        transition: opacity 0.15s;
+      }
+      .ios-sheet-check.visible {
+        opacity: 1;
+      }
+    }
+
+    /* Mobile iOS Action Sheet mode (screen <= 640px) */
+    @media (max-width: 640px) {
+      .ios-sheet-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.65);
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        z-index: 1100;
+        animation: iosBackdropFadeIn 0.25s ease-out;
+      }
+      .ios-sheet-modal {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        z-index: 1101;
+        background: var(--surface-elevated);
+        border-top: 1px solid var(--border-subtle);
+        border-radius: 1.25rem 1.25rem 0 0;
+        padding: 0.75rem 1rem calc(1rem + env(safe-area-inset-bottom, 0px));
+        max-height: 80vh;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        animation: iosSheetSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        box-shadow: var(--shadow-modal, 0 -10px 30px rgba(0, 0, 0, 0.4));
+      }
+      .ios-sheet-header {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        margin-bottom: 0.75rem;
+      }
+      .ios-sheet-handle {
+        width: 36px;
+        height: 4px;
+        border-radius: 2px;
+        background: var(--border-subtle);
+        margin-bottom: 0.6rem;
+      }
+      .ios-sheet-title {
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: var(--text-main);
+        text-align: center;
+      }
+      .ios-sheet-body {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        margin-bottom: 0.75rem;
+      }
+      .ios-sheet-item {
+        padding: 0.75rem 1rem;
+        border-radius: 0.75rem;
+        background: var(--surface-secondary);
+        border: 1px solid var(--border-subtle);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 48px;
+        cursor: pointer;
+        outline: none;
+        color: var(--text-main);
+      }
+      .ios-sheet-item:active {
+        background: var(--surface-hover);
+      }
+      .ios-sheet-item.selected {
+        background: var(--accent-soft);
+        border-color: var(--accent);
+      }
+      .ios-sheet-check {
+        color: var(--accent);
+        opacity: 0;
+      }
+      .ios-sheet-check.visible {
+        opacity: 1;
+      }
+      .ios-sheet-footer {
+        margin-top: 0.25rem;
+      }
+      .ios-sheet-btn-cancel {
+        width: 100%;
+        padding: 0.75rem;
+        border-radius: 0.75rem;
+        background: var(--surface-hover);
+        border: 1px solid var(--border-subtle);
+        color: var(--text-main);
+        font-size: 0.9rem;
+        font-weight: 700;
+        cursor: pointer;
+        min-height: 44px;
+      }
+      .ios-sheet-btn-cancel:active {
+        background: var(--surface-active);
+      }
+    }
+
+    @keyframes iosDropdownFadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes iosBackdropFadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes iosSheetSlideUp {
+      from { transform: translateY(100%); }
+      to { transform: translateY(0); }
+    }
   `;
 }
 function getOperationalPanelScripts(panelPath) {
   return `
     // Operational Controls JS Handler
     (function() {
-      const pPath = ${JSON.stringify(panelPath)};
+      const pPath = "${panelPath}";
 
-      // Helper function for alerts/confirms (falls back to native if custom not ready)
-      async function alertIos(title, message, icon) {
+      // Initialize iOS Dropdowns
+      function initIosDropdowns() {
+        document.querySelectorAll('.ios-select-wrapper').forEach(function(wrapper) {
+          const trigger = wrapper.querySelector('.ios-select-trigger');
+          const hiddenInput = wrapper.querySelector('input[type="hidden"]');
+          const triggerLabel = wrapper.querySelector('.ios-select-trigger-label');
+          const backdrop = wrapper.querySelector('.ios-sheet-backdrop');
+          const modal = wrapper.querySelector('.ios-sheet-modal');
+          const cancelBtn = wrapper.querySelector('.ios-sheet-btn-cancel');
+          const items = wrapper.querySelectorAll('.ios-sheet-item');
+          const dropdownId = wrapper.getAttribute('data-dropdown-id');
+
+          function openDropdown() {
+            // Close other open dropdowns
+            document.querySelectorAll('.ios-select-wrapper.open').forEach(function(other) {
+              if (other !== wrapper) {
+                const b = other.querySelector('.ios-sheet-backdrop');
+                const m = other.querySelector('.ios-sheet-modal');
+                const t = other.querySelector('.ios-select-trigger');
+                other.classList.remove('open');
+                if (b) b.style.display = 'none';
+                if (m) m.style.display = 'none';
+                if (t) t.setAttribute('aria-expanded', 'false');
+              }
+            });
+
+            wrapper.classList.add('open');
+            if (backdrop) backdrop.style.display = 'block';
+            if (modal) modal.style.display = 'block';
+            if (trigger) trigger.setAttribute('aria-expanded', 'true');
+          }
+
+          function closeDropdown() {
+            wrapper.classList.remove('open');
+            if (backdrop) backdrop.style.display = 'none';
+            if (modal) modal.style.display = 'none';
+            if (trigger) {
+              trigger.setAttribute('aria-expanded', 'false');
+              trigger.focus();
+            }
+          }
+
+          if (trigger) {
+            trigger.addEventListener('click', function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              if (wrapper.classList.contains('open')) {
+                closeDropdown();
+              } else {
+                openDropdown();
+              }
+            });
+          }
+
+          if (backdrop) {
+            backdrop.addEventListener('click', function(e) {
+              e.stopPropagation();
+              closeDropdown();
+            });
+          }
+
+          if (cancelBtn) {
+            cancelBtn.addEventListener('click', function(e) {
+              e.stopPropagation();
+              closeDropdown();
+            });
+          }
+
+          items.forEach(function(item) {
+            item.addEventListener('click', function(e) {
+              e.stopPropagation();
+              const val = item.getAttribute('data-value');
+              const label = item.getAttribute('data-label');
+              const dot = item.querySelector('.ios-sheet-dot');
+
+              if (hiddenInput) {
+                hiddenInput.value = val;
+                // Dispatch change event
+                hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+
+              if (triggerLabel) {
+                let dotHtml = '';
+                if (dot) {
+                  const bg = dot.style.backgroundColor || dot.style.background;
+                  dotHtml = '<span class="ios-sheet-dot" style="background: ' + bg + '; margin-right: 0.4rem;"></span>';
+                }
+                triggerLabel.innerHTML = dotHtml + '<span>' + label + '</span>';
+              }
+
+              items.forEach(function(i) {
+                i.classList.remove('selected');
+                i.setAttribute('aria-selected', 'false');
+                const check = i.querySelector('.ios-sheet-check');
+                if (check) check.classList.remove('visible');
+              });
+
+              item.classList.add('selected');
+              item.setAttribute('aria-selected', 'true');
+              const itemCheck = item.querySelector('.ios-sheet-check');
+              if (itemCheck) itemCheck.classList.add('visible');
+
+              closeDropdown();
+
+              // Special trigger for Expiry Dropdown
+              if (dropdownId === 'announcement-expiry') {
+                const customContainer = document.getElementById('announcement-custom-expiry-container');
+                if (customContainer) {
+                  customContainer.style.display = val === 'custom' ? 'block' : 'none';
+                }
+              }
+            });
+
+            item.addEventListener('keydown', function(e) {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                item.click();
+              }
+            });
+          });
+        });
+
+        // Global Esc key closes any open dropdown
+        document.addEventListener('keydown', function(e) {
+          if (e.key === 'Escape') {
+            document.querySelectorAll('.ios-select-wrapper.open').forEach(function(w) {
+              const b = w.querySelector('.ios-sheet-backdrop');
+              const m = w.querySelector('.ios-sheet-modal');
+              const t = w.querySelector('.ios-select-trigger');
+              w.classList.remove('open');
+              if (b) b.style.display = 'none';
+              if (m) m.style.display = 'none';
+              if (t) t.setAttribute('aria-expanded', 'false');
+            });
+          }
+        });
+      }
+
+      initIosDropdowns();
+
+      // Dynamic iOS Action Sheet Modal Helper
+      function showIosActionSheet(opts) {
+        return new Promise(function(resolve) {
+          const title = opts.title || 'Pilih Opsi';
+          const currentValue = opts.currentValue;
+          const choices = opts.choices || [];
+
+          const overlay = document.createElement('div');
+          overlay.className = 'ios-select-wrapper open';
+          overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;display:flex;align-items:flex-end;justify-content:center;';
+
+          const backdrop = document.createElement('div');
+          backdrop.className = 'ios-sheet-backdrop';
+          backdrop.style.display = 'block';
+
+          const modal = document.createElement('div');
+          modal.className = 'ios-sheet-modal';
+          modal.style.display = 'block';
+          modal.style.width = '100%';
+          modal.style.maxWidth = '480px';
+          modal.style.margin = '0 auto';
+
+          let itemsHtml = '';
+          choices.forEach(function(c) {
+            const isSel = c.value === currentValue;
+            itemsHtml += '<div class="ios-sheet-item ' + (isSel ? 'selected' : '') + '" data-value="' + c.value + '" tabindex="0" role="option" aria-selected="' + isSel + '">' +
+              '<div style="font-weight: 600; font-size: 0.85rem; color: var(--text-main);">' + c.label + '</div>' +
+              '<svg class="ios-sheet-check ' + (isSel ? 'visible' : '') + '" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' +
+            '</div>';
+          });
+
+          modal.innerHTML = 
+            '<div class="ios-sheet-header">' +
+              '<div class="ios-sheet-handle"></div>' +
+              '<div class="ios-sheet-title">' + title + '</div>' +
+            '</div>' +
+            '<div class="ios-sheet-body">' + itemsHtml + '</div>' +
+            '<div class="ios-sheet-footer">' +
+              '<button type="button" class="ios-sheet-btn-cancel">Batal</button>' +
+            '</div>';
+
+          overlay.appendChild(backdrop);
+          overlay.appendChild(modal);
+          document.body.appendChild(overlay);
+
+          function cleanup(result) {
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            resolve(result);
+          }
+
+          backdrop.addEventListener('click', function() { cleanup(null); });
+          const cancelBtn = modal.querySelector('.ios-sheet-btn-cancel');
+          if (cancelBtn) cancelBtn.addEventListener('click', function() { cleanup(null); });
+
+          modal.querySelectorAll('.ios-sheet-item').forEach(function(item) {
+            item.addEventListener('click', function() {
+              const val = item.getAttribute('data-value');
+              cleanup(val);
+            });
+            item.addEventListener('keydown', function(e) {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                const val = item.getAttribute('data-value');
+                cleanup(val);
+              }
+            });
+          });
+        });
+      }
+
+      // Custom iOS-Style Alert & Confirmation Modal Handlers
+      async function alertIos(title, message, type) {
         if (typeof window.showIosAlert === 'function') {
-          return await window.showIosAlert({ title, message, icon: icon || 'info' });
+          return await window.showIosAlert({
+            title: title,
+            message: message,
+            icon: type || 'info',
+            buttonText: 'Mengerti'
+          });
+        } else if (typeof window.showIosAdminAlert === 'function') {
+          return await window.showIosAdminAlert(title, message, type);
         } else {
-          alert(title + '\\n\\n' + message);
+          alert((title ? title + '\\n\\n' : '') + (message || ''));
         }
       }
 
-      async function confirmIos(title, message, isDestructive, confirmText) {
+      async function confirmIos(title, message, isDestructive, confirmLabel) {
         if (typeof window.showIosConfirm === 'function') {
           return await window.showIosConfirm({
-            title,
-            message,
+            title: title,
+            message: message,
             isDestructive: isDestructive !== false,
-            confirmText: confirmText || (isDestructive ? 'Ya, Lanjutkan' : 'Konfirmasi')
+            confirmText: confirmLabel || 'Konfirmasi',
+            cancelText: 'Batal'
+          });
+        } else if (typeof window.showIosAdminConfirm === 'function') {
+          return await new Promise(function(resolve) {
+            window.showIosAdminConfirm({
+              title: title,
+              message: message,
+              isDestructive: isDestructive,
+              confirmText: confirmLabel || 'Konfirmasi',
+              cancelText: 'Batal',
+              onConfirm: function() { resolve(true); },
+              onCancel: function() { resolve(false); }
+            });
           });
         } else {
-          return confirm(title + '\\n\\n' + message);
+          return confirm((title ? title + '\\n\\n' : '') + (message || ''));
         }
       }
 
-      // 1. Toggle Maintenance Kill Switch
-      const btnMaint = document.getElementById('btn-toggle-maintenance');
-      if (btnMaint) {
-        btnMaint.addEventListener('click', async function() {
-          const currentlyActive = btnMaint.getAttribute('data-active') === 'true';
-          const newTarget = !currentlyActive;
-          
-          const confirmed = await confirmIos(
-            newTarget ? 'Aktifkan Kill Switch?' : 'Nonaktifkan Maintenance?',
-            newTarget
-              ? 'PERINGATAN: Mengaktifkan Kill Switch akan menutup seluruh akses upload publik (HTTP 503 Maintenance). Halaman admin tetap dapat diakses.'
-              : 'Layanan upload publik akan kembali dibuka secara normal untuk semua pengguna.',
-            newTarget,
-            newTarget ? 'Aktifkan Kill Switch' : 'Buka Layanan Normal'
-          );
+      // 1. Kill Switch 3-Level Selector (In-place UI update without full reload)
+      const killswitchTrigger = document.getElementById('killswitch-level-trigger');
+      const killswitchLabel = document.getElementById('killswitch-level-label');
+      const killCard = document.getElementById('kill-switch-card');
+      const killTitle = document.getElementById('kill-switch-title');
+      const killDesc = document.getElementById('kill-switch-desc');
+      const killIndicator = document.getElementById('kill-switch-indicator');
+
+      if (killswitchTrigger) {
+        killswitchTrigger.addEventListener('click', async function() {
+          const currentLevel = killswitchTrigger.getAttribute('data-value') || 'off';
+          const selected = await showIosActionSheet({
+            title: 'Pilih Status Kill Switch',
+            currentValue: currentLevel,
+            choices: [
+              { value: 'off', label: 'Normal (Aktif)' },
+              { value: 'upload_only', label: 'Tutup Upload Saja' },
+              { value: 'full_lockdown', label: 'Lockdown Total' },
+            ],
+          });
+          if (selected === null || selected === currentLevel) return;
+
+          const levelWarnings = {
+            off: { title: 'Aktifkan Layanan Normal?', desc: 'Seluruh fitur upload dan akses berkas akan kembali normal untuk publik.', danger: false, confirmLabel: 'Aktifkan Normal' },
+            upload_only: { title: 'Tutup Upload Saja?', desc: 'Upload baru akan DITOLAK untuk semua pengguna publik (503). Berkas yang sudah dibagikan sebelumnya TETAP BISA diakses/didownload seperti biasa.', danger: true, confirmLabel: 'Tutup Upload' },
+            full_lockdown: { title: 'Aktifkan Lockdown Total?', desc: 'PERINGATAN KERAS: Upload DAN seluruh akses share link akan DITOLAK TOTAL untuk semua pengguna publik (503), termasuk berkas yang sudah pernah dibagikan sebelumnya. Gunakan hanya untuk situasi darurat.', danger: true, confirmLabel: 'Aktifkan Lockdown' },
+          }[selected];
+
+          const confirmed = await confirmIos(levelWarnings.title, levelWarnings.desc, levelWarnings.danger, levelWarnings.confirmLabel);
           if (!confirmed) return;
 
           try {
-            btnMaint.disabled = true;
-            btnMaint.textContent = 'Memproses...';
+            killswitchTrigger.disabled = true;
             const res = await fetch('/' + pPath + '/api/maintenance', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ enabled: newTarget }),
+              body: JSON.stringify({ level: selected }),
             });
             const data = await res.json();
             if (data.success) {
-              window.location.reload();
+              const newLevel = data.maintenanceLevel || selected;
+              killswitchTrigger.setAttribute('data-value', newLevel);
+              if (killswitchLabel) {
+                killswitchLabel.textContent =
+                  newLevel === 'full_lockdown' ? 'Lockdown Total' :
+                  newLevel === 'upload_only' ? 'Tutup Upload Saja' : 'Normal (Aktif)';
+              }
+
+              if (killCard) {
+                killCard.style.background = newLevel === 'full_lockdown' ? 'rgba(239, 68, 68, 0.16)' : newLevel === 'upload_only' ? 'rgba(245, 158, 11, 0.12)' : 'rgba(16, 185, 129, 0.08)';
+                killCard.style.borderColor = newLevel === 'full_lockdown' ? 'rgba(239, 68, 68, 0.45)' : newLevel === 'upload_only' ? 'rgba(245, 158, 11, 0.35)' : 'rgba(16, 185, 129, 0.25)';
+              }
+              if (killTitle) {
+                killTitle.style.color = newLevel === 'full_lockdown' ? '#f87171' : newLevel === 'upload_only' ? '#fbbf24' : '#34d399';
+                killTitle.textContent =
+                  newLevel === 'full_lockdown'
+                    ? 'LOCKDOWN TOTAL \u2014 Seluruh Akses Publik Ditutup (503)'
+                    : newLevel === 'upload_only'
+                    ? 'TUTUP UPLOAD \u2014 Unggahan Dinonaktifkan (503), Share Link Tetap Aktif'
+                    : 'Layanan Normal \u2014 Unggahan & Berbagi Terbuka';
+              }
+              if (killDesc) {
+                killDesc.textContent =
+                  newLevel === 'full_lockdown'
+                    ? 'Seluruh unggahan baru DAN akses share landing publik diblokir (503). Hanya admin yang dapat mengakses sistem.'
+                    : newLevel === 'upload_only'
+                    ? 'Pengguna publik yang mencoba mengunggah akan menerima respon HTTP 503. Tautan share yang sudah ada tetap dapat dibuka.'
+                    : 'Semua pengguna dapat mengunggah dan mengakses berkas sesuai kapasitas yang ditentukan.';
+              }
+              if (killIndicator) {
+                killIndicator.className = 'status-indicator ' + (newLevel === 'off' ? 'status-ok' : 'status-err pulsing');
+              }
+
+              await alertIos(
+                newLevel === 'off' ? 'Layanan Normal' : newLevel === 'upload_only' ? 'Tutup Upload Aktif' : 'Lockdown Total Aktif',
+                data.message || 'Status Kill Switch berhasil diperbarui.',
+                newLevel === 'off' ? 'success' : 'warning'
+              );
             } else {
-              await alertIos('Gagal Mengubah Mode', data.error?.message || 'Terjadi kesalahan sistem.', 'danger');
-              window.location.reload();
+              await alertIos('Gagal Mengubah Status', data.error?.message || 'Status Kill Switch TIDAK berubah.', 'danger');
             }
           } catch (err) {
-            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
-            window.location.reload();
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server. Status Kill Switch TIDAK berubah.', 'danger');
+          } finally {
+            killswitchTrigger.disabled = false;
           }
         });
       }
 
       // 2. Save Announcement Banner
       const btnSaveAnnounce = document.getElementById('btn-save-announcement');
+      const btnDeleteAnnounce = document.getElementById('btn-delete-announcement');
+
       if (btnSaveAnnounce) {
         btnSaveAnnounce.addEventListener('click', async function() {
           const message = document.getElementById('announcement-message').value.trim();
-          const type = document.getElementById('announcement-type').value;
+          const typeInput = document.getElementById('announcement-type');
+          const type = typeInput ? typeInput.value : 'info';
           const enabled = document.getElementById('announcement-enabled').checked;
+          const expiryVal = document.getElementById('announcement-expiry') ? document.getElementById('announcement-expiry').value : '0';
+
+          let calculatedExpiresAt = null;
+          if (expiryVal === 'custom') {
+            const customInput = document.getElementById('announcement-custom-expiry-input');
+            if (customInput && customInput.value) {
+              const parsed = new Date(customInput.value).getTime();
+              if (!isNaN(parsed) && parsed > Date.now()) {
+                calculatedExpiresAt = parsed;
+              } else {
+                await alertIos('Waktu Tidak Valid', 'Waktu kedaluwarsa khusus harus berada di masa depan.', 'warning');
+                return;
+              }
+            }
+          } else {
+            const durationMs = parseInt(expiryVal, 10);
+            if (!isNaN(durationMs) && durationMs > 0) {
+              calculatedExpiresAt = Date.now() + durationMs;
+            }
+          }
 
           try {
             btnSaveAnnounce.disabled = true;
@@ -6061,11 +7125,19 @@ function getOperationalPanelScripts(panelPath) {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                announcement: { message, type, enabled }
+                announcement: { 
+                  message, 
+                  type, 
+                  enabled,
+                  expiresAt: calculatedExpiresAt 
+                }
               }),
             });
             const data = await res.json();
             if (data.success) {
+              if (btnDeleteAnnounce) {
+                btnDeleteAnnounce.style.display = message.length > 0 ? 'inline-flex' : 'none';
+              }
               await alertIos('Pengumuman Disimpan', 'Banner pengumuman publik berhasil diperbarui.', 'success');
             } else {
               await alertIos('Gagal Menyimpan', data.error?.message || 'Error', 'danger');
@@ -6075,6 +7147,45 @@ function getOperationalPanelScripts(panelPath) {
           } finally {
             btnSaveAnnounce.disabled = false;
             btnSaveAnnounce.textContent = 'Simpan Pengumuman';
+          }
+        });
+      }
+
+      // 2.1 Delete Announcement Banner Immediately
+      if (btnDeleteAnnounce) {
+        btnDeleteAnnounce.addEventListener('click', async function() {
+          const confirmed = await confirmIos(
+            'Hapus Pengumuman?',
+            'Banner pengumuman publik akan langsung dihapus dan dinonaktifkan dari seluruh frontend.',
+            true,
+            'Hapus Pengumuman'
+          );
+          if (!confirmed) return;
+
+          try {
+            btnDeleteAnnounce.disabled = true;
+            btnDeleteAnnounce.textContent = 'Menghapus...';
+            const res = await fetch('/' + pPath + '/api/config', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ clearAnnouncement: true }),
+            });
+            const data = await res.json();
+            if (data.success) {
+              document.getElementById('announcement-message').value = '';
+              document.getElementById('announcement-enabled').checked = false;
+              const badge = document.getElementById('banner-expiry-badge');
+              if (badge) badge.remove();
+              btnDeleteAnnounce.style.display = 'none';
+              await alertIos('Pengumuman Dihapus', 'Banner pengumuman telah dihapus permanen.', 'success');
+            } else {
+              await alertIos('Gagal Menghapus', data.error?.message || 'Error', 'danger');
+            }
+          } catch (err) {
+            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
+          } finally {
+            btnDeleteAnnounce.disabled = false;
+            btnDeleteAnnounce.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Hapus Pengumuman';
           }
         });
       }
@@ -6107,7 +7218,7 @@ function getOperationalPanelScripts(panelPath) {
               body: JSON.stringify({
                 maxUploadSize: maxUploadMb * 1024 * 1024,
                 rateLimit: { limit: rateLimit, windowMs: 60000 },
-                featureFlags: { pasteToUpload, qrCode, pwaInstallPrompt }
+                featureFlags: { pasteToUpload, qrCode, pwaInstallPrompt },
               }),
             });
             const data = await res.json();
@@ -6120,7 +7231,7 @@ function getOperationalPanelScripts(panelPath) {
             await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
           } finally {
             btnSaveLimits.disabled = false;
-            btnSaveLimits.textContent = 'Simpan Konfigurasi Dinamis';
+            btnSaveLimits.textContent = 'Simpan Batas & Flags';
           }
         });
       }
@@ -6184,14 +7295,19 @@ function getOperationalPanelScripts(panelPath) {
             const data = await res.json();
             if (data.success) {
               await alertIos('Berhasil', 'Berhasil mencabut ' + data.revokedCount + ' sesi admin lainnya.', 'success');
-              window.location.reload();
+              // Remove other rows from table without full reload
+              document.querySelectorAll('tr[id^="session-row-"]').forEach(function(row) {
+                const isCurrent = row.textContent.includes('Sesi Ini');
+                if (!isCurrent) row.remove();
+              });
             } else {
               await alertIos('Gagal', 'Gagal mencabut sesi admin lainnya.', 'danger');
-              btnRevokeAll.disabled = false;
             }
           } catch (err) {
             await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
+          } finally {
             btnRevokeAll.disabled = false;
+            btnRevokeAll.textContent = 'Cabut Semua Sesi Lain';
           }
         });
       }
@@ -6207,7 +7323,8 @@ function getOperationalPanelScripts(panelPath) {
 
       if (btnPreviewCleanup) {
         btnPreviewCleanup.addEventListener('click', async function() {
-          const olderThanDays = parseInt(document.getElementById('cleanup-older-than').value, 10);
+          const olderThanInput = document.getElementById('cleanup-older-than');
+          const olderThanDays = olderThanInput ? parseInt(olderThanInput.value, 10) : 30;
           const maxViews = parseInt(document.getElementById('cleanup-max-views').value, 10);
 
           try {
@@ -6279,7 +7396,8 @@ function getOperationalPanelScripts(panelPath) {
           );
           if (!confirmed) return;
 
-          const olderThanDays = parseInt(document.getElementById('cleanup-older-than').value, 10);
+          const olderThanInput = document.getElementById('cleanup-older-than');
+          const olderThanDays = olderThanInput ? parseInt(olderThanInput.value, 10) : 30;
           const maxViews = parseInt(document.getElementById('cleanup-max-views').value, 10);
 
           try {
@@ -6293,7 +7411,9 @@ function getOperationalPanelScripts(panelPath) {
             const data = await res.json();
             if (data.success) {
               await alertIos('Pembersihan Selesai', data.data.succeeded + ' berkas berhasil dihapus permanen. Total storage dibebaskan: ' + data.data.formattedFreedBytes, 'success');
-              window.location.reload();
+              // Clear preview container & refresh table
+              previewContainer.style.display = 'none';
+              cachedCandidates = [];
             } else {
               await alertIos('Gagal Eksekusi', data.error?.message || 'Error', 'danger');
               btnExecuteCleanup.disabled = false;
@@ -6302,70 +7422,7 @@ function getOperationalPanelScripts(panelPath) {
           } catch (err) {
             await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
             btnExecuteCleanup.disabled = false;
-          }
-        });
-      }
-
-      // 6. Search files in Recent Uploads table & full database
-      const searchInput = document.getElementById('search-files-input');
-      const btnSearchDb = document.getElementById('btn-search-db');
-      const btnResetSearch = document.getElementById('btn-reset-search');
-      const searchCountLabel = document.getElementById('search-count-label');
-
-      function filterTableLocally(term) {
-        const rows = document.querySelectorAll('tr[id^="upload-row-"]');
-        let matched = 0;
-        rows.forEach(function(row) {
-          const text = row.textContent.toLowerCase();
-          if (!term || text.includes(term.toLowerCase())) {
-            row.style.display = '';
-            matched++;
-          } else {
-            row.style.display = 'none';
-          }
-        });
-        if (searchCountLabel) {
-          searchCountLabel.textContent = term ? ('Menampilkan ' + matched + ' hasil lokal') : '';
-        }
-      }
-
-      if (searchInput) {
-        searchInput.addEventListener('input', function() {
-          filterTableLocally(searchInput.value.trim());
-        });
-      }
-
-      if (btnResetSearch) {
-        btnResetSearch.addEventListener('click', function() {
-          if (searchInput) searchInput.value = '';
-          filterTableLocally('');
-        });
-      }
-
-      if (btnSearchDb && searchInput) {
-        btnSearchDb.addEventListener('click', async function() {
-          const q = searchInput.value.trim();
-          if (!q) {
-            await alertIos('Pencarian', 'Masukkan kata kunci pencarian terlebih dahulu.', 'warning');
-            return;
-          }
-          try {
-            btnSearchDb.disabled = true;
-            btnSearchDb.textContent = 'Mencari...';
-            const res = await fetch('/' + pPath + '/api/search?q=' + encodeURIComponent(q));
-            const data = await res.json();
-            if (data.success) {
-              const items = data.data.items || [];
-              await alertIos('Hasil Pencarian', 'Ditemukan ' + items.length + ' berkas di database yang cocok dengan "' + q + '".', 'info');
-              filterTableLocally(q);
-            } else {
-              await alertIos('Pencarian Gagal', data.error?.message || 'Error', 'danger');
-            }
-          } catch (err) {
-            await alertIos('Kesalahan Koneksi', 'Gagal menghubungi server.', 'danger');
-          } finally {
-            btnSearchDb.disabled = false;
-            btnSearchDb.textContent = 'Cari di Seluruh DB';
+            btnExecuteCleanup.textContent = 'Jalankan Hapus Massal Permanen';
           }
         });
       }
@@ -6373,7 +7430,265 @@ function getOperationalPanelScripts(panelPath) {
   `;
 }
 
+// src/server/api/theme-styles.ts
+var GOOGLE_FONTS_TAGS = `
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+`.trim();
+var THEME_HEAD_SCRIPT = `
+<script>
+  (function() {
+    try {
+      var storedTheme = localStorage.getItem('airshare_theme');
+      var validThemes = ['rosegold', 'silver', 'spacegray', 'purple', 'pacific'];
+      var theme = (storedTheme && validThemes.indexOf(storedTheme) !== -1) ? storedTheme : 'rosegold';
+      document.documentElement.setAttribute('data-theme-loading', theme);
+    } catch (e) {
+      document.documentElement.setAttribute('data-theme-loading', 'rosegold');
+    }
+  })();
+</script>
+`.trim();
+var THEME_BODY_SCRIPT = `
+<script>
+  (function() {
+    var theme = document.documentElement.getAttribute('data-theme-loading') || 'rosegold';
+    document.body.classList.add('theme-' + theme);
+  })();
+</script>
+`.trim();
+var THEME_STORAGE_LISTENER_SCRIPT = `
+  window.addEventListener('storage', function(e) {
+    if (e.key === 'airshare_theme' && e.newValue) {
+      var validThemes = ['rosegold', 'silver', 'spacegray', 'purple', 'pacific'];
+      var newTheme = validThemes.indexOf(e.newValue) !== -1 ? e.newValue : 'rosegold';
+      validThemes.forEach(function(t) {
+        document.body.classList.remove('theme-' + t);
+      });
+      document.body.classList.add('theme-' + newTheme);
+    }
+  });
+`.trim();
+var THEME_CSS_VARIABLES = `
+  :root {
+    --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+    /* Default Theme: Rose Gold */
+    --bg-primary: #fdf9fa;
+    --surface-primary: rgba(255, 255, 255, 0.95);
+    --surface-secondary: rgba(244, 63, 94, 0.04);
+    --surface-elevated: #ffffff;
+    --surface-translucent: rgba(255, 255, 255, 0.90);
+    --surface-hover: rgba(244, 63, 94, 0.05);
+    --surface-active: rgba(244, 63, 94, 0.10);
+
+    --border-subtle: rgba(225, 29, 72, 0.10);
+    --border-subtle-hover: rgba(225, 29, 72, 0.22);
+    --border-focus: rgba(225, 29, 72, 0.45);
+
+    --text-main: #2b1118;
+    --text-muted: #7d4854;
+
+    --accent: #e11d48;
+    --accent-hover: #be123c;
+    --accent-text: #ffffff;
+    --accent-soft: rgba(225, 29, 72, 0.09);
+    --accent-soft-hover: rgba(225, 29, 72, 0.16);
+
+    --slider-track: rgba(225, 29, 72, 0.10);
+    --slider-fill: #e11d48;
+
+    --shadow-subtle: 0 2px 12px -2px rgba(190, 18, 60, 0.05), 0 1px 3px rgba(190, 18, 60, 0.03);
+    --shadow-elevated: 0 12px 32px -4px rgba(190, 18, 60, 0.08), 0 4px 12px -2px rgba(190, 18, 60, 0.04);
+    --shadow-modal: 0 24px 48px -8px rgba(190, 18, 60, 0.12), 0 8px 16px -4px rgba(190, 18, 60, 0.04);
+
+    /* Legacy Fallback Aliases */
+    --bg: var(--bg-primary);
+    --fg: var(--text-main);
+    --text: var(--text-main);
+    --muted: var(--text-muted);
+    --card: var(--surface-primary);
+    --card-inner: var(--surface-secondary);
+    --card-elevated: var(--surface-elevated);
+    --surface-glass: var(--surface-translucent);
+    --border: var(--border-subtle);
+    --border-accent: var(--border-focus);
+    --accent-dark: var(--accent-hover);
+
+    color-scheme: light;
+  }
+
+  /* Theme: Classic Silver (Light) */
+  .theme-silver {
+    --bg-primary: #f5f5f7;
+    --surface-primary: rgba(255, 255, 255, 0.94);
+    --surface-secondary: rgba(0, 0, 0, 0.035);
+    --surface-elevated: #ffffff;
+    --surface-translucent: rgba(255, 255, 255, 0.88);
+    --surface-hover: rgba(0, 0, 0, 0.045);
+    --surface-active: rgba(0, 0, 0, 0.08);
+
+    --border-subtle: rgba(0, 0, 0, 0.08);
+    --border-subtle-hover: rgba(0, 0, 0, 0.16);
+    --border-focus: rgba(0, 113, 227, 0.45);
+
+    --text-main: #1d1d1f;
+    --text-muted: #6e6e73;
+    
+    --accent: #0071e3;
+    --accent-hover: #0077ed;
+    --accent-text: #ffffff;
+    --accent-soft: rgba(0, 113, 227, 0.09);
+    --accent-soft-hover: rgba(0, 113, 227, 0.15);
+
+    --slider-track: rgba(0, 0, 0, 0.08);
+    --slider-fill: #0071e3;
+
+    --shadow-subtle: 0 2px 12px -2px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.03);
+    --shadow-elevated: 0 12px 32px -4px rgba(0, 0, 0, 0.08), 0 4px 12px -2px rgba(0, 0, 0, 0.04);
+    --shadow-modal: 0 24px 48px -8px rgba(0, 0, 0, 0.12), 0 8px 16px -4px rgba(0, 0, 0, 0.04);
+
+    color-scheme: light;
+  }
+
+  /* Theme: Space Gray (Dark) */
+  .theme-spacegray {
+    --bg-primary: #0e0e11;
+    --surface-primary: rgba(22, 22, 26, 0.92);
+    --surface-secondary: rgba(255, 255, 255, 0.05);
+    --surface-elevated: #1a1a1f;
+    --surface-translucent: rgba(24, 24, 29, 0.85);
+    --surface-hover: rgba(255, 255, 255, 0.07);
+    --surface-active: rgba(255, 255, 255, 0.12);
+
+    --border-subtle: rgba(255, 255, 255, 0.09);
+    --border-subtle-hover: rgba(255, 255, 255, 0.18);
+    --border-focus: rgba(52, 211, 153, 0.45);
+
+    --text-main: #f5f5f7;
+    --text-muted: #94949b;
+
+    --accent: #34d399;
+    --accent-hover: #10b981;
+    --accent-text: #042f1a;
+    --accent-soft: rgba(52, 211, 153, 0.12);
+    --accent-soft-hover: rgba(52, 211, 153, 0.18);
+
+    --slider-track: rgba(255, 255, 255, 0.14);
+    --slider-fill: #34d399;
+
+    --shadow-subtle: 0 4px 16px -2px rgba(0, 0, 0, 0.35);
+    --shadow-elevated: 0 16px 36px -4px rgba(0, 0, 0, 0.55);
+    --shadow-modal: 0 28px 56px -8px rgba(0, 0, 0, 0.75);
+
+    color-scheme: dark;
+  }
+
+  /* Theme: Deep Purple (Dark) */
+  .theme-purple {
+    --bg-primary: #0a0614;
+    --surface-primary: rgba(22, 15, 36, 0.92);
+    --surface-secondary: rgba(192, 132, 252, 0.06);
+    --surface-elevated: #1b122e;
+    --surface-translucent: rgba(24, 16, 40, 0.85);
+    --surface-hover: rgba(255, 255, 255, 0.07);
+    --surface-active: rgba(255, 255, 255, 0.12);
+
+    --border-subtle: rgba(192, 132, 252, 0.14);
+    --border-subtle-hover: rgba(192, 132, 252, 0.25);
+    --border-focus: rgba(192, 132, 252, 0.45);
+
+    --text-main: #f8f6ff;
+    --text-muted: #ab9bc7;
+
+    --accent: #c084fc;
+    --accent-hover: #a855f7;
+    --accent-text: #28084a;
+    --accent-soft: rgba(192, 132, 252, 0.13);
+    --accent-soft-hover: rgba(192, 132, 252, 0.20);
+
+    --slider-track: rgba(255, 255, 255, 0.14);
+    --slider-fill: #c084fc;
+
+    --shadow-subtle: 0 4px 16px -2px rgba(8, 4, 16, 0.45);
+    --shadow-elevated: 0 16px 36px -4px rgba(8, 4, 16, 0.65);
+    --shadow-modal: 0 28px 56px -8px rgba(8, 4, 16, 0.85);
+
+    color-scheme: dark;
+  }
+
+  /* Theme: Pacific Blue (Dark) */
+  .theme-pacific {
+    --bg-primary: #07101d;
+    --surface-primary: rgba(14, 25, 45, 0.92);
+    --surface-secondary: rgba(56, 189, 248, 0.06);
+    --surface-elevated: #11203b;
+    --surface-translucent: rgba(15, 28, 50, 0.85);
+    --surface-hover: rgba(255, 255, 255, 0.07);
+    --surface-active: rgba(255, 255, 255, 0.12);
+
+    --border-subtle: rgba(56, 189, 248, 0.14);
+    --border-subtle-hover: rgba(56, 189, 248, 0.25);
+    --border-focus: rgba(56, 189, 248, 0.45);
+
+    --text-main: #f0f8ff;
+    --text-muted: #7cb3d4;
+
+    --accent: #38bdf8;
+    --accent-hover: #0ea5e9;
+    --accent-text: #05263d;
+    --accent-soft: rgba(56, 189, 248, 0.13);
+    --accent-soft-hover: rgba(56, 189, 248, 0.20);
+
+    --slider-track: rgba(255, 255, 255, 0.14);
+    --slider-fill: #38bdf8;
+
+    --shadow-subtle: 0 4px 16px -2px rgba(4, 9, 18, 0.45);
+    --shadow-elevated: 0 16px 36px -4px rgba(4, 9, 18, 0.65);
+    --shadow-modal: 0 28px 56px -8px rgba(4, 9, 18, 0.85);
+
+    color-scheme: dark;
+  }
+
+  /* Theme: Rose Gold (White + Rose Gold Signature Identity) */
+  .theme-rosegold {
+    --bg-primary: #fdf9fa;
+    --surface-primary: rgba(255, 255, 255, 0.95);
+    --surface-secondary: rgba(244, 63, 94, 0.04);
+    --surface-elevated: #ffffff;
+    --surface-translucent: rgba(255, 255, 255, 0.90);
+    --surface-hover: rgba(244, 63, 94, 0.05);
+    --surface-active: rgba(244, 63, 94, 0.10);
+
+    --border-subtle: rgba(225, 29, 72, 0.10);
+    --border-subtle-hover: rgba(225, 29, 72, 0.22);
+    --border-focus: rgba(225, 29, 72, 0.45);
+
+    --text-main: #2b1118;
+    --text-muted: #7d4854;
+
+    --accent: #e11d48;
+    --accent-hover: #be123c;
+    --accent-text: #ffffff;
+    --accent-soft: rgba(225, 29, 72, 0.09);
+    --accent-soft-hover: rgba(225, 29, 72, 0.16);
+
+    --slider-track: rgba(225, 29, 72, 0.10);
+    --slider-fill: #e11d48;
+
+    --shadow-subtle: 0 2px 12px -2px rgba(190, 18, 60, 0.05), 0 1px 3px rgba(190, 18, 60, 0.03);
+    --shadow-elevated: 0 12px 32px -4px rgba(190, 18, 60, 0.08), 0 4px 12px -2px rgba(190, 18, 60, 0.04);
+    --shadow-modal: 0 24px 48px -8px rgba(190, 18, 60, 0.12), 0 8px 16px -4px rgba(190, 18, 60, 0.04);
+
+    color-scheme: light;
+  }
+`.trim();
+
 // src/server/api/admin-controller.ts
+var configuredModel = process.env.GEMINI_MODEL?.trim();
+var GEMINI_MODEL_NAME = !configuredModel || configuredModel === "gemini-3.8-flash" || configuredModel.toLowerCase().includes("3.8") ? "gemini-2.5-flash" : configuredModel;
 var storageProvider2 = new CatboxStorageProvider();
 function escapeHtml3(str) {
   if (!str) return "";
@@ -6538,73 +7853,67 @@ var adminController = {
    * GET /{ADMIN_PANEL_PATH}/login
    */
   async renderLoginPage(req, res) {
-    const { enabled, panelPath: fullAdminPath } = getAdminConfig();
-    if (!enabled) {
-      res.status(404).send("<!DOCTYPE html><html><body>404 Not Found</body></html>");
-      return;
-    }
-    const token = req.cookies?.[ADMIN_COOKIE_NAME];
-    if (token && await verifyAdminSession(token)) {
-      res.redirect(`/${fullAdminPath}/dashboard`);
-      return;
-    }
-    const errorParam = req.query.error;
-    const retryAfter = req.query.retryAfter;
-    let errorMessage = "";
-    if (errorParam === "invalid") {
-      errorMessage = "Kredensial tidak valid. Silakan coba kembali.";
-    } else if (errorParam === "rate_limited") {
-      errorMessage = `Terlalu banyak percobaan login gagal. Silakan tunggu ${retryAfter ? `${retryAfter} detik` : "beberapa saat"} sebelum mencoba kembali.`;
-    }
-    res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
-    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    const html = `<!DOCTYPE html>
+    try {
+      const { enabled, panelPath: fullAdminPath } = getAdminConfig();
+      if (!enabled) {
+        res.status(404).send("<!DOCTYPE html><html><body>404 Not Found</body></html>");
+        return;
+      }
+      const token = req.cookies?.[ADMIN_COOKIE_NAME];
+      if (token && await verifyAdminSession(token)) {
+        res.redirect(`/${fullAdminPath}/dashboard`);
+        return;
+      }
+      const errorParam = req.query.error;
+      const retryAfter = req.query.retryAfter;
+      let errorMessage = "";
+      if (errorParam === "invalid") {
+        errorMessage = "Kredensial tidak valid. Silakan coba kembali.";
+      } else if (errorParam === "rate_limited") {
+        errorMessage = `Terlalu banyak percobaan login gagal. Silakan tunggu ${retryAfter ? `${retryAfter} detik` : "beberapa saat"} sebelum mencoba kembali.`;
+      }
+      res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      const html = `<!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Admin Authentication \u2014 AirShare Pro</title>
+  ${GOOGLE_FONTS_TAGS}
+  ${THEME_HEAD_SCRIPT}
   <style>
-    :root {
-      --bg: #09090b;
-      --card: #18181b;
-      --card-inner: #27272a;
-      --text: #f4f4f5;
-      --muted: #a1a1aa;
-      --border: rgba(255, 255, 255, 0.1);
-      --accent: #2563eb;
-      --accent-hover: #1d4ed8;
-      --error-bg: rgba(239, 68, 68, 0.15);
-      --error-text: #f87171;
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    ${THEME_CSS_VARIABLES}
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background-color: var(--bg);
-      color: var(--text);
+      font-family: var(--font-sans);
+      background-color: var(--bg-primary);
+      color: var(--text-main);
       min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
       padding: 1.5rem;
+      transition: background-color 0.25s ease, color 0.25s ease;
     }
     .glass-card {
-      background: rgba(24, 24, 27, 0.85);
-      backdrop-filter: blur(16px);
-      border: 1px solid var(--border);
+      background: var(--surface-primary);
+      border: 1px solid var(--border-subtle);
       border-radius: 1.5rem;
       padding: 2.25rem;
       max-width: 420px;
       width: 100%;
-      box-shadow: 0 20px 40px -15px rgba(0,0,0,0.7);
+      box-shadow: var(--shadow-modal);
     }
     .header { text-align: center; margin-bottom: 2rem; }
     .badge {
       display: inline-flex;
       align-items: center;
       gap: 0.35rem;
-      background: rgba(37, 99, 235, 0.15);
-      color: #60a5fa;
+      background: var(--accent-soft);
+      color: var(--accent);
       padding: 0.35rem 0.85rem;
       border-radius: 9999px;
       font-size: 0.75rem;
@@ -6612,14 +7921,14 @@ var adminController = {
       letter-spacing: 0.05em;
       text-transform: uppercase;
       margin-bottom: 1rem;
-      border: 1px solid rgba(96, 165, 250, 0.2);
+      border: 1px solid var(--border-subtle);
     }
-    h1 { font-size: 1.35rem; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 0.35rem; }
-    p.subtitle { color: var(--muted); font-size: 0.85rem; line-height: 1.4; }
+    h1 { font-size: 1.35rem; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 0.35rem; color: var(--text-main); }
+    p.subtitle { color: var(--text-muted); font-size: 0.85rem; line-height: 1.4; }
     .error-banner {
-      background: var(--error-bg);
+      background: rgba(239, 68, 68, 0.12);
       border: 1px solid rgba(239, 68, 68, 0.3);
-      color: var(--error-text);
+      color: #f87171;
       padding: 0.75rem 1rem;
       border-radius: 0.75rem;
       font-size: 0.825rem;
@@ -6630,26 +7939,26 @@ var adminController = {
       gap: 0.5rem;
     }
     .form-group { margin-bottom: 1.25rem; }
-    label { display: block; font-size: 0.8rem; font-weight: 600; color: var(--muted); margin-bottom: 0.5rem; }
+    label { display: block; font-size: 0.8rem; font-weight: 600; color: var(--text-muted); margin-bottom: 0.5rem; }
     input[type="password"] {
       width: 100%;
-      background: var(--card-inner);
-      border: 1px solid var(--border);
+      background: var(--surface-secondary);
+      border: 1px solid var(--border-subtle);
       border-radius: 0.75rem;
       padding: 0.8rem 1rem;
-      color: var(--text);
+      color: var(--text-main);
       font-size: 0.95rem;
       outline: none;
       transition: border-color 0.2s, box-shadow 0.2s;
     }
     input[type="password"]:focus {
       border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25);
+      box-shadow: 0 0 0 3px var(--border-focus);
     }
     .btn-submit {
       width: 100%;
       background: var(--accent);
-      color: #fff;
+      color: var(--accent-text, #fff);
       border: none;
       border-radius: 0.75rem;
       padding: 0.85rem 1rem;
@@ -6663,16 +7972,17 @@ var adminController = {
       margin-top: 1.5rem;
       text-align: center;
       font-size: 0.725rem;
-      color: var(--muted);
-      opacity: 0.75;
+      color: var(--text-muted);
+      opacity: 0.85;
     }
   </style>
 </head>
-<body>
+<body class="theme-rosegold">
+  ${THEME_BODY_SCRIPT}
   <div class="glass-card">
     <div class="header">
       <div class="badge">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         Panel Terenkripsi
       </div>
       <h1>AirShare Pro Admin</h1>
@@ -6696,9 +8006,17 @@ var adminController = {
       Bcrypt Salting Cost 12 \u2022 Strict Session TTL 1 Jam \u2022 IP Rate Limited
     </div>
   </div>
+
+  <script>
+    ${THEME_STORAGE_LISTENER_SCRIPT}
+  </script>
 </body>
 </html>`;
-    res.status(200).send(html);
+      res.status(200).send(html);
+    } catch (err) {
+      console.error("[ADMIN_RENDER_LOGIN_ERROR]", err);
+      res.status(500).send("<!DOCTYPE html><html><body><h1>500 Internal Server Error</h1><p>Gagal memuat halaman login admin.</p></body></html>");
+    }
   },
   /**
    * POST /{ADMIN_PANEL_PATH}/login
@@ -6709,54 +8027,59 @@ var adminController = {
       res.status(404).send("<!DOCTYPE html><html><body>404 Not Found</body></html>");
       return;
     }
-    const clientIp = getClientIp(req);
-    const rateLimit = await checkAdminLoginRateLimit(req);
-    if (!rateLimit.allowed) {
-      console.warn(`[ADMIN_LOGIN_RATE_LIMITED] IP ${clientIp} exceeded login attempts`);
+    try {
+      const clientIp = getClientIp(req);
+      const rateLimit = await checkAdminLoginRateLimit(req);
+      if (!rateLimit.allowed) {
+        console.warn(`[ADMIN_LOGIN_RATE_LIMITED] IP ${clientIp} exceeded login attempts`);
+        await auditLogRepository.recordAction({
+          type: "ADMIN_LOGIN_RATE_LIMITED",
+          detail: `IP ${clientIp} terkena batasan rate limit login admin`,
+          ip: clientIp
+        });
+        alertAdminLoginFailed(clientIp).catch((alertErr) => {
+          console.warn("[TELEGRAM_ALERT_WARN] Gagal mengirim alert login admin gagal:", alertErr);
+        });
+        res.redirect(`/${fullAdminPath}/login?error=rate_limited&retryAfter=${rateLimit.retryAfterSeconds}`);
+        return;
+      }
+      const password = req.body?.password;
+      if (!password || typeof password !== "string") {
+        res.redirect(`/${fullAdminPath}/login?error=invalid`);
+        return;
+      }
+      const isValid = await verifyAdminPassword(password);
+      if (!isValid) {
+        console.warn(`[ADMIN_LOGIN_FAILED] Percobaan login admin gagal pada ${(/* @__PURE__ */ new Date()).toISOString()}`);
+        await auditLogRepository.recordAction({
+          type: "ADMIN_LOGIN_FAILED",
+          detail: "Percobaan login admin gagal dengan sandi tidak valid",
+          ip: clientIp
+        });
+        res.redirect(`/${fullAdminPath}/login?error=invalid`);
+        return;
+      }
+      const sessionToken = await createAdminSession(req);
+      console.info(`[ADMIN_LOGIN_SUCCESS] Sesi admin berhasil dibuat pada ${(/* @__PURE__ */ new Date()).toISOString()}`);
       await auditLogRepository.recordAction({
-        type: "ADMIN_LOGIN_RATE_LIMITED",
-        detail: `IP ${clientIp} terkena batasan rate limit login admin`,
-        ip: clientIp
+        type: "ADMIN_LOGIN",
+        detail: "Login berhasil ke panel kontrol admin",
+        ip: clientIp,
+        adminTokenPreview: `${sessionToken.substring(0, 8)}...`
       });
-      alertAdminLoginFailed(clientIp).catch((alertErr) => {
-        console.warn("[TELEGRAM_ALERT_WARN] Gagal mengirim alert login admin gagal:", alertErr);
+      res.cookie(ADMIN_COOKIE_NAME, sessionToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: 3600 * 1e3,
+        // 1 hour
+        path: "/"
       });
-      res.redirect(`/${fullAdminPath}/login?error=rate_limited&retryAfter=${rateLimit.retryAfterSeconds}`);
-      return;
-    }
-    const password = req.body?.password;
-    if (!password || typeof password !== "string") {
+      res.redirect(`/${fullAdminPath}/dashboard`);
+    } catch (err) {
+      console.error("[HANDLE_LOGIN_ERROR]", err);
       res.redirect(`/${fullAdminPath}/login?error=invalid`);
-      return;
     }
-    const isValid = await verifyAdminPassword(password);
-    if (!isValid) {
-      console.warn(`[ADMIN_LOGIN_FAILED] Percobaan login admin gagal pada ${(/* @__PURE__ */ new Date()).toISOString()}`);
-      await auditLogRepository.recordAction({
-        type: "ADMIN_LOGIN_FAILED",
-        detail: "Percobaan login admin gagal dengan sandi tidak valid",
-        ip: clientIp
-      });
-      res.redirect(`/${fullAdminPath}/login?error=invalid`);
-      return;
-    }
-    const sessionToken = await createAdminSession(req);
-    console.info(`[ADMIN_LOGIN_SUCCESS] Sesi admin berhasil dibuat pada ${(/* @__PURE__ */ new Date()).toISOString()}`);
-    await auditLogRepository.recordAction({
-      type: "ADMIN_LOGIN",
-      detail: "Login berhasil ke panel kontrol admin",
-      ip: clientIp,
-      adminTokenPreview: `${sessionToken.substring(0, 8)}...`
-    });
-    res.cookie(ADMIN_COOKIE_NAME, sessionToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      maxAge: 3600 * 1e3,
-      // 1 hour
-      path: "/"
-    });
-    res.redirect(`/${fullAdminPath}/dashboard`);
   },
   /**
    * POST / GET /{ADMIN_PANEL_PATH}/logout
@@ -6767,23 +8090,33 @@ var adminController = {
       res.status(404).send("<!DOCTYPE html><html><body>404 Not Found</body></html>");
       return;
     }
-    const clientIp = getClientIp(req);
-    const token = req.cookies?.[ADMIN_COOKIE_NAME];
-    if (token) {
-      await destroyAdminSession(token);
+    try {
+      const clientIp = getClientIp(req);
+      const token = req.cookies?.[ADMIN_COOKIE_NAME];
+      if (token) {
+        await destroyAdminSession(token);
+      }
+      await auditLogRepository.recordAction({
+        type: "ADMIN_LOGOUT",
+        detail: "Admin keluar dari sesi",
+        ip: clientIp,
+        adminTokenPreview: token ? `${token.substring(0, 8)}...` : void 0
+      });
+      res.clearCookie(ADMIN_COOKIE_NAME, {
+        path: "/",
+        httpOnly: true,
+        sameSite: "lax"
+      });
+      res.redirect(`/${fullAdminPath}/login`);
+    } catch (err) {
+      console.error("[HANDLE_LOGOUT_ERROR]", err);
+      res.clearCookie(ADMIN_COOKIE_NAME, {
+        path: "/",
+        httpOnly: true,
+        sameSite: "lax"
+      });
+      res.redirect(`/${fullAdminPath}/login`);
     }
-    await auditLogRepository.recordAction({
-      type: "ADMIN_LOGOUT",
-      detail: "Admin keluar dari sesi",
-      ip: clientIp,
-      adminTokenPreview: token ? `${token.substring(0, 8)}...` : void 0
-    });
-    res.clearCookie(ADMIN_COOKIE_NAME, {
-      path: "/",
-      httpOnly: true,
-      sameSite: "strict"
-    });
-    res.redirect(`/${fullAdminPath}/login`);
   },
   /**
    * GET /{ADMIN_PANEL_PATH}/dashboard
@@ -6794,118 +8127,104 @@ var adminController = {
       res.status(404).send("<!DOCTYPE html><html><body>404 Not Found</body></html>");
       return;
     }
-    const todayStr = getTodayDateString();
-    const currentToken = req.cookies?.[ADMIN_COOKIE_NAME];
-    const [
-      todayStats,
-      weeklyTrend,
-      rawTopFiles,
-      recentUploads,
-      totalItemsInRepo,
-      catboxHealth,
-      redisHealth,
-      lastSyncCheck,
-      systemConfig,
-      activeSessions,
-      auditLogs,
-      deletedFiles
-    ] = await Promise.all([
-      analyticsRepository.getDailySummary(todayStr),
-      analyticsRepository.getWeeklyTrend(),
-      analyticsRepository.getTopFiles(10),
-      analyticsRepository.getRecentUploads(50),
-      analyticsRepository.getTotalItemsEver(),
-      checkCatboxHealth(),
-      checkRedisHealth(),
-      getLastSyncCheck(),
-      getAllSystemConfig(),
-      getAllActiveSessions(currentToken),
-      auditLogRepository.getRecentActions(50),
-      deletedFilesRepository.getDeletedFiles(100)
-    ]);
-    const mediaRepo = getMediaRepository();
-    const topFiles = await Promise.all(
-      rawTopFiles.map(async (tf) => {
-        const item = await mediaRepo.getByIdPublic(tf.id);
-        return {
-          id: tf.id,
-          name: item?.name || tf.id,
-          views: tf.views,
-          formattedSize: item?.formattedSize || "-",
-          type: item?.type || "file",
-          shareUrl: item?.shareUrl || "#"
-        };
-      })
-    );
-    const enhancedRecentUploads = await Promise.all(
-      recentUploads.map(async (u) => {
-        const views = await analyticsRepository.getViewCount(u.id);
-        return {
-          ...u,
-          views
-        };
-      })
-    );
-    const redisConnected = redisHealth.connected;
-    const storageMode = isUpstashConfigured() ? redisConnected ? "Upstash Redis (Terdistribusi)" : "Upstash Redis (Terputus / Gangguan)" : "In-Memory (Fallback)";
-    const uptimeSeconds = Math.floor(process.uptime());
-    const uptimeFormatted = `${Math.floor(uptimeSeconds / 3600)}j ${Math.floor(
-      uptimeSeconds % 3600 / 60
-    )}m ${uptimeSeconds % 60}d`;
-    const initialDate = /* @__PURE__ */ new Date();
-    const initialTimeFormatted = `${String(initialDate.getHours()).padStart(2, "0")}:${String(
-      initialDate.getMinutes()
-    ).padStart(2, "0")}:${String(initialDate.getSeconds()).padStart(2, "0")}`;
-    const recommendations = generateRecommendations(todayStats, weeklyTrend, topFiles);
-    res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
-    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    const totalUploadedToday = todayStats.uploads || 0;
-    const typeCounts = {
-      image: todayStats.byType["image"] || 0,
-      video: todayStats.byType["video"] || 0,
-      audio: todayStats.byType["audio"] || 0,
-      file: todayStats.byType["file"] || 0
-    };
-    const sortedCountries = Object.entries(todayStats.byCountry).sort((a, b) => b[1] - a[1]);
-    const maxDailyUploads = Math.max(1, ...weeklyTrend.map((d) => d.uploads));
-    const maxDailyBytes = Math.max(1, ...weeklyTrend.map((d) => d.bytes));
-    const html = `<!DOCTYPE html>
+    try {
+      const todayStr = getTodayDateString();
+      const currentToken = req.cookies?.[ADMIN_COOKIE_NAME];
+      const [
+        todayStats,
+        weeklyTrend,
+        rawTopFiles,
+        recentUploads,
+        totalItemsInRepo,
+        catboxHealth,
+        redisHealth,
+        lastSyncCheck,
+        systemConfig,
+        activeSessions,
+        auditLogs,
+        deletedFiles
+      ] = await Promise.all([
+        analyticsRepository.getDailySummary(todayStr),
+        analyticsRepository.getWeeklyTrend(),
+        analyticsRepository.getTopFiles(10),
+        analyticsRepository.getRecentUploads(50),
+        analyticsRepository.getTotalItemsEver(),
+        checkCatboxHealth(),
+        checkRedisHealth(),
+        getLastSyncCheck(),
+        getAllSystemConfig(),
+        getAllActiveSessions(currentToken),
+        auditLogRepository.getRecentActions(50),
+        deletedFilesRepository.getDeletedFiles(100)
+      ]);
+      const mediaRepo = getMediaRepository();
+      const topFiles = await Promise.all(
+        rawTopFiles.map(async (tf) => {
+          const item = await mediaRepo.getByIdPublic(tf.id);
+          return {
+            id: tf.id,
+            name: item?.name || tf.id,
+            views: tf.views,
+            formattedSize: item?.formattedSize || "-",
+            type: item?.type || "file",
+            shareUrl: item?.shareUrl || "#"
+          };
+        })
+      );
+      const enhancedRecentUploads = await Promise.all(
+        recentUploads.map(async (u) => {
+          const views = await analyticsRepository.getViewCount(u.id);
+          return {
+            ...u,
+            views
+          };
+        })
+      );
+      const redisConnected = redisHealth.connected;
+      const storageMode = isUpstashConfigured() ? redisConnected ? "Upstash Redis (Terdistribusi)" : "Upstash Redis (Terputus / Gangguan)" : "In-Memory (Fallback)";
+      const uptimeSeconds = Math.floor(process.uptime());
+      const uptimeFormatted = `${Math.floor(uptimeSeconds / 3600)}j ${Math.floor(
+        uptimeSeconds % 3600 / 60
+      )}m ${uptimeSeconds % 60}d`;
+      const initialDate = /* @__PURE__ */ new Date();
+      const initialTimeFormatted = `${String(initialDate.getHours()).padStart(2, "0")}:${String(
+        initialDate.getMinutes()
+      ).padStart(2, "0")}:${String(initialDate.getSeconds()).padStart(2, "0")}`;
+      const recommendations = generateRecommendations(todayStats, weeklyTrend, topFiles);
+      res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      const totalUploadedToday = todayStats.uploads || 0;
+      const typeCounts = {
+        image: todayStats.byType["image"] || 0,
+        video: todayStats.byType["video"] || 0,
+        audio: todayStats.byType["audio"] || 0,
+        file: todayStats.byType["file"] || 0
+      };
+      const sortedCountries = Object.entries(todayStats.byCountry).sort((a, b) => b[1] - a[1]);
+      const maxDailyUploads = Math.max(1, ...weeklyTrend.map((d) => d.uploads));
+      const maxDailyBytes = Math.max(1, ...weeklyTrend.map((d) => d.bytes));
+      const html = `<!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AirShare Pro \u2014 Analytics &amp; Admin Dashboard</title>
+  ${GOOGLE_FONTS_TAGS}
+  ${THEME_HEAD_SCRIPT}
   <style>
-    :root {
-      --bg: #0e0e11;
-      --surface-primary: rgba(22, 22, 26, 0.94);
-      --card: #16161a;
-      --card-elevated: #1e1e24;
-      --border: rgba(255, 255, 255, 0.08);
-      --border-subtle: rgba(255, 255, 255, 0.06);
-      --border-hover: rgba(255, 255, 255, 0.16);
-      --border-accent: rgba(59, 130, 246, 0.35);
-      --text: #f5f5f7;
-      --fg: #f5f5f7;
-      --muted: #94949b;
-      --accent: #3b82f6;
-      --accent-dark: #1d4ed8;
-      --accent-soft: rgba(59, 130, 246, 0.12);
-      --accent-soft-hover: rgba(59, 130, 246, 0.2);
-      --success: #10b981;
-      --success-soft: rgba(16, 185, 129, 0.12);
-      --warning: #f59e0b;
-      --warning-soft: rgba(245, 158, 11, 0.15);
-      --danger: #ef4444;
-      --danger-soft: rgba(239, 68, 68, 0.15);
-      --surface-glass: rgba(22, 22, 26, 0.85);
-      --shadow-subtle: 0 4px 16px -2px rgba(0, 0, 0, 0.35);
-      --shadow-elevated: 0 16px 36px -4px rgba(0, 0, 0, 0.55);
+    ${THEME_CSS_VARIABLES}
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font-sans);
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      padding: 1.25rem;
+      min-height: 100vh;
+      transition: background-color 0.25s ease, color 0.25s ease;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background-color: var(--bg); color: var(--text); padding: 1.25rem; min-height: 100vh; }
-    .container { max-width: 1280px; margin: 0 auto; }
+    .container { max-width: 1280px; width: 100%; margin: 0 auto; }
 
     /* Header & Navigation */
     .top-nav {
@@ -7067,6 +8386,7 @@ var adminController = {
     .admin-main {
       flex: 1;
       min-width: 0;
+      width: 100%;
     }
 
     /* Mobile Category Tabs */
@@ -7163,7 +8483,7 @@ var adminController = {
     }
     .metric-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
     .metric-label { font-size: 0.8rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
-    .metric-icon { width: 32px; height: 32px; border-radius: 0.6rem; display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.05); color: var(--accent); }
+    .metric-icon { width: 32px; height: 32px; border-radius: 0.6rem; display: flex; align-items: center; justify-content: center; background: var(--surface-secondary); border: 1px solid var(--border-subtle); color: var(--accent); }
     .metric-value { font-size: 1.85rem; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 0.25rem; }
     .metric-sub { font-size: 0.75rem; color: var(--muted); }
 
@@ -7204,24 +8524,36 @@ var adminController = {
     /* Distribution Progress */
     .dist-item { margin-bottom: 1rem; }
     .dist-header { display: flex; justify-content: space-between; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.35rem; }
-    .dist-bar-track { width: 100%; height: 8px; background: rgba(255, 255, 255, 0.06); border-radius: 9999px; overflow: hidden; }
+    .dist-bar-track { width: 100%; height: 8px; background: var(--surface-secondary); border: 1px solid var(--border-subtle); border-radius: 9999px; overflow: hidden; }
     .dist-bar-fill { height: 100%; border-radius: 9999px; }
 
     /* Country List */
-    .country-row { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid rgba(255, 255, 255, 0.04); font-size: 0.85rem; }
+    .country-row { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border-subtle); font-size: 0.85rem; }
     .country-info { display: flex; align-items: center; gap: 0.6rem; }
     .country-flag { width: 20px; height: 14px; object-fit: cover; border-radius: 2px; }
 
     /* Gemini AI Recommendations & Real-Time Summary Box */
     .ai-rec-box {
-      background: linear-gradient(180deg, rgba(37, 99, 235, 0.1) 0%, rgba(30, 58, 138, 0.04) 100%);
-      border: 1px solid rgba(59, 130, 246, 0.28);
+      background: var(--card);
+      border: 1px solid var(--border);
       border-radius: 1.25rem;
       padding: 1.35rem 1.5rem;
       margin-bottom: 1.5rem;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 0 15px rgba(59, 130, 246, 0.08);
+      box-shadow: var(--shadow-subtle);
       position: relative;
       overflow: hidden;
+      overflow-wrap: break-word;
+      word-break: break-word;
+      max-width: 100%;
+    }
+    .ai-rec-box::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899);
     }
     .ai-rec-header {
       display: flex;
@@ -7231,7 +8563,7 @@ var adminController = {
       gap: 0.75rem;
       margin-bottom: 1rem;
       padding-bottom: 0.75rem;
-      border-bottom: 1px solid rgba(59, 130, 246, 0.15);
+      border-bottom: 1px solid var(--border-subtle);
     }
     .ai-rec-title-group {
       display: flex;
@@ -7247,13 +8579,13 @@ var adminController = {
       align-items: center;
       justify-content: center;
       color: #ffffff;
-      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.35);
       flex-shrink: 0;
     }
     .ai-rec-title {
       font-size: 0.975rem;
       font-weight: 800;
-      color: #e0f2fe;
+      color: var(--text-main);
       display: flex;
       align-items: center;
       gap: 0.5rem;
@@ -7269,10 +8601,10 @@ var adminController = {
       gap: 0.35rem;
       font-size: 0.7rem;
       font-weight: 700;
-      background: rgba(59, 130, 246, 0.15);
-      border: 1px solid rgba(59, 130, 246, 0.35);
-      color: #93c5fd;
-      padding: 0.2rem 0.55rem;
+      background: var(--surface-secondary);
+      border: 1px solid var(--border-subtle);
+      color: var(--accent);
+      padding: 0.25rem 0.65rem;
       border-radius: 9999px;
       letter-spacing: 0.02em;
     }
@@ -7280,8 +8612,8 @@ var adminController = {
       width: 6px;
       height: 6px;
       border-radius: 50%;
-      background: #60a5fa;
-      box-shadow: 0 0 6px #60a5fa;
+      background: var(--accent);
+      box-shadow: 0 0 6px var(--accent);
       animation: pulseDot 2s infinite ease-in-out;
     }
     @keyframes pulseDot {
@@ -7289,9 +8621,9 @@ var adminController = {
       50% { opacity: 1; transform: scale(1.2); }
     }
     .btn-ai-refresh {
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      color: #e2e8f0;
+      background: var(--surface-secondary);
+      border: 1px solid var(--border);
+      color: var(--text-main);
       border-radius: 8px;
       padding: 0.35rem 0.75rem;
       font-size: 0.75rem;
@@ -7306,37 +8638,46 @@ var adminController = {
       user-select: none;
     }
     .btn-ai-refresh:hover {
-      background: rgba(59, 130, 246, 0.2);
-      border-color: rgba(59, 130, 246, 0.4);
-      color: #ffffff;
+      background: var(--surface-hover);
+      border-color: var(--accent);
+      color: var(--accent);
     }
     .btn-ai-refresh:active {
-      transform: scale(0.95);
+      transform: scale(0.96);
     }
     .btn-ai-refresh:disabled {
       opacity: 0.6;
       cursor: not-allowed;
     }
 
-    /* AI Executive Summary Card */
+    /* AI Executive Summary Card \u2014 High Contrast Adaptive Styling */
     .ai-summary-card {
-      background: rgba(0, 0, 0, 0.25);
-      border: 1px solid rgba(255, 255, 255, 0.06);
-      border-left: 3px solid #3b82f6;
+      background: var(--surface-secondary);
+      border: 1px solid var(--border-subtle);
+      border-left: 3.5px solid var(--accent);
       border-radius: 10px;
-      padding: 0.95rem 1.15rem;
+      padding: 1rem 1.25rem;
       margin-bottom: 1rem;
-      font-size: 0.85rem;
-      line-height: 1.6;
-      color: #f1f5f9;
+      font-size: 0.875rem;
+      line-height: 1.65;
+      color: var(--text-main);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+      overflow-wrap: break-word;
+      word-break: break-word;
+      max-width: 100%;
+    }
+    #ai-rec-summary-text {
+      overflow-wrap: break-word;
+      word-break: break-word;
+      max-width: 100%;
     }
     .ai-summary-label {
-      font-size: 0.725rem;
+      font-size: 0.75rem;
       font-weight: 800;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: #60a5fa;
-      margin-bottom: 0.35rem;
+      color: var(--accent);
+      margin-bottom: 0.4rem;
       display: flex;
       align-items: center;
       gap: 0.4rem;
@@ -7356,15 +8697,22 @@ var adminController = {
       align-items: flex-start;
       gap: 0.65rem;
       font-size: 0.85rem;
-      line-height: 1.55;
-      color: #e2e8f0;
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid rgba(255, 255, 255, 0.04);
-      padding: 0.65rem 0.85rem;
+      line-height: 1.6;
+      color: var(--text-main);
+      background: var(--surface-secondary);
+      border: 1px solid var(--border-subtle);
+      padding: 0.75rem 0.95rem;
       border-radius: 8px;
+      transition: background 0.15s ease;
+      overflow-wrap: break-word;
+      word-break: break-word;
+      max-width: 100%;
+    }
+    .ai-list-item:hover {
+      background: var(--surface-hover);
     }
     .ai-bullet {
-      color: #60a5fa;
+      color: var(--accent);
       flex-shrink: 0;
       font-size: 0.85rem;
       margin-top: 0.15rem;
@@ -7373,8 +8721,8 @@ var adminController = {
       width: 18px;
       height: 18px;
       border-radius: 50%;
-      background: rgba(59, 130, 246, 0.2);
-      color: #93c5fd;
+      background: var(--accent-soft);
+      color: var(--accent);
       font-size: 0.7rem;
       font-weight: 800;
       display: inline-flex;
@@ -7386,29 +8734,39 @@ var adminController = {
     .ai-item-body {
       flex: 1;
       min-width: 0;
+      color: var(--text-main);
+      overflow-wrap: break-word;
+      word-break: break-word;
+      max-width: 100%;
     }
     .ai-bold {
       font-weight: 700;
-      color: #ffffff;
+      color: var(--text-main);
     }
     .ai-italic {
       font-style: italic;
-      color: #93c5fd;
+      color: var(--text-main);
+      opacity: 0.92;
     }
     .ai-code {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 0.75rem;
-      background: rgba(255, 255, 255, 0.08);
-      color: #fde047;
-      padding: 0.15rem 0.4rem;
+      font-family: var(--font-mono);
+      font-size: 0.775rem;
+      font-weight: 600;
+      background: var(--surface-primary);
+      color: var(--accent);
+      padding: 0.15rem 0.45rem;
       border-radius: 4px;
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border-subtle);
+      overflow-wrap: break-word;
+      word-break: break-all;
+      max-width: 100%;
+      display: inline-block;
     }
     .ai-heading-3 {
       font-size: 0.9rem;
-      font-weight: 700;
-      color: #93c5fd;
-      margin: 0.5rem 0 0.25rem;
+      font-weight: 800;
+      color: var(--text-main);
+      margin: 0.6rem 0 0.3rem;
     }
     .ai-meta-footer {
       display: flex;
@@ -7418,9 +8776,9 @@ var adminController = {
       gap: 0.5rem;
       margin-top: 0.9rem;
       padding-top: 0.75rem;
-      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      border-top: 1px solid var(--border-subtle);
       font-size: 0.725rem;
-      color: var(--muted);
+      color: var(--text-muted);
     }
 
     /* Custom Loading Skeleton */
@@ -7434,7 +8792,7 @@ var adminController = {
       align-items: center;
       gap: 0.6rem;
       font-size: 0.8rem;
-      color: #93c5fd;
+      color: var(--text-muted);
       font-weight: 600;
       margin-bottom: 0.25rem;
     }
@@ -7442,12 +8800,12 @@ var adminController = {
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: #3b82f6;
-      box-shadow: 0 0 8px #3b82f6;
+      background: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
       animation: pulseDot 1.2s infinite ease-in-out;
     }
     .skeleton-shimmer {
-      background: linear-gradient(90deg, rgba(255, 255, 255, 0.03) 25%, rgba(255, 255, 255, 0.09) 50%, rgba(255, 255, 255, 0.03) 75%);
+      background: linear-gradient(90deg, var(--surface-secondary) 25%, var(--surface-hover) 50%, var(--surface-secondary) 75%);
       background-size: 200% 100%;
       animation: shimmer 1.5s infinite linear;
       border-radius: 6px;
@@ -7464,36 +8822,48 @@ var adminController = {
       height: 74px;
       border-radius: 10px;
       width: 100%;
+      border: 1px solid var(--border-subtle);
     }
     .skeleton-row {
       height: 44px;
       border-radius: 8px;
       width: 100%;
+      border: 1px solid var(--border-subtle);
     }
 
     /* Error Notification Container */
     .ai-error-box {
       display: none;
-      background: rgba(239, 68, 68, 0.1);
+      background: rgba(239, 68, 68, 0.08);
       border: 1px solid rgba(239, 68, 68, 0.28);
       border-radius: 10px;
       padding: 1rem 1.25rem;
       margin-top: 0.5rem;
+      max-width: 100%;
+      overflow-wrap: break-word;
+      word-break: break-word;
     }
     .ai-error-header {
       display: flex;
       align-items: center;
       gap: 0.5rem;
-      color: #f87171;
+      color: #dc2626;
       font-size: 0.85rem;
       font-weight: 700;
       margin-bottom: 0.4rem;
     }
+    .theme-spacegray .ai-error-header, .theme-purple .ai-error-header, .theme-pacific .ai-error-header {
+      color: #f87171;
+    }
     .ai-error-desc {
       font-size: 0.8rem;
-      color: #fca5a5;
+      color: var(--text-main);
       line-height: 1.5;
       margin-bottom: 0.85rem;
+      opacity: 0.9;
+      overflow-wrap: break-word;
+      word-break: break-word;
+      max-width: 100%;
     }
     .ai-error-actions {
       display: flex;
@@ -7502,7 +8872,7 @@ var adminController = {
       flex-wrap: wrap;
     }
     .btn-ai-retry {
-      background: #ef4444;
+      background: #dc2626;
       color: #ffffff;
       border: none;
       border-radius: 6px;
@@ -7515,10 +8885,13 @@ var adminController = {
       gap: 0.4rem;
       touch-action: manipulation;
     }
+    .theme-spacegray .btn-ai-retry, .theme-purple .btn-ai-retry, .theme-pacific .btn-ai-retry {
+      background: #ef4444;
+    }
     .btn-ai-fallback {
-      background: rgba(255, 255, 255, 0.06);
-      color: #e2e8f0;
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: var(--surface-secondary);
+      color: var(--text-main);
+      border: 1px solid var(--border);
       border-radius: 6px;
       padding: 0.35rem 0.85rem;
       font-size: 0.75rem;
@@ -7535,10 +8908,11 @@ var adminController = {
       margin-top: 0.5rem;
       border-radius: 0.75rem;
       border: 1px solid var(--border);
-      background: rgba(0, 0, 0, 0.18);
+      background: var(--card);
+      box-shadow: var(--shadow-subtle);
       position: relative;
       scrollbar-width: thin;
-      scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+      scrollbar-color: var(--border-subtle) transparent;
     }
     .table-container::-webkit-scrollbar {
       height: 6px;
@@ -7548,7 +8922,7 @@ var adminController = {
       background: transparent;
     }
     .table-container::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.2);
+      background: var(--border-subtle);
       border-radius: 9999px;
     }
     table {
@@ -7557,41 +8931,50 @@ var adminController = {
       border-collapse: collapse;
       text-align: left;
       font-size: 0.85rem;
+      color: var(--text-main);
     }
     th {
       padding: 0.75rem 0.9rem;
       font-size: 0.725rem;
       text-transform: uppercase;
       letter-spacing: 0.04em;
-      color: var(--muted);
+      color: var(--text-muted);
+      background: var(--surface-secondary);
       border-bottom: 1px solid var(--border);
       white-space: nowrap;
     }
     td {
       padding: 0.75rem 0.9rem;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--text-main);
       vertical-align: middle;
     }
     tr:hover td {
-      background: rgba(255, 255, 255, 0.02);
+      background: var(--surface-hover);
     }
     .badge-type { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 6px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; }
-    .badge-image { background: rgba(16, 185, 129, 0.15); color: #34d399; }
-    .badge-video { background: rgba(139, 92, 246, 0.15); color: #a78bfa; }
-    .badge-audio { background: rgba(236, 72, 153, 0.15); color: #f472b6; }
-    .badge-file { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
-    .session-tag { font-family: monospace; font-size: 0.75rem; color: var(--muted); background: rgba(255, 255, 255, 0.05); padding: 0.15rem 0.4rem; border-radius: 4px; }
+    .badge-image { background: rgba(16, 185, 129, 0.15); color: #059669; }
+    .badge-video { background: rgba(139, 92, 246, 0.15); color: #7c3aed; }
+    .badge-audio { background: rgba(236, 72, 153, 0.15); color: #db2777; }
+    .badge-file { background: rgba(245, 158, 11, 0.15); color: #d97706; }
+
+    .theme-spacegray .badge-image, .theme-purple .badge-image, .theme-pacific .badge-image { color: #34d399; }
+    .theme-spacegray .badge-video, .theme-purple .badge-video, .theme-pacific .badge-video { color: #a78bfa; }
+    .theme-spacegray .badge-audio, .theme-purple .badge-audio, .theme-pacific .badge-audio { color: #f472b6; }
+    .theme-spacegray .badge-file, .theme-purple .badge-file, .theme-pacific .badge-file { color: #fbbf24; }
+
+    .session-tag { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted); background: var(--surface-secondary); border: 1px solid var(--border-subtle); padding: 0.15rem 0.4rem; border-radius: 4px; }
     .link-view { color: var(--accent); text-decoration: none; font-weight: 600; }
     .link-view:hover { text-decoration: underline; }
 
-    /* iOS Alert & Confirmation Modal (Super Lightweight, No Backdrop-Blur) */
+    /* iOS Alert & Confirmation Modal (Super Lightweight, Adaptive to Themes) */
     .ios-modal-overlay {
       position: fixed;
       top: 0;
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(0, 0, 0, 0.75);
+      background: rgba(0, 0, 0, 0.7);
       z-index: 99999;
       display: flex;
       align-items: center;
@@ -7601,6 +8984,8 @@ var adminController = {
       visibility: hidden;
       pointer-events: none; /* CRITICAL FIX: prevents touch blocking when modal is not active */
       transition: opacity 0.18s ease, visibility 0.18s ease;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
     }
     .ios-modal-overlay.active {
       opacity: 1;
@@ -7608,12 +8993,12 @@ var adminController = {
       pointer-events: auto;
     }
     .ios-modal-box {
-      background: #18181b;
-      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: var(--card, #18181b);
+      border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
       border-radius: 14px;
       width: 100%;
       max-width: 320px;
-      box-shadow: 0 20px 40px -8px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.04);
+      box-shadow: 0 20px 40px -8px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.04);
       text-align: center;
       overflow: hidden;
       transform: scale(0.92);
@@ -7646,7 +9031,7 @@ var adminController = {
     }
     .ios-modal-icon-info {
       background: rgba(59, 130, 246, 0.15);
-      color: #60a5fa;
+      color: var(--accent, #60a5fa);
       border: 1px solid rgba(59, 130, 246, 0.3);
     }
     .ios-modal-icon-success {
@@ -7657,20 +9042,20 @@ var adminController = {
     .ios-modal-title {
       font-size: 1.05rem;
       font-weight: 700;
-      color: #ffffff;
+      color: var(--fg, #ffffff);
       line-height: 1.3;
       margin-bottom: 0.45rem;
     }
     .ios-modal-desc {
       font-size: 0.825rem;
-      color: #a1a1aa;
+      color: var(--subtle, #a1a1aa);
       line-height: 1.45;
       word-break: break-word;
       white-space: pre-line;
     }
     .ios-modal-actions-row {
       display: flex;
-      border-top: 1px solid rgba(255, 255, 255, 0.12);
+      border-top: 1px solid var(--border, rgba(255, 255, 255, 0.12));
     }
     .ios-modal-btn {
       flex: 1;
@@ -7686,19 +9071,19 @@ var adminController = {
       font-family: inherit;
     }
     .ios-modal-btn:active, .ios-modal-btn:hover {
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(128, 128, 128, 0.1);
     }
     .ios-modal-btn-cancel {
-      color: #94a3b8;
+      color: var(--subtle, #94a3b8);
       font-weight: 500;
-      border-right: 1px solid rgba(255, 255, 255, 0.12);
+      border-right: 1px solid var(--border, rgba(255, 255, 255, 0.12));
     }
     .ios-modal-btn-danger {
       color: #f87171;
       font-weight: 700;
     }
     .ios-modal-btn-primary {
-      color: #60a5fa;
+      color: var(--accent, #60a5fa);
       font-weight: 700;
     }
 
@@ -7793,26 +9178,57 @@ var adminController = {
       to { transform: rotate(360deg); }
     }
 
-    /* Health footer */
-    .health-bar {
+    /* Clean Minimalist Footer */
+    .admin-clean-footer {
       display: flex;
       align-items: center;
       justify-content: space-between;
       flex-wrap: wrap;
-      gap: 1rem;
-      padding: 1rem 1.5rem;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 1.25rem;
-      font-size: 0.775rem;
+      gap: 0.75rem;
+      padding: 0.85rem 1.25rem;
+      background: var(--surface-glass);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border-subtle);
+      border-radius: 1rem;
+      font-size: 0.75rem;
       color: var(--muted);
       margin-top: 1.5rem;
       box-shadow: var(--shadow-subtle);
     }
+    .admin-clean-footer .footer-left {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .admin-clean-footer .footer-dot {
+      opacity: 0.4;
+    }
+    .admin-clean-footer .footer-tab-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 700;
+    }
+    .admin-clean-footer .footer-tab-link:hover {
+      text-decoration: underline;
+    }
+    .admin-clean-footer .footer-right {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-weight: 600;
+      opacity: 0.8;
+    }
     .health-item { display: flex; align-items: center; gap: 0.5rem; }
-    .status-indicator { width: 8px; height: 8px; border-radius: 50%; }
+    .status-indicator { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
     .status-ok { background: var(--success); box-shadow: 0 0 6px var(--success); }
     .status-warn { background: var(--warning); box-shadow: 0 0 6px var(--warning); }
+
+    #admin-toast-banner {
+      overflow-wrap: break-word;
+      word-break: break-word;
+      max-width: 100%;
+    }
 
     /* Media Queries */
     @media (max-width: 900px) {
@@ -7821,6 +9237,9 @@ var adminController = {
       }
       .admin-sidebar {
         display: none;
+      }
+      .admin-main {
+        width: 100%;
       }
       .admin-mobile-tabs {
         display: flex;
@@ -7851,7 +9270,7 @@ var adminController = {
         padding: 1rem;
         border-radius: 1rem;
       }
-      .health-bar {
+      .admin-clean-footer {
         padding: 0.85rem 1rem;
         border-radius: 1rem;
       }
@@ -7860,7 +9279,8 @@ var adminController = {
     ${getOperationalPanelStyles()}
   </style>
 </head>
-<body>
+<body class="theme-rosegold">
+  ${THEME_BODY_SCRIPT}
   <div class="container">
     <!-- Top Nav -->
     <header class="top-nav">
@@ -7891,28 +9311,32 @@ var adminController = {
     <div id="admin-toast-banner" style="display:none; margin-bottom: 1.5rem; padding: 0.85rem 1.25rem; border-radius: 0.75rem; font-size: 0.85rem; font-weight: 600; align-items: center; justify-content: space-between;"></div>
 
     <!-- Mobile Category Tabs -->
-    <nav class="admin-mobile-tabs" aria-label="Kategori Panel Mobile">
-      <button type="button" class="admin-tab-btn active" data-category="ringkasan">
+    <nav class="admin-mobile-tabs" aria-label="Kategori Panel Mobile" role="tablist">
+      <button type="button" class="admin-tab-btn active" data-category="ringkasan" id="mobile-tab-ringkasan" aria-controls="panel-ringkasan" onclick="switchCategory('ringkasan')" role="tab" aria-selected="true">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
         <span>Ringkasan</span>
       </button>
-      <button type="button" class="admin-tab-btn" data-category="analitik">
+      <button type="button" class="admin-tab-btn" data-category="analitik" id="mobile-tab-analitik" aria-controls="panel-analitik" onclick="switchCategory('analitik')" role="tab" aria-selected="false">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
         <span>Analitik</span>
       </button>
-      <button type="button" class="admin-tab-btn" data-category="kontrol">
+      <button type="button" class="admin-tab-btn" data-category="status" id="mobile-tab-status" aria-controls="panel-status" onclick="switchCategory('status')" role="tab" aria-selected="false">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        <span>Status Sistem</span>
+      </button>
+      <button type="button" class="admin-tab-btn" data-category="kontrol" id="mobile-tab-kontrol" aria-controls="panel-kontrol" onclick="switchCategory('kontrol')" role="tab" aria-selected="false">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         <span>Kontrol Sistem</span>
       </button>
-      <button type="button" class="admin-tab-btn" data-category="keamanan">
+      <button type="button" class="admin-tab-btn" data-category="keamanan" id="mobile-tab-keamanan" aria-controls="panel-keamanan" onclick="switchCategory('keamanan')" role="tab" aria-selected="false">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         <span>Keamanan &amp; Sesi</span>
       </button>
-      <button type="button" class="admin-tab-btn" data-category="data">
+      <button type="button" class="admin-tab-btn" data-category="data" id="mobile-tab-data" aria-controls="panel-data" onclick="switchCategory('data')" role="tab" aria-selected="false">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         <span>Pengelolaan Data</span>
       </button>
-      <button type="button" class="admin-tab-btn" data-category="terhapus" id="tab-btn-terhapus">
+      <button type="button" class="admin-tab-btn" data-category="terhapus" id="tab-btn-terhapus" aria-controls="panel-terhapus" onclick="switchCategory('terhapus')" role="tab" aria-selected="false">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
         <span>Berkas Terhapus (${deletedFiles.length})</span>
       </button>
@@ -7923,8 +9347,8 @@ var adminController = {
       <!-- Desktop Sidebar Sticky Nav -->
       <aside class="admin-sidebar" aria-label="Navigasi Kategori Admin">
         <div class="sidebar-title">Menu Utama</div>
-        <nav class="sidebar-nav">
-          <button type="button" class="admin-sidebar-btn active" data-category="ringkasan">
+        <nav class="sidebar-nav" role="tablist">
+          <button type="button" class="admin-sidebar-btn active" data-category="ringkasan" id="sidebar-btn-ringkasan" aria-controls="panel-ringkasan" onclick="switchCategory('ringkasan')" role="tab" aria-selected="true">
             <div class="sidebar-btn-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
             </div>
@@ -7933,7 +9357,7 @@ var adminController = {
               <span class="sidebar-btn-desc">Metrik &amp; Rekomendasi</span>
             </div>
           </button>
-          <button type="button" class="admin-sidebar-btn" data-category="analitik">
+          <button type="button" class="admin-sidebar-btn" data-category="analitik" id="sidebar-btn-analitik" aria-controls="panel-analitik" onclick="switchCategory('analitik')" role="tab" aria-selected="false">
             <div class="sidebar-btn-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
             </div>
@@ -7942,7 +9366,16 @@ var adminController = {
               <span class="sidebar-btn-desc">Tren, Media &amp; Geolokasi</span>
             </div>
           </button>
-          <button type="button" class="admin-sidebar-btn" data-category="kontrol">
+          <button type="button" class="admin-sidebar-btn" data-category="status" id="sidebar-btn-status" aria-controls="panel-status" onclick="switchCategory('status')" role="tab" aria-selected="false">
+            <div class="sidebar-btn-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            </div>
+            <div class="sidebar-btn-content">
+              <span class="sidebar-btn-title">Status Sistem</span>
+              <span class="sidebar-btn-desc">Infrastruktur &amp; Kesehatan Hulu</span>
+            </div>
+          </button>
+          <button type="button" class="admin-sidebar-btn" data-category="kontrol" id="sidebar-btn-kontrol" aria-controls="panel-kontrol" onclick="switchCategory('kontrol')" role="tab" aria-selected="false">
             <div class="sidebar-btn-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             </div>
@@ -7951,7 +9384,7 @@ var adminController = {
               <span class="sidebar-btn-desc">Kill Switch &amp; Sinkronisasi</span>
             </div>
           </button>
-          <button type="button" class="admin-sidebar-btn" data-category="keamanan">
+          <button type="button" class="admin-sidebar-btn" data-category="keamanan" id="sidebar-btn-keamanan" aria-controls="panel-keamanan" onclick="switchCategory('keamanan')" role="tab" aria-selected="false">
             <div class="sidebar-btn-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
             </div>
@@ -7960,7 +9393,7 @@ var adminController = {
               <span class="sidebar-btn-desc">Sesi Aktif &amp; Log Audit</span>
             </div>
           </button>
-          <button type="button" class="admin-sidebar-btn" data-category="data">
+          <button type="button" class="admin-sidebar-btn" data-category="data" id="sidebar-btn-data" aria-controls="panel-data" onclick="switchCategory('data')" role="tab" aria-selected="false">
             <div class="sidebar-btn-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </div>
@@ -7969,7 +9402,7 @@ var adminController = {
               <span class="sidebar-btn-desc">Riwayat Unggahan &amp; Cleanup</span>
             </div>
           </button>
-          <button type="button" class="admin-sidebar-btn" data-category="terhapus" id="sidebar-btn-terhapus">
+          <button type="button" class="admin-sidebar-btn" data-category="terhapus" id="sidebar-btn-terhapus" aria-controls="panel-terhapus" onclick="switchCategory('terhapus')" role="tab" aria-selected="false">
             <div class="sidebar-btn-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
             </div>
@@ -7984,7 +9417,7 @@ var adminController = {
       <!-- Main Categorized Content Panels -->
       <main class="admin-main">
         <!-- 1. Kategori: Ringkasan -->
-        <div class="category-panel active" data-category-panel="ringkasan">
+        <div class="category-panel active" id="panel-ringkasan" data-category-panel="ringkasan" role="tabpanel" aria-labelledby="sidebar-btn-ringkasan">
           <!-- 4 Big Number Summaries for Today -->
           <section class="metrics-grid">
             <div class="metric-card">
@@ -8052,7 +9485,7 @@ var adminController = {
               <div class="ai-rec-actions">
                 <span class="ai-badge-model" id="ai-rec-model-badge">
                   <span class="ai-badge-pulse"></span>
-                  <span id="ai-rec-model-label">Gemini 3.8 Flash</span>
+                  <span id="ai-rec-model-label">Gemini 2.5 Flash</span>
                 </span>
                 <button type="button" class="btn-ai-refresh" id="btn-refresh-ai-rec" title="Minta Gemini AI menganalisis data metrik sistem terkini">
                   <svg id="ai-refresh-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
@@ -8089,10 +9522,10 @@ var adminController = {
               <!-- Recommendation List -->
               <ul class="ai-recs-list" id="ai-rec-list">
                 ${recommendations.map(
-      (r) => `<li class="ai-list-item"><span class="ai-bullet">\u2726</span><div class="ai-item-body">${escapeHtml3(
-        r
-      )}</div></li>`
-    ).join("")}
+        (r) => `<li class="ai-list-item"><span class="ai-bullet">\u2726</span><div class="ai-item-body">${escapeHtml3(
+          r
+        )}</div></li>`
+      ).join("")}
               </ul>
 
               <div class="ai-meta-footer">
@@ -8124,7 +9557,7 @@ var adminController = {
         </div>
 
         <!-- 2. Kategori: Analitik -->
-        <div class="category-panel" data-category-panel="analitik">
+        <div class="category-panel" id="panel-analitik" data-category-panel="analitik" role="tabpanel" aria-labelledby="sidebar-btn-analitik">
           <!-- 7-Day Trend & Media Type Distribution -->
           <div class="section-grid">
             <!-- 7-Day Trend Chart -->
@@ -8139,14 +9572,14 @@ var adminController = {
               <div class="chart-container">
                 <div class="chart-bars">
                   ${weeklyTrend.map((d) => {
-      const heightPercent = Math.max(8, Math.round(d.uploads / maxDailyUploads * 100));
-      return `
+        const heightPercent = Math.max(8, Math.round(d.uploads / maxDailyUploads * 100));
+        return `
                       <div class="chart-col">
                         <div class="chart-tooltip-label">${d.uploads}</div>
                         <div class="chart-bar" style="height: ${heightPercent}%;" title="${d.date}: ${d.uploads} uploads (${d.formattedBytes})"></div>
                         <div class="chart-date">${d.date.slice(5)}</div>
                       </div>`;
-    }).join("")}
+      }).join("")}
                 </div>
               </div>
             </section>
@@ -8216,8 +9649,8 @@ var adminController = {
               </div>
 
               ${sortedCountries.length === 0 ? `<p style="color: var(--muted); font-size: 0.85rem; padding: 1rem 0;">Belum ada data geolokasi hari ini.</p>` : sortedCountries.slice(0, 8).map(([code, count]) => {
-      const flagPath = getFlagAssetPath(code);
-      return `
+        const flagPath = getFlagAssetPath(code);
+        return `
                   <div class="country-row">
                     <div class="country-info">
                       <img src="${escapeHtml3(flagPath)}" alt="${escapeHtml3(code)}" class="country-flag" onerror="this.src='/flags/globe.svg';" />
@@ -8225,7 +9658,7 @@ var adminController = {
                     </div>
                     <span style="font-weight: 700; color: var(--accent);">${count} unggahan</span>
                   </div>`;
-    }).join("")}
+      }).join("")}
             </section>
 
             <!-- Top 10 Popular Files -->
@@ -8239,27 +9672,164 @@ var adminController = {
               </div>
 
               ${topFiles.length === 0 ? `<p style="color: var(--muted); font-size: 0.85rem; padding: 1rem 0;">Belum ada riwayat tayangan berkas.</p>` : topFiles.map(
-      (f, idx) => `
+        (f, idx) => `
                   <div class="country-row">
                     <div class="country-info" style="min-width: 0; flex: 1;">
                       <span style="font-size: 0.75rem; font-weight: 800; color: var(--muted); width: 18px;">#${idx + 1}</span>
                       <a href="/s/${encodeURIComponent(
-        f.id
-      )}" target="_blank" class="link-view" style="max-width: clamp(120px, 40vw, 220px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.825rem;" title="${escapeHtml3(
-        f.name
-      )}">
+          f.id
+        )}" target="_blank" class="link-view" style="max-width: clamp(120px, 40vw, 220px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.825rem;" title="${escapeHtml3(
+          f.name
+        )}">
                         ${escapeHtml3(f.name)}
                       </a>
                     </div>
                     <span style="font-weight: 700; color: #60a5fa; font-size: 0.85rem;">${f.views} tayangan</span>
                   </div>`
-    ).join("")}
+      ).join("")}
             </section>
           </div>
         </div>
 
-        <!-- 3. Kategori: Kontrol Sistem -->
-        <div class="category-panel" data-category-panel="kontrol">
+        <!-- 3. Kategori: Status Sistem -->
+        <div class="category-panel" id="panel-status" data-category-panel="status" role="tabpanel" aria-labelledby="sidebar-btn-status">
+          <!-- 4 Core Infrastructure Status Cards -->
+          <section class="metrics-grid" style="margin-bottom: 1.5rem;">
+            <!-- Storage Backend -->
+            <div class="metric-card" id="status-card-storage">
+              <div class="metric-header">
+                <span class="metric-label">Penyimpanan Utama</span>
+                <div class="metric-icon" style="background: rgba(59, 130, 246, 0.15); color: #3b82f6;">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 0.5rem; margin: 0.4rem 0;">
+                <span class="status-indicator ${redisConnected || !isUpstashConfigured() ? "status-ok" : "status-warn"}" id="status-tab-storage-dot"></span>
+                <div class="metric-value" style="font-size: 1.1rem; font-weight: 800;" id="status-tab-storage-val">${escapeHtml3(storageMode)}</div>
+              </div>
+              <div class="metric-sub" id="status-tab-storage-sub">
+                ${redisConnected ? "Koneksi aktif ke cluster Upstash Redis" : !isUpstashConfigured() ? "Penyimpanan lokal RAM in-memory aktif" : "Gangguan koneksi - fallback in-memory"}
+              </div>
+            </div>
+
+            <!-- Catbox Upstream -->
+            <div class="metric-card" id="status-card-catbox">
+              <div class="metric-header">
+                <span class="metric-label">Koneksi Hulu Catbox</span>
+                <div class="metric-icon" style="background: rgba(16, 185, 129, 0.15); color: #10b981;">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="m12 12 4 4"/><path d="m16 12-4 4"/></svg>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 0.5rem; margin: 0.4rem 0;">
+                <span class="status-indicator ${catboxHealth.available ? "status-ok" : "status-warn"}" id="status-tab-catbox-dot"></span>
+                <div class="metric-value" style="font-size: 1.1rem; font-weight: 800;" id="status-tab-catbox-val">
+                  ${catboxHealth.available ? `Tersedia (${catboxHealth.latencyMs}ms)` : "Tidak Tersedia"}
+                </div>
+              </div>
+              <div class="metric-sub" id="status-tab-catbox-sub">
+                ${catboxHealth.available ? "Endpoint https://catbox.moe/user/api.php beroperasi normal" : "Penyedia Catbox tidak dapat dijangkau"}
+              </div>
+            </div>
+
+            <!-- Server Uptime -->
+            <div class="metric-card" id="status-card-uptime">
+              <div class="metric-header">
+                <span class="metric-label">Waktu Aktif Server</span>
+                <div class="metric-icon" style="background: rgba(168, 85, 247, 0.15); color: #a855f7;">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 0.5rem; margin: 0.4rem 0;">
+                <span class="status-indicator status-ok"></span>
+                <div class="metric-value" style="font-size: 1.1rem; font-weight: 800;" id="status-tab-uptime-val">${escapeHtml3(uptimeFormatted)}</div>
+              </div>
+              <div class="metric-sub">
+                Container runtime Node.js stabil &amp; beroperasi normal
+              </div>
+            </div>
+
+            <!-- Kerahasiaan & Keamanan Indeks -->
+            <div class="metric-card" id="status-card-privacy">
+              <div class="metric-header">
+                <span class="metric-label">Kerahasiaan &amp; Indeks</span>
+                <div class="metric-icon" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b;">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 0.5rem; margin: 0.4rem 0;">
+                <span class="status-indicator status-ok"></span>
+                <div class="metric-value" style="font-size: 1.1rem; font-weight: 800;">No-Index / No-Follow Active</div>
+              </div>
+              <div class="metric-sub">
+                Header proteksi X-Robots-Tag &amp; Cache-Control aktif
+              </div>
+            </div>
+          </section>
+
+          <!-- Detail Spesifikasi Infrastruktur & Diagnostik Panel -->
+          <div class="section-grid" style="margin-bottom: 1.5rem;">
+            <!-- Spesifikasi Runtime & Server -->
+            <section class="panel">
+              <div class="panel-header">
+                <h2 class="panel-title">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="M15 9h6"/><path d="M15 15h6"/></svg>
+                  Diagnostik Runtime &amp; Server
+                </h2>
+                <span class="panel-badge">Spesifikasi Lingkungan</span>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.5rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.9rem; background: var(--surface-secondary); border-radius: 0.75rem; border: 1px solid var(--border-subtle); font-size: 0.825rem;">
+                  <span style="color: var(--muted); font-weight: 600;">Node Environment</span>
+                  <span style="font-weight: 700; font-family: var(--font-mono); color: var(--accent);">${escapeHtml3(process.env.NODE_ENV || "production")}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.9rem; background: var(--surface-secondary); border-radius: 0.75rem; border: 1px solid var(--border-subtle); font-size: 0.825rem;">
+                  <span style="color: var(--muted); font-weight: 600;">Zona Waktu Server</span>
+                  <span style="font-weight: 700;">Asia/Jakarta (WIB, UTC+7)</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.9rem; background: var(--surface-secondary); border-radius: 0.75rem; border: 1px solid var(--border-subtle); font-size: 0.825rem;">
+                  <span style="color: var(--muted); font-weight: 600;">Waktu Server Saat Ini</span>
+                  <span style="font-weight: 700; font-family: var(--font-mono);" id="status-tab-server-time">${escapeHtml3(initialDate.toLocaleString("id-ID", { timeZone: "Asia/Jakarta" }))} WIB</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.9rem; background: var(--surface-secondary); border-radius: 0.75rem; border: 1px solid var(--border-subtle); font-size: 0.825rem;">
+                  <span style="color: var(--muted); font-weight: 600;">Header Robots Bot</span>
+                  <span style="font-weight: 700; font-family: var(--font-mono); color: #10b981;">noindex, nofollow, noarchive</span>
+                </div>
+              </div>
+            </section>
+
+            <!-- Status Layanan Eksternal & Integrasi -->
+            <section class="panel">
+              <div class="panel-header">
+                <h2 class="panel-title">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                  Integrasi &amp; Layanan Eksternal
+                </h2>
+                <span class="panel-badge">Konektivitas Hulu</span>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.5rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.9rem; background: var(--surface-secondary); border-radius: 0.75rem; border: 1px solid var(--border-subtle); font-size: 0.825rem;">
+                  <span style="color: var(--muted); font-weight: 600;">Upstream Storage Provider</span>
+                  <span style="font-weight: 700; color: #10b981;">Catbox.moe (API HTTPS)</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.9rem; background: var(--surface-secondary); border-radius: 0.75rem; border: 1px solid var(--border-subtle); font-size: 0.825rem;">
+                  <span style="color: var(--muted); font-weight: 600;">Redis REST Provider</span>
+                  <span style="font-weight: 700;">${isUpstashConfigured() ? '<span style="color: #10b981;">Upstash Cloud REST (SSL)</span>' : '<span style="color: #f59e0b;">Memory Engine (Lokal)</span>'}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.9rem; background: var(--surface-secondary); border-radius: 0.75rem; border: 1px solid var(--border-subtle); font-size: 0.825rem;">
+                  <span style="color: var(--muted); font-weight: 600;">AI Engine Model</span>
+                  <span style="font-weight: 700; font-family: var(--font-mono); color: var(--accent);">${escapeHtml3(GEMINI_MODEL_NAME)}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.9rem; background: var(--surface-secondary); border-radius: 0.75rem; border: 1px solid var(--border-subtle); font-size: 0.825rem;">
+                  <span style="color: var(--muted); font-weight: 600;">Keamanan Sesi &amp; Cookie</span>
+                  <span style="font-weight: 700; color: #10b981;">HttpOnly, SameSite=Lax, Secure</span>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <!-- 4. Kategori: Kontrol Sistem -->
+        <div class="category-panel" id="panel-kontrol" data-category-panel="kontrol" role="tabpanel" aria-labelledby="sidebar-btn-kontrol">
           <!-- Kontrol Operasional & Konfigurasi Dinamis (Kill Switch & Dynamic Config) -->
           ${renderOperationalControlsHtml(systemConfig)}
 
@@ -8288,7 +9858,7 @@ var adminController = {
         </div>
 
         <!-- 4. Kategori: Keamanan & Sesi -->
-        <div class="category-panel" data-category-panel="keamanan">
+        <div class="category-panel" id="panel-keamanan" data-category-panel="keamanan" role="tabpanel" aria-labelledby="sidebar-btn-keamanan">
           <!-- Manajemen Sesi Admin Aktif -->
           ${renderActiveSessionsHtml(activeSessions)}
 
@@ -8297,7 +9867,7 @@ var adminController = {
         </div>
 
         <!-- 5. Kategori: Pengelolaan Data -->
-        <div class="category-panel" data-category-panel="data">
+        <div class="category-panel" id="panel-data" data-category-panel="data" role="tabpanel" aria-labelledby="sidebar-btn-data">
           <!-- 50 Most Recent Uploads Across All Sessions -->
           <section class="panel" style="margin-bottom: 1.5rem;">
             <div class="panel-header">
@@ -8333,54 +9903,54 @@ var adminController = {
                 </thead>
                 <tbody>
                   ${enhancedRecentUploads.length === 0 ? `<tr><td colspan="7" style="text-align: center; color: var(--muted); padding: 2rem;">Belum ada unggahan yang tercatat di repositori.</td></tr>` : enhancedRecentUploads.map((item) => {
-      const flagPath = getFlagAssetPath(item.uploaderCountryCode);
-      return `
+        const flagPath = getFlagAssetPath(item.uploaderCountryCode);
+        return `
                     <tr id="upload-row-${escapeHtml3(item.id)}">
                       <td>
                         <div style="font-weight: 700; max-width: clamp(120px, 40vw, 220px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml3(
-        item.name
-      )}">
+          item.name
+        )}">
                           ${escapeHtml3(item.name)}
                         </div>
                         <div style="font-size: 0.7rem; color: var(--muted);">${escapeHtml3(
-        item.id
-      )}</div>
+          item.id
+        )}</div>
                       </td>
                       <td>
                         <span class="badge-type badge-${escapeHtml3(item.type)}">${escapeHtml3(
-        item.type
-      )}</span>
+          item.type
+        )}</span>
                       </td>
                       <td style="font-weight: 600;">${escapeHtml3(item.formattedSize)}</td>
                       <td>
                         <div style="display: flex; align-items: center; gap: 0.4rem;">
                           <img src="${escapeHtml3(
-        flagPath
-      )}" alt="${escapeHtml3(item.uploaderCountryCode || "Globe")}" class="country-flag" onerror="this.src='/flags/globe.svg';" />
+          flagPath
+        )}" alt="${escapeHtml3(item.uploaderCountryCode || "Globe")}" class="country-flag" onerror="this.src='/flags/globe.svg';" />
                           <span style="font-size: 0.8rem;">${escapeHtml3(
-        item.uploaderCountryCode || "-"
-      )}</span>
+          item.uploaderCountryCode || "-"
+        )}</span>
                         </div>
                       </td>
                       <td>
                         <div style="font-weight: 600;">${formatRelativeTime3(item.createdAt)}</div>
                         <div style="font-size: 0.7rem; color: var(--muted);">${formatAbsoluteTime2(
-        item.createdAt
-      )}</div>
+          item.createdAt
+        )}</div>
                       </td>
                       <td style="font-weight: 700; color: #60a5fa;">${item.views}</td>
                       <td>
                         <div style="display: inline-flex; align-items: center; gap: 0.6rem;">
                           <a href="/s/${encodeURIComponent(
-        item.id
-      )}" target="_blank" class="link-view">Buka</a>
+          item.id
+        )}" target="_blank" class="link-view">Buka</a>
                           <button type="button" class="btn-delete-perm" data-id="${escapeHtml3(
-        item.id
-      )}" data-name="${escapeHtml3(item.name)}">Hapus Permanen</button>
+          item.id
+        )}" data-name="${escapeHtml3(item.name)}">Hapus Permanen</button>
                         </div>
                       </td>
                     </tr>`;
-    }).join("")}
+      }).join("")}
                 </tbody>
               </table>
             </div>
@@ -8391,7 +9961,7 @@ var adminController = {
         </div>
 
         <!-- 6. Kategori: Berkas Terhapus -->
-        <div class="category-panel" data-category-panel="terhapus">
+        <div class="category-panel" id="panel-terhapus" data-category-panel="terhapus" role="tabpanel" aria-labelledby="sidebar-btn-terhapus">
           <section class="panel" style="margin-bottom: 1.5rem;">
             <div class="panel-header">
               <h2 class="panel-title">
@@ -8430,24 +10000,24 @@ var adminController = {
                           <div style="font-size: 1.1rem; font-weight: 700; margin-bottom: 0.35rem; color: var(--text);">Tidak ada riwayat berkas terhapus</div>
                           <div style="font-size: 0.8rem;">Ketika berkas dihapus oleh pengguna atau admin, riwayat auditnya akan dipisahkan secara aman ke dalam tab ini.</div>
                         </td></tr>` : deletedFiles.map((df) => {
-      let byBadge = "";
-      if (df.deletedBy === "admin") {
-        byBadge = '<span style="display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 700; border-radius: 4px; background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3);">Admin</span>';
-      } else if (df.deletedBy === "user") {
-        byBadge = '<span style="display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 700; border-radius: 4px; background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3);">Pengguna</span>';
-      } else if (df.deletedBy === "sync_purge") {
-        byBadge = '<span style="display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 700; border-radius: 4px; background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3);">Sync Purge (404)</span>';
-      } else if (df.deletedBy === "bulk_cleanup") {
-        byBadge = '<span style="display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 700; border-radius: 4px; background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3);">Bulk Cleanup</span>';
-      } else {
-        byBadge = '<span style="display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 700; border-radius: 4px; background: rgba(255, 255, 255, 0.1); color: var(--muted);">' + escapeHtml3(df.deletedBy || "System") + "</span>";
-      }
-      return `
+        let byBadge = "";
+        if (df.deletedBy === "admin") {
+          byBadge = '<span style="display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 700; border-radius: 4px; background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3);">Admin</span>';
+        } else if (df.deletedBy === "user") {
+          byBadge = '<span style="display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 700; border-radius: 4px; background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3);">Pengguna</span>';
+        } else if (df.deletedBy === "sync_purge") {
+          byBadge = '<span style="display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 700; border-radius: 4px; background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3);">Sync Purge (404)</span>';
+        } else if (df.deletedBy === "bulk_cleanup") {
+          byBadge = '<span style="display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 700; border-radius: 4px; background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3);">Bulk Cleanup</span>';
+        } else {
+          byBadge = '<span style="display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 700; border-radius: 4px; background: rgba(255, 255, 255, 0.1); color: var(--muted);">' + escapeHtml3(df.deletedBy || "System") + "</span>";
+        }
+        return `
                     <tr id="deleted-row-${escapeHtml3(df.id)}">
                       <td>
                         <div style="font-weight: 700; color: #f87171; max-width: clamp(140px, 20vw, 240px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml3(
-        df.name
-      )}">
+          df.name
+        )}">
                           ${escapeHtml3(df.name)}
                         </div>
                         <div style="font-size: 0.7rem; color: var(--muted);">${escapeHtml3(df.id)}</div>
@@ -8458,18 +10028,18 @@ var adminController = {
                       </td>
                       <td>
                         <a href="${escapeHtml3(
-        df.shareUrl
-      )}" target="_blank" class="link-view" style="font-size: 0.75rem; color: var(--muted); max-width: clamp(120px, 20vw, 200px); display: inline-block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+          df.shareUrl
+        )}" target="_blank" class="link-view" style="font-size: 0.75rem; color: var(--muted); max-width: clamp(120px, 20vw, 200px); display: inline-block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                           ${escapeHtml3(df.shareUrl)}
                         </a>
                       </td>
                       <td>
                         <div style="font-size: 0.8rem; font-weight: 600;">${formatRelativeTime3(
-        df.deletedAt
-      )}</div>
+          df.deletedAt
+        )}</div>
                         <div style="font-size: 0.7rem; color: var(--muted);">${formatAbsoluteTime2(
-        df.deletedAt
-      )}</div>
+          df.deletedAt
+        )}</div>
                       </td>
                       <td>${byBadge}</td>
                       <td>
@@ -8478,7 +10048,7 @@ var adminController = {
                         </div>
                       </td>
                     </tr>`;
-    }).join("")}
+      }).join("")}
                 </tbody>
               </table>
             </div>
@@ -8487,21 +10057,15 @@ var adminController = {
       </main>
     </div>
 
-    <!-- System Health Status Bar -->
-    <footer class="health-bar">
-      <div class="health-item" id="health-storage">
-        <span class="status-indicator ${redisConnected || !isUpstashConfigured() ? "status-ok" : "status-warn"}"></span>
-        <span>Storage Backend: <strong>${escapeHtml3(storageMode)}</strong></span>
+    <!-- Clean Minimalist Footer -->
+    <footer class="admin-clean-footer">
+      <div class="footer-left">
+        <span>AirShare Pro Administration</span>
+        <span class="footer-dot">&bull;</span>
+        <span class="footer-desc">Status &amp; Kesehatan Infrastruktur lengkap tersedia di tab <a href="#status" onclick="switchCategory('status'); return false;" class="footer-tab-link">Status Sistem</a></span>
       </div>
-      <div class="health-item" id="health-catbox">
-        <span class="status-indicator ${catboxHealth.available ? "status-ok" : "status-warn"}"></span>
-        <span>Catbox Upstream: <strong>${catboxHealth.available ? `Tersedia (${catboxHealth.latencyMs}ms)` : "Tidak Tersedia \u2014 Periksa Status Catbox"}</strong></span>
-      </div>
-      <div class="health-item">
-        <span>Server Uptime: <strong>${escapeHtml3(uptimeFormatted)}</strong></span>
-      </div>
-      <div class="health-item">
-        <span>Kerahasiaan: <strong>No-Index / No-Follow Active</strong></span>
+      <div class="footer-right">
+        <span>Sesi Aman Aktif</span>
       </div>
     </footer>
   </div>
@@ -8641,6 +10205,27 @@ var adminController = {
       });
     };
 
+    // Aliases for admin operational components
+    window.showIosAdminConfirm = function(options) {
+      if (typeof options === 'object' && options !== null && (options.title || options.message)) {
+        return window.showIosConfirm(options);
+      }
+      return window.showIosConfirm({
+        title: arguments[0] || 'Konfirmasi',
+        message: arguments[1] || '',
+        isDestructive: arguments[2] !== false,
+        confirmText: arguments[3] || 'Konfirmasi'
+      });
+    };
+
+    window.showIosAdminAlert = function(title, message, type) {
+      return window.showIosAlert({
+        title: title || 'Pemberitahuan',
+        message: message || '',
+        icon: type || 'info'
+      });
+    };
+
     (function() {
       const panelPath = ${JSON.stringify(fullAdminPath)};
       const badgeDot = document.getElementById('live-sync-dot');
@@ -8683,141 +10268,205 @@ var adminController = {
           toast.style.border = '1px solid rgba(16, 185, 129, 0.3)';
           toast.style.color = '#34d399';
         }
-        toast.innerHTML = '<span>' + msg + '</span><button type="button" onclick="this.parentElement.style.display=\\'none\\'" style="background:none; border:none; color:inherit; font-size:1.1rem; cursor:pointer; padding:0 0.5rem;">&times;</button>';
+
+        toast.innerHTML = '';
+        const msgSpan = document.createElement('span');
+        msgSpan.textContent = msg;
+        msgSpan.style.cssText = 'overflow-wrap: break-word; word-break: break-word; max-width: 100%; min-width: 0; flex: 1;';
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.innerHTML = '&times;';
+        closeBtn.style.cssText = 'background:none; border:none; color:inherit; font-size:1.1rem; cursor:pointer; padding:0 0.5rem; flex-shrink: 0;';
+        closeBtn.addEventListener('click', function() {
+          toast.style.display = 'none';
+        });
+        toast.appendChild(msgSpan);
+        toast.appendChild(closeBtn);
+
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
 
       // 0. Category Switching & High-Performance Touch Navigation Handler
-      const categoryPanels = document.querySelectorAll('.category-panel');
-      const sidebarBtns = document.querySelectorAll('.admin-sidebar-btn');
-      const tabBtns = document.querySelectorAll('.admin-tab-btn');
+      const VALID_CATEGORIES = ['ringkasan', 'analitik', 'status', 'kontrol', 'keamanan', 'data', 'terhapus'];
 
-      function switchCategory(catName) {
+      function switchCategory(catName, shouldUpdateHash) {
         if (!catName) return;
-        categoryPanels.forEach(function(panel) {
-          if (panel.getAttribute('data-category-panel') === catName) {
+        const normalized = String(catName).toLowerCase().trim().replace(/^#/, '');
+        const targetCat = VALID_CATEGORIES.includes(normalized) ? normalized : 'ringkasan';
+
+        // Update active panels
+        const panels = document.querySelectorAll('.category-panel');
+        panels.forEach(function(panel) {
+          if (panel.getAttribute('data-category-panel') === targetCat) {
             panel.classList.add('active');
+            panel.setAttribute('aria-hidden', 'false');
           } else {
             panel.classList.remove('active');
+            panel.setAttribute('aria-hidden', 'true');
           }
         });
 
-        sidebarBtns.forEach(function(btn) {
-          if (btn.getAttribute('data-category') === catName) {
+        // Update sidebar nav buttons
+        const sBtns = document.querySelectorAll('.admin-sidebar-btn');
+        sBtns.forEach(function(btn) {
+          const isActive = btn.getAttribute('data-category') === targetCat;
+          if (isActive) {
             btn.classList.add('active');
+            btn.setAttribute('aria-selected', 'true');
           } else {
             btn.classList.remove('active');
+            btn.setAttribute('aria-selected', 'false');
           }
         });
 
-        tabBtns.forEach(function(btn) {
-          if (btn.getAttribute('data-category') === catName) {
+        // Update mobile horizontal tabs
+        const tBtns = document.querySelectorAll('.admin-tab-btn');
+        tBtns.forEach(function(btn) {
+          const isActive = btn.getAttribute('data-category') === targetCat;
+          if (isActive) {
             btn.classList.add('active');
-            // Smoothly scroll active tab into view in mobile tabs container
+            btn.setAttribute('aria-selected', 'true');
             try {
               btn.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
             } catch (e) {}
           } else {
             btn.classList.remove('active');
+            btn.setAttribute('aria-selected', 'false');
           }
         });
 
+        // Save preference in localStorage
         try {
-          localStorage.setItem('airshare_admin_active_cat', catName);
+          localStorage.setItem('airshare_admin_active_cat', targetCat);
         } catch (e) {}
-      }
 
-      // High-precision touch event handling for mobile devices (eliminates tap lag & accidental scroll clicks)
-      function initTouchNavigation() {
-        const allNavTriggers = document.querySelectorAll('.admin-sidebar-btn, .admin-tab-btn');
-        allNavTriggers.forEach(function(btn) {
-          let touchStartX = 0;
-          let touchStartY = 0;
-          let hasMoved = false;
-
-          btn.addEventListener('touchstart', function(e) {
-            if (e.touches && e.touches[0]) {
-              touchStartX = e.touches[0].clientX;
-              touchStartY = e.touches[0].clientY;
-              hasMoved = false;
+        // Sync URL hash without jumping
+        if (shouldUpdateHash !== false) {
+          try {
+            if (window.location.hash !== '#' + targetCat) {
+              history.replaceState(null, '', '#' + targetCat);
             }
-          }, { passive: true });
-
-          btn.addEventListener('touchmove', function(e) {
-            if (e.touches && e.touches[0]) {
-              const dx = Math.abs(e.touches[0].clientX - touchStartX);
-              const dy = Math.abs(e.touches[0].clientY - touchStartY);
-              if (dx > 8 || dy > 8) {
-                hasMoved = true;
-              }
-            }
-          }, { passive: true });
-
-          btn.addEventListener('touchend', function(e) {
-            if (!hasMoved) {
-              const cat = btn.getAttribute('data-category');
-              if (cat) {
-                e.preventDefault();
-                switchCategory(cat);
-              }
-            }
-          });
-
-          btn.addEventListener('click', function(e) {
-            const cat = btn.getAttribute('data-category');
-            if (cat) {
-              e.preventDefault();
-              switchCategory(cat);
-            }
-          });
-        });
-
-        // Global fallback delegation for any dynamically inserted buttons
-        document.addEventListener('click', function(e) {
-          const navBtn = e.target.closest('.admin-sidebar-btn, .admin-tab-btn');
-          if (navBtn) {
-            const cat = navBtn.getAttribute('data-category');
-            if (cat) switchCategory(cat);
-          }
-        });
-      }
-      initTouchNavigation();
-
-      // Restore category from localStorage if available
-      try {
-        const savedCat = localStorage.getItem('airshare_admin_active_cat');
-        if (savedCat && document.querySelector('[data-category-panel="' + savedCat + '"]')) {
-          switchCategory(savedCat);
+          } catch (e) {}
         }
-      } catch (e) {}
+      }
+
+      // Expose globally for inline onclick or console/external triggers
+      window.switchCategory = switchCategory;
+      window.switchAdminCategory = switchCategory;
+
+      // Event delegation on document to guarantee clicks on buttons, SVGs, or spans are ALWAYS caught
+      document.addEventListener('click', function(e) {
+        const trigger = e.target.closest('.admin-sidebar-btn, .admin-tab-btn, [data-category]');
+        if (trigger) {
+          const cat = trigger.getAttribute('data-category');
+          if (cat) {
+            e.preventDefault();
+            switchCategory(cat, true);
+          }
+        }
+      });
+
+      // Handle browser back/forward navigation or direct hash links
+      window.addEventListener('hashchange', function() {
+        try {
+          const hashCat = (window.location.hash || '').replace(/^#/, '').trim();
+          if (hashCat) {
+            switchCategory(hashCat, false);
+          }
+        } catch (e) {}
+      });
+
+      // Resolve initial category on page load:
+      // 1. URL hash (#analitik)
+      // 2. URL search param (?tab=analitik or ?category=analitik)
+      // 3. Saved localStorage
+      // 4. Default: 'ringkasan'
+      (function resolveInitialCategory() {
+        let initialCat = '';
+        try {
+          const hashVal = (window.location.hash || '').replace(/^#/, '').trim().toLowerCase();
+          if (hashVal && VALID_CATEGORIES.includes(hashVal)) {
+            initialCat = hashVal;
+          }
+        } catch (e) {}
+
+        if (!initialCat) {
+          try {
+            const params = new URLSearchParams(window.location.search);
+            const queryVal = (params.get('tab') || params.get('category') || params.get('cat') || '').trim().toLowerCase();
+            if (queryVal && VALID_CATEGORIES.includes(queryVal)) {
+              initialCat = queryVal;
+            }
+          } catch (e) {}
+        }
+
+        if (!initialCat) {
+          try {
+            const savedCat = (localStorage.getItem('airshare_admin_active_cat') || '').trim().toLowerCase();
+            if (savedCat && VALID_CATEGORIES.includes(savedCat)) {
+              initialCat = savedCat;
+            }
+          } catch (e) {}
+        }
+
+        if (!initialCat) {
+          initialCat = 'ringkasan';
+        }
+
+        switchCategory(initialCat, false);
+      })();
 
       // 0.0 Gemini AI Real-Time System Recommendations Engine
       function renderGeminiMarkup(raw) {
         if (!raw) return '';
         // 1. Escape HTML special characters for strict XSS prevention
-        let str = String(raw)
+        var str = String(raw)
           .replace(/&/g, '&amp;')
           .replace(/</g, '&lt;')
           .replace(/>/g, '&gt;')
           .replace(/"/g, '&quot;')
           .replace(/'/g, '&#039;');
 
-        // 2. Headings
-        str = str.replace(/^### (.*?)$/gm, '<h4 class="ai-heading-3">$1</h4>');
-        str = str.replace(/^## (.*?)$/gm, '<h3 class="ai-heading-3">$1</h3>');
+        // 2. Headings (### or ##)
+        var nl = String.fromCharCode(10);
+        var lines = str.split(nl);
+        for (var i = 0; i < lines.length; i++) {
+          if (lines[i].indexOf('### ') === 0) {
+            lines[i] = '<h4 class="ai-heading-3">' + lines[i].substring(4) + '</h4>';
+          } else if (lines[i].indexOf('## ') === 0) {
+            lines[i] = '<h3 class="ai-heading-3">' + lines[i].substring(3) + '</h3>';
+          }
+        }
+        str = lines.join(nl);
 
-        // 3. Bold text
-        str = str.replace(/**(.*?)**/g, '<strong class="ai-bold">$1</strong>');
-        str = str.replace(/__(.*?)__/g, '<strong class="ai-bold">$1</strong>');
+        // 3. Inline code blocks using backtick char code (96)
+        var tick = String.fromCharCode(96);
+        if (str.indexOf(tick) !== -1) {
+          str = str.split(tick).map(function(part, idx) {
+            return idx % 2 === 1 ? '<code class="ai-code">' + part + '</code>' : part;
+          }).join('');
+        }
 
-        // 4. Italic text
-        str = str.replace(/(^|[^*])*([^*]+)*([^*]|$)/g, '$1<em class="ai-italic">$2</em>$3');
+        // 4. Bold text: split by '**'
+        if (str.indexOf('**') !== -1) {
+          str = str.split('**').map(function(part, idx) {
+            return idx % 2 === 1 ? '<strong class="ai-bold">' + part + '</strong>' : part;
+          }).join('');
+        }
 
-        // 5. Code blocks / inline code (using safe char code to prevent template backtick clash)
-        const tick = String.fromCharCode(96);
-        str = str.split(tick).map(function(part, idx) {
-          return idx % 2 === 1 ? '<code class="ai-code">' + part + '</code>' : part;
-        }).join('');
+        // 5. Bold text: split by '__'
+        if (str.indexOf('__') !== -1) {
+          str = str.split('__').map(function(part, idx) {
+            return idx % 2 === 1 ? '<strong class="ai-bold">' + part + '</strong>' : part;
+          }).join('');
+        }
+
+        // 6. Italic text: split by remaining single '*'
+        if (str.indexOf('*') !== -1) {
+          str = str.split('*').map(function(part, idx) {
+            return idx % 2 === 1 ? '<em class="ai-italic">' + part + '</em>' : part;
+          }).join('');
+        }
 
         return str;
       }
@@ -8887,7 +10536,16 @@ var adminController = {
 
           // Update Model Badge
           if (recModelLabel) {
-            recModelLabel.textContent = data.isAi ? 'Gemini 3.8 Flash \u2022 Real-Time AI' : 'Mesin Heuristik Sistem';
+            var rawModel = data.model || 'gemini-2.5-flash';
+            var formattedModel = 'Gemini 2.5 Flash';
+            if (rawModel.indexOf('2.5') !== -1) {
+              formattedModel = 'Gemini 2.5 Flash';
+            } else if (rawModel.indexOf('gemini') === 0) {
+              formattedModel = rawModel.split('-').map(function(w) {
+                return w.charAt(0).toUpperCase() + w.slice(1);
+              }).join(' ');
+            }
+            recModelLabel.textContent = data.isAi ? (formattedModel + ' \u2022 Real-Time AI') : 'Mesin Heuristik Sistem';
           }
 
           // Update Timestamp
@@ -9014,9 +10672,7 @@ var adminController = {
 
         const confirmed = await window.showIosConfirm({
           title: 'Hapus Permanen dari Catbox?',
-          message: 'Penghapusan dari server Catbox bersifat PERMANEN dan TIDAK DAPAT DIBATALKAN.
-
-Berkas "' + name + '" (' + id + ') akan dihapus selamanya dan tautan tidak akan bisa diakses lagi oleh siapapun.',
+          message: 'Penghapusan dari server Catbox bersifat PERMANEN dan TIDAK DAPAT DIBATALKAN.\\n\\nBerkas "' + name + '" (' + id + ') akan dihapus selamanya dan tautan tidak akan bisa diakses lagi oleh siapapun.',
           confirmText: 'Hapus Permanen',
           cancelText: 'Batal',
           isDestructive: true,
@@ -9132,9 +10788,7 @@ Berkas "' + name + '" (' + id + ') akan dihapus selamanya dan tautan tidak akan 
 
         const confirmed = await window.showIosConfirm({
           title: 'Bersihkan dari Riwayat?',
-          message: 'Hapus entri berkas "' + name + '" (' + id + ') dari riwayat repositori AirShare?
-
-File ini memang sudah tidak ada di Catbox, aksi ini hanya membersihkan sisa riwayat di database.',
+          message: 'Hapus entri berkas "' + name + '" (' + id + ') dari riwayat repositori AirShare?\\n\\nFile ini memang sudah tidak ada di Catbox, aksi ini hanya membersihkan sisa riwayat di database.',
           confirmText: 'Bersihkan Entri',
           cancelText: 'Batal',
           isDestructive: false,
@@ -9195,9 +10849,7 @@ File ini memang sudah tidak ada di Catbox, aksi ini hanya membersihkan sisa riwa
 
         const confirmed = await window.showIosConfirm({
           title: 'Bersihkan Seluruh Berkas Rusak (404)?',
-          message: 'Bersihkan SEMUA berkas rusak (404) dan sisa data uji dari riwayat database & analitik?
-
-Berkas aktif yang valid akan tetap aman tersimpan.',
+          message: 'Bersihkan SEMUA berkas rusak (404) dan sisa data uji dari riwayat database & analitik?\\n\\nBerkas aktif yang valid akan tetap aman tersimpan.',
           confirmText: 'Bersihkan Semua (404)',
           cancelText: 'Batal',
           isDestructive: true,
@@ -9390,21 +11042,47 @@ Berkas aktif yang valid akan tetap aman tersimpan.',
             elTotalStored.textContent = 'Total Tersimpan: ' + Number(json.totalItemsInRepo).toLocaleString('id-ID') + ' item (' + monitoredCount + ' termonitor)';
           }
 
-          // Update footer health status
-          const elCatbox = document.getElementById('health-catbox');
-          if (elCatbox && json.catbox) {
-            if (json.catbox.available) {
-              elCatbox.innerHTML = '<span class="status-indicator status-ok"></span><span>Catbox Upstream: <strong>Tersedia (' + (json.catbox.latencyMs || 0) + 'ms)</strong></span>';
-            } else {
-              elCatbox.innerHTML = '<span class="status-indicator status-warn"></span><span>Catbox Upstream: <strong style="color: #f87171;">Tidak Tersedia \u2014 Periksa Status Catbox</strong></span>';
+          // Update Status tab health status
+          const elTabCatboxVal = document.getElementById('status-tab-catbox-val');
+          const elTabCatboxDot = document.getElementById('status-tab-catbox-dot');
+          const elTabCatboxSub = document.getElementById('status-tab-catbox-sub');
+          if (json.catbox) {
+            if (elTabCatboxVal) {
+              elTabCatboxVal.textContent = json.catbox.available ? 'Tersedia (' + (json.catbox.latencyMs || 0) + 'ms)' : 'Tidak Tersedia';
+            }
+            if (elTabCatboxDot) {
+              elTabCatboxDot.className = 'status-indicator ' + (json.catbox.available ? 'status-ok' : 'status-warn');
+            }
+            if (elTabCatboxSub) {
+              elTabCatboxSub.textContent = json.catbox.available ? 'Endpoint https://catbox.moe/user/api.php beroperasi normal' : 'Penyedia Catbox tidak dapat dijangkau';
             }
           }
 
-          const elStorage = document.getElementById('health-storage');
-          if (elStorage && json.redis) {
+          const elTabStorageVal = document.getElementById('status-tab-storage-val');
+          const elTabStorageDot = document.getElementById('status-tab-storage-dot');
+          const elTabStorageSub = document.getElementById('status-tab-storage-sub');
+          if (json.redis) {
             const isOk = json.redis.connected || (!json.redis.configured);
-            const dotClass = isOk ? 'status-ok' : 'status-warn';
-            elStorage.innerHTML = '<span class="status-indicator ' + dotClass + '"></span><span>Storage Backend: <strong>' + (json.redis.mode || 'In-Memory (Fallback)') + '</strong></span>';
+            if (elTabStorageVal) {
+              elTabStorageVal.textContent = json.redis.mode || 'In-Memory (Fallback)';
+            }
+            if (elTabStorageDot) {
+              elTabStorageDot.className = 'status-indicator ' + (isOk ? 'status-ok' : 'status-warn');
+            }
+            if (elTabStorageSub) {
+              elTabStorageSub.textContent = json.redis.connected ? 'Koneksi aktif ke cluster Upstash Redis' : (!json.redis.configured ? 'Penyimpanan lokal RAM in-memory aktif' : 'Gangguan koneksi - fallback in-memory');
+            }
+          }
+
+          const elTabUptimeVal = document.getElementById('status-tab-uptime-val');
+          if (elTabUptimeVal && json.uptimeFormatted) {
+            elTabUptimeVal.textContent = json.uptimeFormatted;
+          }
+
+          const elTabServerTime = document.getElementById('status-tab-server-time');
+          if (elTabServerTime) {
+            const d = new Date();
+            elTabServerTime.textContent = d.toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }) + ' WIB';
           }
 
           // Update sync badge to success
@@ -9433,10 +11111,16 @@ Berkas aktif yang valid akan tetap aman tersimpan.',
     })();
 
     ${getOperationalPanelScripts(fullAdminPath)}
+
+    ${THEME_STORAGE_LISTENER_SCRIPT}
   </script>
 </body>
 </html>`;
-    res.status(200).send(html);
+      res.status(200).send(html);
+    } catch (err) {
+      console.error("[RENDER_DASHBOARD_ERROR]", err);
+      res.status(500).send("<!DOCTYPE html><html><body><h1>500 Internal Server Error</h1><p>Gagal memuat dashboard admin. Silakan periksa koneksi dan coba beberapa saat lagi.</p></body></html>");
+    }
   },
   /**
    * GET /{ADMIN_PANEL_PATH}/api/live-stats
@@ -9452,56 +11136,67 @@ Berkas aktif yang valid akan tetap aman tersimpan.',
       });
       return;
     }
-    const todayStr = getTodayDateString();
-    const [
-      todayStats,
-      totalItemsInRepo,
-      redisHealth,
-      catboxHealth,
-      recentUploads
-    ] = await Promise.all([
-      analyticsRepository.getDailySummary(todayStr),
-      analyticsRepository.getTotalItemsEver(),
-      checkRedisHealth(),
-      checkCatboxHealth(),
-      analyticsRepository.getRecentUploads(10)
-    ]);
-    const enhancedRecentUploads = await Promise.all(
-      recentUploads.map(async (u) => {
-        const views = await analyticsRepository.getViewCount(u.id);
-        return {
-          id: u.id,
-          name: u.name,
-          type: u.type,
-          size: u.size,
-          formattedSize: u.formattedSize,
-          uploaderCountryCode: u.uploaderCountryCode,
-          createdAt: u.createdAt,
-          views
-        };
-      })
-    );
-    const storageMode = isUpstashConfigured() ? redisHealth.connected ? "Upstash Redis (Terdistribusi)" : "Upstash Redis (Terputus / Gangguan)" : "In-Memory (Fallback)";
-    res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
-    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
-    res.setHeader("Pragma", "no-cache");
-    res.json({
-      success: true,
-      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      today: todayStats,
-      totalItemsInRepo,
-      redis: {
-        configured: redisHealth.configured,
-        connected: redisHealth.connected,
-        latencyMs: redisHealth.latencyMs,
-        mode: storageMode
-      },
-      catbox: {
-        available: catboxHealth.available,
-        latencyMs: catboxHealth.latencyMs
-      },
-      recentUploads: enhancedRecentUploads
-    });
+    try {
+      const todayStr = getTodayDateString();
+      const [
+        todayStats,
+        totalItemsInRepo,
+        redisHealth,
+        catboxHealth,
+        recentUploads
+      ] = await Promise.all([
+        analyticsRepository.getDailySummary(todayStr),
+        analyticsRepository.getTotalItemsEver(),
+        checkRedisHealth(),
+        checkCatboxHealth(),
+        analyticsRepository.getRecentUploads(10)
+      ]);
+      const enhancedRecentUploads = await Promise.all(
+        recentUploads.map(async (u) => {
+          const views = await analyticsRepository.getViewCount(u.id);
+          return {
+            id: u.id,
+            name: u.name,
+            type: u.type,
+            size: u.size,
+            formattedSize: u.formattedSize,
+            uploaderCountryCode: u.uploaderCountryCode,
+            createdAt: u.createdAt,
+            views
+          };
+        })
+      );
+      const storageMode = isUpstashConfigured() ? redisHealth.connected ? "Upstash Redis (Terdistribusi)" : "Upstash Redis (Terputus / Gangguan)" : "In-Memory (Fallback)";
+      const uptimeSecs = Math.floor(process.uptime());
+      const uptimeFormatted = `${Math.floor(uptimeSecs / 3600)}j ${Math.floor(uptimeSecs % 3600 / 60)}m ${uptimeSecs % 60}d`;
+      res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+      res.setHeader("Pragma", "no-cache");
+      res.json({
+        success: true,
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        today: todayStats,
+        totalItemsInRepo,
+        uptimeFormatted,
+        redis: {
+          configured: redisHealth.configured,
+          connected: redisHealth.connected,
+          latencyMs: redisHealth.latencyMs,
+          mode: storageMode
+        },
+        catbox: {
+          available: catboxHealth.available,
+          latencyMs: catboxHealth.latencyMs
+        },
+        recentUploads: enhancedRecentUploads
+      });
+    } catch (err) {
+      console.error("[GET_LIVE_STATS_ERROR]", err);
+      res.status(500).json({
+        success: false,
+        error: { code: "INTERNAL_ERROR", message: "Gagal memuat statistik live dashboard. Silakan coba lagi." }
+      });
+    }
   },
   /**
    * POST /{ADMIN_PANEL_PATH}/api/delete-permanent
@@ -9509,49 +11204,57 @@ Berkas aktif yang valid akan tetap aman tersimpan.',
    * Strictly protected by requireAdminAuth.
    */
   async deletePermanent(req, res) {
-    const { id } = req.body || {};
-    if (!id || typeof id !== "string") {
-      res.status(400).json({
-        success: false,
-        error: { code: "INVALID_ID", message: "Parameter ID berkas wajib diisi." }
+    try {
+      const { id } = req.body || {};
+      if (!id || typeof id !== "string") {
+        res.status(400).json({
+          success: false,
+          error: { code: "INVALID_ID", message: "Parameter ID berkas wajib diisi." }
+        });
+        return;
+      }
+      const mediaRepo = getMediaRepository();
+      const item = await mediaRepo.getByIdForAdmin(id);
+      const targetUrlOrId = item ? item.shareUrl || item.id : id;
+      const itemName = item?.name || id;
+      const catboxResult = await storageProvider2.delete(targetUrlOrId);
+      await mediaRepo.deleteForAdmin(id);
+      await analyticsRepository.removeRecentUpload(id);
+      await analyticsRepository.removeFileFromAllStats(id);
+      await analyticsRepository.recordDeletion(1);
+      await removeSyncCheckItem(id);
+      await deletedFilesRepository.recordDeleted({
+        id,
+        name: itemName,
+        formattedSize: item?.formattedSize || "-",
+        type: item?.type || "file",
+        shareUrl: item?.shareUrl || targetUrlOrId,
+        deletedAt: Date.now(),
+        deletedBy: "admin",
+        reason: "Admin menghapus berkas permanen dari dashboard"
       });
-      return;
+      const clientIp = getClientIp(req);
+      await auditLogRepository.recordAction({
+        type: "PERMANENT_DELETE",
+        detail: `Hapus permanen berkas "${itemName}" (ID: ${id}) dari Catbox & database. Status Catbox: ${catboxResult.success ? "BERHASIL" : "GAGAL (" + catboxResult.message + ")"}`,
+        ip: clientIp
+      });
+      console.log(
+        `[ADMIN AUDIT] Permanent delete media ID: ${id}, name: "${itemName}", Catbox response: ${catboxResult.success ? "SUCCESS" : catboxResult.message}`
+      );
+      res.json({
+        success: true,
+        message: catboxResult.success ? `Berkas "${itemName}" berhasil dihapus permanen dari server Catbox dan database AirShare.` : `Berkas "${itemName}" dihapus dari database AirShare (${catboxResult.message}).`,
+        catboxDeleted: catboxResult.success,
+        warning: !catboxResult.success
+      });
+    } catch (err) {
+      console.error("[DELETE_PERMANENT_ERROR]", err);
+      res.status(500).json({
+        success: false,
+        error: { code: "DELETE_FAILED", message: "Gagal menghapus berkas permanen. Silakan coba lagi." }
+      });
     }
-    const mediaRepo = getMediaRepository();
-    const item = await mediaRepo.getByIdForAdmin(id);
-    const targetUrlOrId = item ? item.shareUrl || item.id : id;
-    const itemName = item?.name || id;
-    const catboxResult = await storageProvider2.delete(targetUrlOrId);
-    await mediaRepo.deleteForAdmin(id);
-    await analyticsRepository.removeRecentUpload(id);
-    await analyticsRepository.removeFileFromAllStats(id);
-    await analyticsRepository.recordDeletion(1);
-    await removeSyncCheckItem(id);
-    await deletedFilesRepository.recordDeleted({
-      id,
-      name: itemName,
-      formattedSize: item?.formattedSize || "-",
-      type: item?.type || "file",
-      shareUrl: item?.shareUrl || targetUrlOrId,
-      deletedAt: Date.now(),
-      deletedBy: "admin",
-      reason: "Admin menghapus berkas permanen dari dashboard"
-    });
-    const clientIp = getClientIp(req);
-    await auditLogRepository.recordAction({
-      type: "PERMANENT_DELETE",
-      detail: `Hapus permanen berkas "${itemName}" (ID: ${id}) dari Catbox & database. Status Catbox: ${catboxResult.success ? "BERHASIL" : "GAGAL (" + catboxResult.message + ")"}`,
-      ip: clientIp
-    });
-    console.log(
-      `[ADMIN AUDIT] Permanent delete media ID: ${id}, name: "${itemName}", Catbox response: ${catboxResult.success ? "SUCCESS" : catboxResult.message}`
-    );
-    res.json({
-      success: true,
-      message: catboxResult.success ? `Berkas "${itemName}" berhasil dihapus permanen dari server Catbox dan database AirShare.` : `Berkas "${itemName}" dihapus dari database AirShare (${catboxResult.message}).`,
-      catboxDeleted: catboxResult.success,
-      warning: !catboxResult.success
-    });
   },
   /**
    * POST /{ADMIN_PANEL_PATH}/api/delete-history-only
@@ -9559,42 +11262,50 @@ Berkas aktif yang valid akan tetap aman tersimpan.',
    * Strictly protected by requireAdminAuth.
    */
   async deleteHistoryOnly(req, res) {
-    const { id } = req.body || {};
-    if (!id || typeof id !== "string") {
-      res.status(400).json({
-        success: false,
-        error: { code: "INVALID_ID", message: "Parameter ID berkas wajib diisi." }
+    try {
+      const { id } = req.body || {};
+      if (!id || typeof id !== "string") {
+        res.status(400).json({
+          success: false,
+          error: { code: "INVALID_ID", message: "Parameter ID berkas wajib diisi." }
+        });
+        return;
+      }
+      const clientIp = getClientIp(req);
+      const mediaRepo = getMediaRepository();
+      const item = await mediaRepo.getByIdForAdmin(id);
+      await mediaRepo.deleteForAdmin(id);
+      await analyticsRepository.removeRecentUpload(id);
+      await analyticsRepository.removeFileFromAllStats(id);
+      await analyticsRepository.recordDeletion(1);
+      await removeSyncCheckItem(id);
+      await deletedFilesRepository.recordDeleted({
+        id,
+        name: item?.name || id,
+        formattedSize: item?.formattedSize || "-",
+        type: item?.type || "file",
+        shareUrl: item?.shareUrl || "#",
+        deletedAt: Date.now(),
+        deletedBy: "admin",
+        reason: "Admin membersihkan riwayat database lokal"
       });
-      return;
+      await auditLogRepository.recordAction({
+        type: "HISTORY_DELETE",
+        detail: `Pembersihan riwayat database lokal untuk berkas ID: ${id}`,
+        ip: clientIp
+      });
+      console.log(`[ADMIN AUDIT] History-only cleanup for media ID: ${id}`);
+      res.json({
+        success: true,
+        message: `Berkas ${id} berhasil dibersihkan dari riwayat database AirShare.`
+      });
+    } catch (err) {
+      console.error("[DELETE_HISTORY_ONLY_ERROR]", err);
+      res.status(500).json({
+        success: false,
+        error: { code: "CLEANUP_FAILED", message: "Gagal membersihkan riwayat berkas. Silakan coba lagi." }
+      });
     }
-    const clientIp = getClientIp(req);
-    const mediaRepo = getMediaRepository();
-    const item = await mediaRepo.getByIdForAdmin(id);
-    await mediaRepo.deleteForAdmin(id);
-    await analyticsRepository.removeRecentUpload(id);
-    await analyticsRepository.removeFileFromAllStats(id);
-    await analyticsRepository.recordDeletion(1);
-    await removeSyncCheckItem(id);
-    await deletedFilesRepository.recordDeleted({
-      id,
-      name: item?.name || id,
-      formattedSize: item?.formattedSize || "-",
-      type: item?.type || "file",
-      shareUrl: item?.shareUrl || "#",
-      deletedAt: Date.now(),
-      deletedBy: "admin",
-      reason: "Admin membersihkan riwayat database lokal"
-    });
-    await auditLogRepository.recordAction({
-      type: "HISTORY_DELETE",
-      detail: `Pembersihan riwayat database lokal untuk berkas ID: ${id}`,
-      ip: clientIp
-    });
-    console.log(`[ADMIN AUDIT] History-only cleanup for media ID: ${id}`);
-    res.json({
-      success: true,
-      message: `Berkas ${id} berhasil dibersihkan dari riwayat database AirShare.`
-    });
   },
   /**
    * POST /{ADMIN_PANEL_PATH}/api/sync-check
@@ -9602,57 +11313,65 @@ Berkas aktif yang valid akan tetap aman tersimpan.',
    * Strictly protected by requireAdminAuth.
    */
   async runSyncCheck(req, res) {
-    const clientIp = getClientIp(req);
-    const recentUploads = await analyticsRepository.getRecentUploads(50);
-    if (!recentUploads || recentUploads.length === 0) {
-      const emptySummary = {
+    try {
+      const clientIp = getClientIp(req);
+      const recentUploads = await analyticsRepository.getRecentUploads(50);
+      if (!recentUploads || recentUploads.length === 0) {
+        const emptySummary = {
+          timestamp: Date.now(),
+          totalChecked: 0,
+          healthyCount: 0,
+          brokenCount: 0,
+          brokenItems: []
+        };
+        await saveLastSyncCheck(emptySummary);
+        res.json({
+          success: true,
+          ...emptySummary
+        });
+        return;
+      }
+      const filesToCheck = recentUploads.map((u) => ({
+        id: u.id,
+        shareUrl: u.shareUrl,
+        name: u.name,
+        formattedSize: u.formattedSize,
+        createdAt: u.createdAt
+      }));
+      const batchResults = await verifyFilesBatch(filesToCheck, 5);
+      const brokenItems = batchResults.filter((r) => !r.exists).map((r) => r.item);
+      const healthyCount = batchResults.filter((r) => r.exists).length;
+      const summary = {
         timestamp: Date.now(),
-        totalChecked: 0,
-        healthyCount: 0,
-        brokenCount: 0,
-        brokenItems: []
+        totalChecked: batchResults.length,
+        healthyCount,
+        brokenCount: brokenItems.length,
+        brokenItems
       };
-      await saveLastSyncCheck(emptySummary);
+      await saveLastSyncCheck(summary);
+      await auditLogRepository.recordAction({
+        type: "SYNC_CHECK",
+        detail: `Pemeriksaan sinkronisasi selesai: ${summary.totalChecked} berkas diperiksa, ${summary.healthyCount} sehat, ${summary.brokenCount} broken/hilang`,
+        ip: clientIp
+      });
+      console.log(
+        `[ADMIN AUDIT] Sync check completed: ${summary.totalChecked} checked, ${summary.healthyCount} healthy, ${summary.brokenCount} broken.`
+      );
       res.json({
         success: true,
-        ...emptySummary
+        timestamp: summary.timestamp,
+        totalChecked: summary.totalChecked,
+        healthyCount: summary.healthyCount,
+        brokenCount: summary.brokenCount,
+        brokenItems: summary.brokenItems
       });
-      return;
+    } catch (err) {
+      console.error("[RUN_SYNC_CHECK_ERROR]", err);
+      res.status(500).json({
+        success: false,
+        error: { code: "SYNC_CHECK_FAILED", message: "Gagal menjalankan pemeriksaan sinkronisasi berkas. Silakan coba lagi." }
+      });
     }
-    const filesToCheck = recentUploads.map((u) => ({
-      id: u.id,
-      shareUrl: u.shareUrl,
-      name: u.name,
-      formattedSize: u.formattedSize,
-      createdAt: u.createdAt
-    }));
-    const batchResults = await verifyFilesBatch(filesToCheck, 5);
-    const brokenItems = batchResults.filter((r) => !r.exists).map((r) => r.item);
-    const healthyCount = batchResults.filter((r) => r.exists).length;
-    const summary = {
-      timestamp: Date.now(),
-      totalChecked: batchResults.length,
-      healthyCount,
-      brokenCount: brokenItems.length,
-      brokenItems
-    };
-    await saveLastSyncCheck(summary);
-    await auditLogRepository.recordAction({
-      type: "SYNC_CHECK",
-      detail: `Pemeriksaan sinkronisasi selesai: ${summary.totalChecked} berkas diperiksa, ${summary.healthyCount} sehat, ${summary.brokenCount} broken/hilang`,
-      ip: clientIp
-    });
-    console.log(
-      `[ADMIN AUDIT] Sync check completed: ${summary.totalChecked} checked, ${summary.healthyCount} healthy, ${summary.brokenCount} broken.`
-    );
-    res.json({
-      success: true,
-      timestamp: summary.timestamp,
-      totalChecked: summary.totalChecked,
-      healthyCount: summary.healthyCount,
-      brokenCount: summary.brokenCount,
-      brokenItems: summary.brokenItems
-    });
   },
   /**
    * POST /{ADMIN_PANEL_PATH}/api/purge-broken
@@ -9660,325 +11379,431 @@ Berkas aktif yang valid akan tetap aman tersimpan.',
    * from both MediaRepository and Analytics history.
    */
   async purgeBrokenFiles(req, res) {
-    const clientIp = getClientIp(req);
-    const mediaRepo = getMediaRepository();
-    const recentUploads = await analyticsRepository.getRecentUploads(100);
-    const filesToCheck = recentUploads.map((u) => ({
-      id: u.id,
-      shareUrl: u.shareUrl,
-      name: u.name,
-      formattedSize: u.formattedSize,
-      createdAt: u.createdAt
-    }));
-    const batchResults = await verifyFilesBatch(filesToCheck, 5);
-    let purgedCount = 0;
-    for (const resItem of batchResults) {
-      if (!resItem.exists) {
-        await mediaRepo.deleteForAdmin(resItem.item.id);
-        await analyticsRepository.removeRecentUpload(resItem.item.id);
-        await analyticsRepository.removeFileFromAllStats(resItem.item.id);
-        await removeSyncCheckItem(resItem.item.id);
-        await deletedFilesRepository.recordDeleted({
-          id: resItem.item.id,
-          name: resItem.item.name || resItem.item.id,
-          formattedSize: resItem.item.formattedSize || "-",
-          type: "file",
-          shareUrl: resItem.item.shareUrl || "#",
-          deletedAt: Date.now(),
-          deletedBy: "sync_purge",
-          reason: "Pembersihan otomatis berkas 404 / broken link di server Catbox"
-        });
-        purgedCount++;
+    try {
+      const clientIp = getClientIp(req);
+      const mediaRepo = getMediaRepository();
+      const recentUploads = await analyticsRepository.getRecentUploads(100);
+      const filesToCheck = recentUploads.map((u) => ({
+        id: u.id,
+        shareUrl: u.shareUrl,
+        name: u.name,
+        formattedSize: u.formattedSize,
+        createdAt: u.createdAt
+      }));
+      const batchResults = await verifyFilesBatch(filesToCheck, 5);
+      let purgedCount = 0;
+      for (const resItem of batchResults) {
+        if (!resItem.exists) {
+          await mediaRepo.deleteForAdmin(resItem.item.id);
+          await analyticsRepository.removeRecentUpload(resItem.item.id);
+          await analyticsRepository.removeFileFromAllStats(resItem.item.id);
+          await removeSyncCheckItem(resItem.item.id);
+          await deletedFilesRepository.recordDeleted({
+            id: resItem.item.id,
+            name: resItem.item.name || resItem.item.id,
+            formattedSize: resItem.item.formattedSize || "-",
+            type: "file",
+            shareUrl: resItem.item.shareUrl || "#",
+            deletedAt: Date.now(),
+            deletedBy: "sync_purge",
+            reason: "Pembersihan otomatis berkas 404 / broken link di server Catbox"
+          });
+          purgedCount++;
+        }
       }
-    }
-    if (purgedCount > 0) {
-      await analyticsRepository.recordDeletion(purgedCount);
-    }
-    await analyticsRepository.purgeTestData();
-    if ("clearTestData" in mediaRepo && typeof mediaRepo.clearTestData === "function") {
-      mediaRepo.clearTestData();
-    }
-    const healthyCount = batchResults.filter((r) => r.exists).length;
-    const summary = {
-      timestamp: Date.now(),
-      totalChecked: batchResults.length,
-      healthyCount,
-      brokenCount: 0,
-      brokenItems: []
-    };
-    await saveLastSyncCheck(summary);
-    await auditLogRepository.recordAction({
-      type: "SYNC_CHECK",
-      detail: `Pembersihan berkas rusak (404) selesai: ${purgedCount} berkas 404/orphan dihapus dari database & analitik, ${healthyCount} berkas valid dipertahankan.`,
-      ip: clientIp
-    });
-    res.json({
-      success: true,
-      data: {
-        purgedCount,
+      if (purgedCount > 0) {
+        await analyticsRepository.recordDeletion(purgedCount);
+      }
+      await analyticsRepository.purgeTestData();
+      if ("clearTestData" in mediaRepo && typeof mediaRepo.clearTestData === "function") {
+        mediaRepo.clearTestData();
+      }
+      const healthyCount = batchResults.filter((r) => r.exists).length;
+      const summary = {
+        timestamp: Date.now(),
+        totalChecked: batchResults.length,
         healthyCount,
-        totalChecked: batchResults.length
-      }
-    });
+        brokenCount: 0,
+        brokenItems: []
+      };
+      await saveLastSyncCheck(summary);
+      await auditLogRepository.recordAction({
+        type: "SYNC_CHECK",
+        detail: `Pembersihan berkas rusak (404) selesai: ${purgedCount} berkas 404/orphan dihapus dari database & analitik, ${healthyCount} berkas valid dipertahankan.`,
+        ip: clientIp
+      });
+      res.json({
+        success: true,
+        data: {
+          purgedCount,
+          healthyCount,
+          totalChecked: batchResults.length
+        }
+      });
+    } catch (err) {
+      console.error("[PURGE_BROKEN_FILES_ERROR]", err);
+      res.status(500).json({
+        success: false,
+        error: { code: "PURGE_FAILED", message: "Gagal membersihkan berkas broken link. Silakan coba lagi." }
+      });
+    }
   },
   /**
    * POST /{ADMIN_PANEL_PATH}/api/config
    * Updates dynamic system configurations (limits, announcement banner, feature flags).
    */
   async updateConfig(req, res) {
-    const clientIp = getClientIp(req);
-    const { maxUploadSize, rateLimit, announcement, featureFlags } = req.body || {};
-    const changes = [];
-    if (typeof maxUploadSize === "number" && maxUploadSize >= 1024 * 1024 && maxUploadSize <= 500 * 1024 * 1024) {
-      await setMaxUploadSize(maxUploadSize);
-      changes.push(`maxUploadSize: ${Math.round(maxUploadSize / (1024 * 1024))} MB`);
-    }
-    if (rateLimit && typeof rateLimit.limit === "number") {
-      const limit = Math.max(1, Math.min(200, rateLimit.limit));
-      const windowMs = typeof rateLimit.windowMs === "number" ? rateLimit.windowMs : 6e4;
-      await setUploadRateLimit(limit, windowMs);
-      changes.push(`rateLimit: ${limit}/mnt`);
-    }
-    if (announcement && typeof announcement.message === "string") {
-      const validTypes = ["info", "warning", "success"];
-      const type = validTypes.includes(announcement.type) ? announcement.type : "info";
-      await setAnnouncement({
-        message: announcement.message,
-        type,
-        enabled: Boolean(announcement.enabled)
+    try {
+      const clientIp = getClientIp(req);
+      const { maxUploadSize, rateLimit, announcement, featureFlags, clearAnnouncement: shouldClearAnnouncement } = req.body || {};
+      const changes = [];
+      if (typeof maxUploadSize === "number" && maxUploadSize >= 1024 * 1024 && maxUploadSize <= 500 * 1024 * 1024) {
+        await setMaxUploadSize(maxUploadSize);
+        changes.push(`maxUploadSize: ${Math.round(maxUploadSize / (1024 * 1024))} MB`);
+      }
+      if (rateLimit && typeof rateLimit.limit === "number") {
+        const limit = Math.max(1, Math.min(200, rateLimit.limit));
+        const windowMs = typeof rateLimit.windowMs === "number" ? rateLimit.windowMs : 6e4;
+        await setUploadRateLimit(limit, windowMs);
+        changes.push(`rateLimit: ${limit}/mnt`);
+      }
+      if (shouldClearAnnouncement) {
+        await clearAnnouncement();
+        changes.push("announcement: Dihapus permanen");
+      } else if (announcement && typeof announcement.message === "string") {
+        const validTypes = ["info", "warning", "success"];
+        const type = validTypes.includes(announcement.type) ? announcement.type : "info";
+        let validExpiresAt = null;
+        if (typeof announcement.expiresAt === "number" && announcement.expiresAt > Date.now()) {
+          validExpiresAt = announcement.expiresAt;
+        }
+        await setAnnouncement({
+          message: announcement.message,
+          type,
+          enabled: Boolean(announcement.enabled),
+          expiresAt: validExpiresAt
+        });
+        changes.push(`announcement: ${announcement.enabled ? "Aktif" : "Nonaktif"} ("${announcement.message.substring(0, 30)}")`);
+      }
+      if (featureFlags && typeof featureFlags === "object") {
+        await setFeatureFlags({
+          pasteToUpload: Boolean(featureFlags.pasteToUpload),
+          qrCode: Boolean(featureFlags.qrCode),
+          pwaInstallPrompt: Boolean(featureFlags.pwaInstallPrompt)
+        });
+        changes.push(`featureFlags: paste=${Boolean(featureFlags.pasteToUpload)}, qr=${Boolean(featureFlags.qrCode)}, pwa=${Boolean(featureFlags.pwaInstallPrompt)}`);
+      }
+      const updatedConfig = await getAllSystemConfig();
+      await auditLogRepository.recordAction({
+        type: "CONFIG_UPDATE",
+        detail: changes.length > 0 ? `Perubahan konfigurasi: ${changes.join(", ")}` : "Konfigurasi sistem diperbarui",
+        ip: clientIp
       });
-      changes.push(`announcement: ${announcement.enabled ? "Aktif" : "Nonaktif"} ("${announcement.message.substring(0, 30)}")`);
-    }
-    if (featureFlags && typeof featureFlags === "object") {
-      await setFeatureFlags({
-        pasteToUpload: Boolean(featureFlags.pasteToUpload),
-        qrCode: Boolean(featureFlags.qrCode),
-        pwaInstallPrompt: Boolean(featureFlags.pwaInstallPrompt)
+      res.json({
+        success: true,
+        data: updatedConfig
       });
-      changes.push(`featureFlags: paste=${Boolean(featureFlags.pasteToUpload)}, qr=${Boolean(featureFlags.qrCode)}, pwa=${Boolean(featureFlags.pwaInstallPrompt)}`);
+    } catch (err) {
+      console.error("[UPDATE_CONFIG_ERROR]", err);
+      res.status(500).json({
+        success: false,
+        error: { code: "CONFIG_UPDATE_FAILED", message: "Gagal memperbarui konfigurasi sistem. Silakan coba lagi." }
+      });
     }
-    const updatedConfig = await getAllSystemConfig();
-    await auditLogRepository.recordAction({
-      type: "CONFIG_UPDATE",
-      detail: changes.length > 0 ? `Perubahan konfigurasi: ${changes.join(", ")}` : "Konfigurasi sistem diperbarui",
-      ip: clientIp
-    });
-    res.json({
-      success: true,
-      data: updatedConfig
-    });
   },
   /**
    * POST /{ADMIN_PANEL_PATH}/api/maintenance
-   * Toggles the maintenance mode kill switch.
+   * Updates the maintenance mode kill switch (3 levels).
    */
   async toggleMaintenance(req, res) {
-    const clientIp = getClientIp(req);
-    const enabled = Boolean(req.body?.enabled);
-    await setMaintenanceMode(enabled);
-    await auditLogRepository.recordAction({
-      type: "MAINTENANCE_TOGGLE",
-      detail: enabled ? "Kill Switch DIAKTIFKAN \u2014 Mode Pemeliharaan aktif, seluruh unggahan publik ditolak (503)" : "Kill Switch DINONAKTIFKAN \u2014 Mode Pemeliharaan nonaktif, layanan unggahan berjalan normal",
-      ip: clientIp
-    });
-    alertMaintenanceModeChanged(enabled, "web", `IP ${clientIp}`).catch((alertErr) => {
-      console.warn("[TELEGRAM_ALERT_WARN] Gagal mengirim alert maintenance mode:", alertErr);
-    });
-    res.json({
-      success: true,
-      maintenanceMode: enabled,
-      message: enabled ? "Mode Pemeliharaan aktif (Kill Switch Hidup)." : "Mode Pemeliharaan dinonaktifkan (Layanan Normal)."
-    });
+    try {
+      const clientIp = getClientIp(req);
+      let targetLevel;
+      if (req.body?.level !== void 0) {
+        const rawLevel = String(req.body.level).toLowerCase().trim();
+        if (rawLevel !== "off" && rawLevel !== "upload_only" && rawLevel !== "full_lockdown") {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: "INVALID_MAINTENANCE_LEVEL",
+              message: "Level maintenance tidak valid. Nilai yang diterima: off, upload_only, full_lockdown."
+            }
+          });
+          return;
+        }
+        targetLevel = rawLevel;
+      } else if (req.body?.enabled !== void 0) {
+        targetLevel = Boolean(req.body.enabled) ? "upload_only" : "off";
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: "MISSING_LEVEL_OR_ENABLED",
+            message: "Parameter level atau enabled wajib disertakan."
+          }
+        });
+        return;
+      }
+      await setMaintenanceLevel(targetLevel);
+      let logDetail = "";
+      if (targetLevel === "full_lockdown") {
+        logDetail = "Kill Switch diubah ke: LOCKDOWN TOTAL \u2014 Seluruh unggahan publik dan akses share link ditolak (503)";
+      } else if (targetLevel === "upload_only") {
+        logDetail = "Kill Switch diubah ke: TUTUP UPLOAD SAJA \u2014 Seluruh unggahan baru ditolak (503), share link lama tetap aktif";
+      } else {
+        logDetail = "Kill Switch DINONAKTIFKAN \u2014 Mode Pemeliharaan nonaktif, seluruh layanan berjalan normal";
+      }
+      await auditLogRepository.recordAction({
+        type: "MAINTENANCE_TOGGLE",
+        detail: logDetail,
+        ip: clientIp
+      });
+      alertMaintenanceModeChanged(targetLevel, "web", `IP ${clientIp}`).catch((alertErr) => {
+        console.warn("[TELEGRAM_ALERT_WARN] Gagal mengirim alert maintenance mode:", alertErr);
+      });
+      res.json({
+        success: true,
+        maintenanceLevel: targetLevel,
+        maintenanceMode: targetLevel !== "off",
+        message: targetLevel === "full_lockdown" ? "Mode Pemeliharaan aktif (Lockdown Total)." : targetLevel === "upload_only" ? "Mode Pemeliharaan aktif (Tutup Upload Saja)." : "Mode Pemeliharaan dinonaktifkan (Layanan Normal)."
+      });
+    } catch (err) {
+      console.error("[TOGGLE_MAINTENANCE_ERROR]", err);
+      res.status(500).json({
+        success: false,
+        error: { code: "MAINTENANCE_TOGGLE_FAILED", message: "Gagal mengubah status mode pemeliharaan. Silakan coba lagi." }
+      });
+    }
   },
   /**
    * POST /{ADMIN_PANEL_PATH}/api/revoke-session
    * Revokes a specific active admin session.
    */
   async revokeSession(req, res) {
-    const clientIp = getClientIp(req);
-    const { tokenToRevoke } = req.body || {};
-    if (!tokenToRevoke || typeof tokenToRevoke !== "string") {
-      res.status(400).json({ success: false, error: { message: "Token sesi wajib diberikan." } });
-      return;
+    try {
+      const clientIp = getClientIp(req);
+      const { tokenToRevoke } = req.body || {};
+      if (!tokenToRevoke || typeof tokenToRevoke !== "string") {
+        res.status(400).json({ success: false, error: { message: "Token sesi wajib diberikan." } });
+        return;
+      }
+      await revokeAdminSession(tokenToRevoke);
+      await auditLogRepository.recordAction({
+        type: "SESSION_REVOKE",
+        detail: `Mencabut sesi admin dengan token ${tokenToRevoke.substring(0, 8)}...`,
+        ip: clientIp,
+        adminTokenPreview: `${tokenToRevoke.substring(0, 8)}...`
+      });
+      res.json({
+        success: true,
+        message: "Sesi admin berhasil dicabut."
+      });
+    } catch (err) {
+      console.error("[REVOKE_SESSION_ERROR]", err);
+      res.status(500).json({
+        success: false,
+        error: { code: "REVOKE_FAILED", message: "Gagal mencabut sesi admin. Silakan coba lagi." }
+      });
     }
-    await revokeAdminSession(tokenToRevoke);
-    await auditLogRepository.recordAction({
-      type: "SESSION_REVOKE",
-      detail: `Mencabut sesi admin dengan token ${tokenToRevoke.substring(0, 8)}...`,
-      ip: clientIp,
-      adminTokenPreview: `${tokenToRevoke.substring(0, 8)}...`
-    });
-    res.json({
-      success: true,
-      message: "Sesi admin berhasil dicabut."
-    });
   },
   /**
    * POST /{ADMIN_PANEL_PATH}/api/revoke-all-sessions
    * Revokes all active admin sessions except current one.
    */
   async revokeAllSessions(req, res) {
-    const clientIp = getClientIp(req);
-    const currentToken = req.cookies?.[ADMIN_COOKIE_NAME];
-    const count = await revokeAllAdminSessions(currentToken);
-    await auditLogRepository.recordAction({
-      type: "SESSION_REVOKE_ALL",
-      detail: `Mencabut SEMUA sesi admin lain (${count} sesi ditutup)`,
-      ip: clientIp
-    });
-    res.json({
-      success: true,
-      revokedCount: count,
-      message: `Berhasil mencabut ${count} sesi admin lain.`
-    });
+    try {
+      const clientIp = getClientIp(req);
+      const currentToken = req.cookies?.[ADMIN_COOKIE_NAME];
+      const count = await revokeAllAdminSessions(currentToken);
+      await auditLogRepository.recordAction({
+        type: "SESSION_REVOKE_ALL",
+        detail: `Mencabut SEMUA sesi admin lain (${count} sesi ditutup)`,
+        ip: clientIp
+      });
+      res.json({
+        success: true,
+        revokedCount: count,
+        message: `Berhasil mencabut ${count} sesi admin lain.`
+      });
+    } catch (err) {
+      console.error("[REVOKE_ALL_SESSIONS_ERROR]", err);
+      res.status(500).json({
+        success: false,
+        error: { code: "REVOKE_ALL_FAILED", message: "Gagal mencabut sesi admin lainnya. Silakan coba lagi." }
+      });
+    }
   },
   /**
    * GET /{ADMIN_PANEL_PATH}/api/search
    * Search files in repository by name, ID, or filename.
    */
   async searchFiles(req, res) {
-    const query = String(req.query.q || "").trim().toLowerCase();
-    if (!query) {
-      res.json({ success: true, data: { items: [], total: 0 } });
-      return;
-    }
-    const allRecent = await analyticsRepository.getRecentUploads(500);
-    const matched = allRecent.filter(
-      (item) => item.id.toLowerCase().includes(query) || item.name && item.name.toLowerCase().includes(query) || item.originalFileName && item.originalFileName.toLowerCase().includes(query)
-    );
-    const enriched = await Promise.all(
-      matched.map(async (m) => {
-        const views = await analyticsRepository.getViewCount(m.id);
-        return {
-          id: m.id,
-          name: m.name,
-          type: m.type,
-          size: m.size,
-          formattedSize: m.formattedSize,
-          createdAt: m.createdAt,
-          uploaderCountryCode: m.uploaderCountryCode,
-          views,
-          shareUrl: m.shareUrl
-        };
-      })
-    );
-    res.json({
-      success: true,
-      data: {
-        query,
-        items: enriched,
-        total: enriched.length
+    try {
+      const query = String(req.query.q || "").trim().toLowerCase();
+      if (!query) {
+        res.json({ success: true, data: { items: [], total: 0 } });
+        return;
       }
-    });
+      const allRecent = await analyticsRepository.getRecentUploads(500);
+      const matched = allRecent.filter(
+        (item) => item.id.toLowerCase().includes(query) || item.name && item.name.toLowerCase().includes(query) || item.originalFileName && item.originalFileName.toLowerCase().includes(query)
+      );
+      const enriched = await Promise.all(
+        matched.map(async (m) => {
+          const views = await analyticsRepository.getViewCount(m.id);
+          return {
+            id: m.id,
+            name: m.name,
+            type: m.type,
+            size: m.size,
+            formattedSize: m.formattedSize,
+            createdAt: m.createdAt,
+            uploaderCountryCode: m.uploaderCountryCode,
+            views,
+            shareUrl: m.shareUrl
+          };
+        })
+      );
+      res.json({
+        success: true,
+        data: {
+          query,
+          items: enriched,
+          total: enriched.length
+        }
+      });
+    } catch (err) {
+      console.error("[SEARCH_FILES_ERROR]", err);
+      res.status(500).json({
+        success: false,
+        error: { code: "SEARCH_FAILED", message: "Gagal mencari berkas. Silakan coba lagi." }
+      });
+    }
   },
   /**
    * POST /{ADMIN_PANEL_PATH}/api/bulk-cleanup/preview
    * Previews files matching age and view count criteria.
    */
   async previewBulkCleanup(req, res) {
-    const olderThanDays = Number(req.body?.olderThanDays) || 0;
-    const maxViews = req.body?.maxViews !== void 0 ? Number(req.body.maxViews) : 0;
-    const now = Date.now();
-    const cutoffTime = olderThanDays > 0 ? now - olderThanDays * 24 * 60 * 60 * 1e3 : now;
-    const allRecent = await analyticsRepository.getRecentUploads(500);
-    const candidates = [];
-    let totalBytes = 0;
-    for (const item of allRecent) {
-      if (olderThanDays > 0 && item.createdAt > cutoffTime) {
-        continue;
+    try {
+      const olderThanDays = Number(req.body?.olderThanDays) || 0;
+      const maxViews = req.body?.maxViews !== void 0 ? Number(req.body.maxViews) : 0;
+      const now = Date.now();
+      const cutoffTime = olderThanDays > 0 ? now - olderThanDays * 24 * 60 * 60 * 1e3 : now;
+      const allRecent = await analyticsRepository.getRecentUploads(500);
+      const candidates = [];
+      let totalBytes = 0;
+      for (const item of allRecent) {
+        if (olderThanDays > 0 && item.createdAt > cutoffTime) {
+          continue;
+        }
+        const views = await analyticsRepository.getViewCount(item.id);
+        if (views <= maxViews) {
+          candidates.push({
+            id: item.id,
+            name: item.name,
+            formattedSize: item.formattedSize,
+            size: item.size || 0,
+            createdAt: item.createdAt,
+            views
+          });
+          totalBytes += item.size || 0;
+        }
       }
-      const views = await analyticsRepository.getViewCount(item.id);
-      if (views <= maxViews) {
-        candidates.push({
-          id: item.id,
-          name: item.name,
-          formattedSize: item.formattedSize,
-          size: item.size || 0,
-          createdAt: item.createdAt,
-          views
-        });
-        totalBytes += item.size || 0;
-      }
+      res.json({
+        success: true,
+        data: {
+          total: candidates.length,
+          totalBytes,
+          formattedTotalBytes: formatBytes4(totalBytes),
+          items: candidates.slice(0, 100)
+        }
+      });
+    } catch (err) {
+      console.error("[PREVIEW_BULK_CLEANUP_ERROR]", err);
+      res.status(500).json({
+        success: false,
+        error: { code: "PREVIEW_FAILED", message: "Gagal memuat pratinjau pembersihan massal. Silakan coba lagi." }
+      });
     }
-    res.json({
-      success: true,
-      data: {
-        total: candidates.length,
-        totalBytes,
-        formattedTotalBytes: formatBytes4(totalBytes),
-        items: candidates.slice(0, 100)
-      }
-    });
   },
   /**
    * POST /{ADMIN_PANEL_PATH}/api/bulk-cleanup
    * Irreversibly deletes files matching criteria from Catbox and database.
    */
   async executeBulkCleanup(req, res) {
-    const { olderThanDays, maxViews, confirm } = req.body || {};
-    if (!confirm) {
-      res.status(400).json({
-        success: false,
-        error: { code: "CONFIRMATION_REQUIRED", message: "Konfirmasi eksplisit diperlukan untuk eksekusi pembersihan massal." }
-      });
-      return;
-    }
-    const clientIp = getClientIp(req);
-    const days = Number(olderThanDays) || 0;
-    const viewsLimit = maxViews !== void 0 ? Number(maxViews) : 0;
-    const now = Date.now();
-    const cutoffTime = days > 0 ? now - days * 24 * 60 * 60 * 1e3 : now;
-    const mediaRepo = getMediaRepository();
-    const allRecent = await analyticsRepository.getRecentUploads(500);
-    let succeeded = 0;
-    let failed = 0;
-    let freedBytes = 0;
-    for (const item of allRecent) {
-      if (days > 0 && item.createdAt > cutoffTime) {
-        continue;
+    try {
+      const { olderThanDays, maxViews, confirm } = req.body || {};
+      if (!confirm) {
+        res.status(400).json({
+          success: false,
+          error: { code: "CONFIRMATION_REQUIRED", message: "Konfirmasi eksplisit diperlukan untuk eksekusi pembersihan massal." }
+        });
+        return;
       }
-      const views = await analyticsRepository.getViewCount(item.id);
-      if (views <= viewsLimit) {
-        try {
-          await storageProvider2.delete(item.shareUrl || item.id);
-          await mediaRepo.deleteForAdmin(item.id);
-          await analyticsRepository.removeRecentUpload(item.id);
-          await analyticsRepository.removeFileFromAllStats(item.id);
-          await removeSyncCheckItem(item.id);
-          await deletedFilesRepository.recordDeleted({
-            id: item.id,
-            name: item.name || item.id,
-            formattedSize: item.formattedSize || "-",
-            type: item.type || "file",
-            shareUrl: item.shareUrl || "#",
-            deletedAt: Date.now(),
-            deletedBy: "bulk_cleanup",
-            reason: `Pembersihan massal (kriteria usia > ${days} hari, views <= ${viewsLimit})`
-          });
-          succeeded++;
-          freedBytes += item.size || 0;
-        } catch (err) {
-          failed++;
+      const clientIp = getClientIp(req);
+      const days = Number(olderThanDays) || 0;
+      const viewsLimit = maxViews !== void 0 ? Number(maxViews) : 0;
+      const now = Date.now();
+      const cutoffTime = days > 0 ? now - days * 24 * 60 * 60 * 1e3 : now;
+      const mediaRepo = getMediaRepository();
+      const allRecent = await analyticsRepository.getRecentUploads(500);
+      let succeeded = 0;
+      let failed = 0;
+      let freedBytes = 0;
+      for (const item of allRecent) {
+        if (days > 0 && item.createdAt > cutoffTime) {
+          continue;
+        }
+        const views = await analyticsRepository.getViewCount(item.id);
+        if (views <= viewsLimit) {
+          try {
+            await storageProvider2.delete(item.shareUrl || item.id);
+            await mediaRepo.deleteForAdmin(item.id);
+            await analyticsRepository.removeRecentUpload(item.id);
+            await analyticsRepository.removeFileFromAllStats(item.id);
+            await removeSyncCheckItem(item.id);
+            await deletedFilesRepository.recordDeleted({
+              id: item.id,
+              name: item.name || item.id,
+              formattedSize: item.formattedSize || "-",
+              type: item.type || "file",
+              shareUrl: item.shareUrl || "#",
+              deletedAt: Date.now(),
+              deletedBy: "bulk_cleanup",
+              reason: `Pembersihan massal (kriteria usia > ${days} hari, views <= ${viewsLimit})`
+            });
+            succeeded++;
+            freedBytes += item.size || 0;
+          } catch (err) {
+            failed++;
+          }
         }
       }
-    }
-    if (succeeded > 0) {
-      await analyticsRepository.recordDeletion(succeeded);
-    }
-    await auditLogRepository.recordAction({
-      type: "BULK_CLEANUP",
-      detail: `Pembersihan massal (Kriteria: usia > ${days} hari, views <= ${viewsLimit}): Berhasil menghapus ${succeeded} berkas, gagal ${failed}. Total penyimpanan dibebaskan: ${formatBytes4(freedBytes)}`,
-      ip: clientIp
-    });
-    res.json({
-      success: true,
-      data: {
-        succeeded,
-        failed,
-        freedBytes,
-        formattedFreedBytes: formatBytes4(freedBytes)
+      if (succeeded > 0) {
+        await analyticsRepository.recordDeletion(succeeded);
       }
-    });
+      await auditLogRepository.recordAction({
+        type: "BULK_CLEANUP",
+        detail: `Pembersihan massal (Kriteria: usia > ${days} hari, views <= ${viewsLimit}): Berhasil menghapus ${succeeded} berkas, gagal ${failed}. Total penyimpanan dibebaskan: ${formatBytes4(freedBytes)}`,
+        ip: clientIp
+      });
+      res.json({
+        success: true,
+        data: {
+          succeeded,
+          failed,
+          freedBytes,
+          formattedFreedBytes: formatBytes4(freedBytes)
+        }
+      });
+    } catch (err) {
+      console.error("[EXECUTE_BULK_CLEANUP_ERROR]", err);
+      res.status(500).json({
+        success: false,
+        error: { code: "BULK_CLEANUP_FAILED", message: "Gagal menjalankan pembersihan massal. Silakan coba lagi." }
+      });
+    }
   },
   /**
    * POST /{ADMIN_PANEL_PATH}/api/clear-deleted-history
@@ -9986,18 +11811,26 @@ Berkas aktif yang valid akan tetap aman tersimpan.',
    * Strictly protected by requireAdminAuth.
    */
   async clearDeletedHistory(req, res) {
-    const clientIp = getClientIp(req);
-    const count = await deletedFilesRepository.clearAll();
-    await auditLogRepository.recordAction({
-      type: "HISTORY_DELETE",
-      detail: `Admin membersihkan seluruh arsip riwayat berkas terhapus (${count} arsip dibersihkan)`,
-      ip: clientIp
-    });
-    res.json({
-      success: true,
-      clearedCount: count,
-      message: `Berhasil membersihkan ${count} riwayat berkas terhapus.`
-    });
+    try {
+      const clientIp = getClientIp(req);
+      const count = await deletedFilesRepository.clearAll();
+      await auditLogRepository.recordAction({
+        type: "HISTORY_DELETE",
+        detail: `Admin membersihkan seluruh arsip riwayat berkas terhapus (${count} arsip dibersihkan)`,
+        ip: clientIp
+      });
+      res.json({
+        success: true,
+        clearedCount: count,
+        message: `Berhasil membersihkan ${count} riwayat berkas terhapus.`
+      });
+    } catch (err) {
+      console.error("[CLEAR_DELETED_HISTORY_ERROR]", err);
+      res.status(500).json({
+        success: false,
+        error: { code: "CLEAR_HISTORY_FAILED", message: "Gagal membersihkan riwayat berkas terhapus. Silakan coba lagi." }
+      });
+    }
   },
   /**
    * GET /{ADMIN_PANEL_PATH}/api/deleted-files
@@ -10005,19 +11838,27 @@ Berkas aktif yang valid akan tetap aman tersimpan.',
    * Strictly protected by requireAdminAuth.
    */
   async getDeletedFiles(req, res) {
-    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
-    const items = await deletedFilesRepository.getDeletedFiles(limit);
-    res.json({
-      success: true,
-      data: {
-        items,
-        total: items.length
-      }
-    });
+    try {
+      const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
+      const items = await deletedFilesRepository.getDeletedFiles(limit);
+      res.json({
+        success: true,
+        data: {
+          items,
+          total: items.length
+        }
+      });
+    } catch (err) {
+      console.error("[GET_DELETED_FILES_ERROR]", err);
+      res.status(500).json({
+        success: false,
+        error: { code: "GET_DELETED_FILES_FAILED", message: "Gagal memuat daftar berkas terhapus. Silakan coba lagi." }
+      });
+    }
   },
   /**
    * POST /{ADMIN_PANEL_PATH}/api/ai-recommendations
-   * Real-time executive summary and strategic recommendations generated by Gemini 3.8 Flash.
+   * Real-time executive summary and strategic recommendations generated by Gemini 2.5 Flash.
    * Includes automated graceful fallback to heuristic engine if API key is not configured or fails.
    */
   async getAiRecommendations(req, res) {
@@ -10032,12 +11873,32 @@ Berkas aktif yang valid akan tetap aman tersimpan.',
         analyticsRepository.getTotalItemsEver()
       ]);
       const heuristicRecs = generateRecommendations(todayStats, weeklyTrend, topFiles);
+      const fallbackSummary = `Sistem mencatat total **${todayStats.uploads} unggahan** (${todayStats.formattedBytes}) dengan **${todayStats.totalViews} kunjungan** pada hari ini. Status penyimpanan Catbox saat ini: \`${catboxHealth.available ? "TERSEDIA" : "TERGANGGU"}\`.`;
       const apiKey = process.env.GEMINI_API_KEY;
-      if (apiKey && apiKey.trim().length > 0) {
-        try {
-          const { GoogleGenAI } = await import("@google/genai");
-          const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
-          const prompt = `Anda adalah asisten AI Analitik Sistem dan Infrastruktur untuk AirShare Pro (platform berbagi berkas media berkinerja tinggi).
+      if (!apiKey || apiKey.trim().length === 0) {
+        res.json({
+          success: true,
+          isAi: false,
+          model: "heuristic-engine",
+          summary: fallbackSummary,
+          recommendations: heuristicRecs,
+          generatedAt: Date.now(),
+          error: "GEMINI_API_KEY belum dikonfigurasi di environment hosting. Menampilkan hasil analisis heuristik bawaan."
+        });
+        return;
+      }
+      try {
+        const { GoogleGenAI } = await import("@google/genai");
+        const ai = new GoogleGenAI({
+          apiKey: apiKey.trim(),
+          httpOptions: {
+            headers: {
+              "User-Agent": "aistudio-build"
+            },
+            timeout: 3e4
+          }
+        });
+        const prompt = `Anda adalah asisten AI Analitik Sistem dan Infrastruktur untuk AirShare Pro (platform berbagi berkas media berkinerja tinggi).
 Analisis metrik sistem real-time berikut ini dan berikan ringkasan eksekutif beserta rekomendasi strategis dalam format JSON:
 
 DATA SISTEM REAL-TIME:
@@ -10065,50 +11926,955 @@ Hasilkan respons JSON valid dengan struktur:
   ]
 }
 Pastikan rekomendasi berfokus pada optimasi bandwidth, proteksi kuota penyimpanan, retensi data, dan keamanan operasional.`;
-          const response = await ai.models.generateContent({
-            model: "gemini-3.8-flash",
+        let usedModel = GEMINI_MODEL_NAME;
+        let response;
+        try {
+          response = await ai.models.generateContent({
+            model: usedModel,
             contents: prompt,
             config: {
               responseMimeType: "application/json"
             }
           });
-          const rawText = response.text?.trim() || "";
-          let parsedResponse = null;
-          try {
-            parsedResponse = JSON.parse(rawText);
-          } catch {
-            const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              parsedResponse = JSON.parse(jsonMatch[0]);
+        } catch (initialErr) {
+          if (usedModel !== "gemini-2.5-flash") {
+            console.warn(`[GEMINI_RECOMMENDATION_WARN] Model ${usedModel} mengalami kendala (${initialErr?.message || initialErr}), mencoba model cadangan gemini-2.5-flash...`);
+            usedModel = "gemini-2.5-flash";
+            try {
+              response = await ai.models.generateContent({
+                model: usedModel,
+                contents: prompt,
+                config: {
+                  responseMimeType: "application/json"
+                }
+              });
+            } catch (fallbackErr) {
+              console.warn(`[GEMINI_RECOMMENDATION_WARN] Fallback JSON mode gagal, mencoba panggilan standar tanpa mimeType constraint...`);
+              response = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: prompt + "\n\nPERINGATAN: Berikan respons HANYA objek JSON valid."
+              });
+            }
+          } else {
+            console.warn(`[GEMINI_RECOMMENDATION_WARN] Mode JSON gemini-2.5-flash mengalami kendala (${initialErr?.message || initialErr}), mencoba panggilan standar...`);
+            try {
+              response = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: prompt + "\n\nPERINGATAN: Berikan respons HANYA objek JSON valid."
+              });
+            } catch {
+              throw initialErr;
             }
           }
-          if (parsedResponse && (parsedResponse.summary || Array.isArray(parsedResponse.recommendations) && parsedResponse.recommendations.length > 0)) {
-            res.json({
-              success: true,
-              model: "gemini-3.8-flash",
-              summary: parsedResponse.summary || "Sistem beroperasi normal dengan parameter kapasitas optimal.",
-              recommendations: Array.isArray(parsedResponse.recommendations) && parsedResponse.recommendations.length > 0 ? parsedResponse.recommendations : heuristicRecs,
-              generatedAt: Date.now()
-            });
-            return;
-          }
-        } catch (geminiErr) {
-          console.warn("[GEMINI_RECOMMENDATION_WARN] Gagal menghubungi Gemini API, fallback ke heuristik:", geminiErr?.message || geminiErr);
         }
+        const rawText = response?.text?.trim() || "";
+        let parsedResponse = null;
+        try {
+          parsedResponse = JSON.parse(rawText);
+        } catch {
+          const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            parsedResponse = JSON.parse(jsonMatch[0]);
+          }
+        }
+        if (parsedResponse && (parsedResponse.summary || Array.isArray(parsedResponse.recommendations) && parsedResponse.recommendations.length > 0)) {
+          res.json({
+            success: true,
+            isAi: true,
+            model: usedModel,
+            summary: parsedResponse.summary || "Sistem beroperasi normal dengan parameter kapasitas optimal.",
+            recommendations: Array.isArray(parsedResponse.recommendations) && parsedResponse.recommendations.length > 0 ? parsedResponse.recommendations : heuristicRecs,
+            generatedAt: Date.now()
+          });
+          return;
+        }
+        res.json({
+          success: true,
+          isAi: false,
+          model: "heuristic-engine",
+          summary: fallbackSummary,
+          recommendations: heuristicRecs,
+          generatedAt: Date.now(),
+          error: "Respon dari Gemini API tidak dalam format yang diharapkan. Menampilkan hasil analisis heuristik sebagai gantinya."
+        });
+        return;
+      } catch (geminiErr) {
+        console.warn("[GEMINI_RECOMMENDATION_WARN] Gagal menghubungi Gemini API, fallback ke heuristik:", geminiErr?.message || geminiErr);
+        res.json({
+          success: true,
+          isAi: false,
+          model: "heuristic-engine",
+          summary: fallbackSummary,
+          recommendations: heuristicRecs,
+          generatedAt: Date.now(),
+          error: `Gemini API mengalami kendala: ${geminiErr?.message || "Gagal terhubung ke layanan AI."}. Menampilkan hasil analisis heuristik sebagai gantinya.`
+        });
+        return;
       }
-      res.json({
-        success: true,
-        model: "heuristic-engine",
-        summary: `Sistem mencatat total **${todayStats.uploads} unggahan** (${todayStats.formattedBytes}) dengan **${todayStats.totalViews} kunjungan** pada hari ini. Status penyimpanan Catbox saat ini: \`${catboxHealth.available ? "TERSEDIA" : "TERGANGGU"}\`.`,
-        recommendations: heuristicRecs,
-        generatedAt: Date.now()
-      });
     } catch (err) {
       console.error("[AI_RECOMMENDATIONS_ERROR]", err);
       res.status(500).json({
         success: false,
         error: "Gagal menghasilkan analisis rekomendasi AI. Silakan coba beberapa saat lagi."
       });
+    }
+  }
+};
+
+// src/server/api/status-controller.ts
+function escapeHtml4(str) {
+  if (!str) return "";
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+async function getSystemStatusData() {
+  const [maintenanceLevel, rawAnnouncement, featureFlags, catboxHealth, redisHealth] = await Promise.all([
+    getMaintenanceLevel(),
+    getAnnouncement(),
+    getFeatureFlags(),
+    checkCatboxHealth(),
+    checkRedisHealth()
+  ]);
+  const activeAnnouncement = rawAnnouncement && rawAnnouncement.enabled && (!rawAnnouncement.expiresAt || rawAnnouncement.expiresAt > Date.now()) ? rawAnnouncement : null;
+  let overallStatus = "operational";
+  let uploadStatus = "operational";
+  let downloadStatus = "operational";
+  let storageStatus = "operational";
+  let databaseStatus = "operational";
+  if (!catboxHealth.available) {
+    storageStatus = "outage";
+  } else if (catboxHealth.latencyMs && catboxHealth.latencyMs > 2500) {
+    storageStatus = "degraded";
+  } else {
+    storageStatus = "operational";
+  }
+  if (redisHealth.configured && !redisHealth.connected) {
+    databaseStatus = "degraded";
+  } else {
+    databaseStatus = "operational";
+  }
+  if (maintenanceLevel === "full_lockdown") {
+    overallStatus = "major_outage";
+    uploadStatus = "maintenance";
+    downloadStatus = "maintenance";
+  } else if (maintenanceLevel === "upload_only") {
+    overallStatus = "degraded";
+    uploadStatus = "maintenance";
+    downloadStatus = storageStatus === "outage" ? "degraded" : "operational";
+  } else {
+    if (storageStatus === "outage") {
+      overallStatus = "major_outage";
+      uploadStatus = "degraded";
+      downloadStatus = "degraded";
+    } else if (storageStatus === "degraded" || databaseStatus === "degraded") {
+      overallStatus = "degraded";
+      uploadStatus = "operational";
+      downloadStatus = "operational";
+    } else {
+      overallStatus = "operational";
+      uploadStatus = "operational";
+      downloadStatus = "operational";
+    }
+  }
+  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+  return {
+    status: overallStatus,
+    maintenanceLevel,
+    maintenanceMode: maintenanceLevel !== "off",
+    services: {
+      upload: {
+        status: uploadStatus,
+        label: "Unggah Berkas (Upload)",
+        message: uploadStatus === "maintenance" ? "Unggahan baru dinonaktifkan sementara untuk pemeliharaan." : uploadStatus === "degraded" ? "Unggahan mungkin mengalami perlambatan." : "Beroperasi normal hingga 100MB per berkas."
+      },
+      download: {
+        status: downloadStatus,
+        label: "Unduh & Berbagi Tautan (Download & Share Link)",
+        message: downloadStatus === "maintenance" ? "Akses tautan berbagi ditutup sementara selama mode lockdown." : downloadStatus === "degraded" ? "Akses unduhan mungkin mengalami latensi tinggi." : "Seluruh tautan berbagi dapat diakses secara publik tanpa hambatan."
+      },
+      storage: {
+        status: storageStatus,
+        label: "Penyimpanan Utama (Catbox Cluster)",
+        latencyMs: catboxHealth.latencyMs ?? void 0,
+        message: storageStatus === "outage" ? "Koneksi ke klaster penyimpanan upstream terputus." : storageStatus === "degraded" ? `Latensi upstream tinggi (${catboxHealth.latencyMs ?? 0} ms).` : `Terhubung & responsif (${catboxHealth.latencyMs ?? 0} ms).`
+      },
+      database: {
+        status: databaseStatus,
+        label: "Database & Konfigurasi (Upstash Redis)",
+        latencyMs: redisHealth.latencyMs ?? void 0,
+        message: databaseStatus === "degraded" ? "Redis tidak terhubung, sistem menggunakan fallback in-memory." : `Terhubung persisten (${redisHealth.latencyMs ?? 0} ms).`
+      }
+    },
+    announcement: activeAnnouncement,
+    featureFlags,
+    uptime: {
+      status: "99.9%",
+      lastChecked: nowIso
+    },
+    timestamp: nowIso
+  };
+}
+var statusController = {
+  async renderStatusPage(req, res) {
+    try {
+      let renderServiceBadge2 = function(status) {
+        if (status === "operational") {
+          return `<span class="service-badge badge-green"><span class="badge-dot"></span>Beroperasi Normal</span>`;
+        }
+        if (status === "maintenance") {
+          return `<span class="service-badge badge-yellow"><span class="badge-dot pulse"></span>Pemeliharaan</span>`;
+        }
+        if (status === "degraded") {
+          return `<span class="service-badge badge-yellow"><span class="badge-dot pulse"></span>Penurunan Performa</span>`;
+        }
+        return `<span class="service-badge badge-red"><span class="badge-dot pulse"></span>Gangguan</span>`;
+      };
+      var renderServiceBadge = renderServiceBadge2;
+      res.setHeader("Cache-Control", "public, max-age=15, stale-while-revalidate=30");
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      const protocol = req.headers["x-forwarded-proto"] || req.protocol || "https";
+      const host = req.get("host") || "airshare-pro.vercel.app";
+      const siteRootUrl = `${protocol}://${host}/`;
+      const canonicalUrl = `${protocol}://${host}/status`;
+      const data = await getSystemStatusData();
+      const currentLevel = data.maintenanceLevel;
+      const overallStatus = data.status;
+      let bannerBg = "rgba(16, 185, 129, 0.1)";
+      let bannerBorder = "rgba(16, 185, 129, 0.25)";
+      let bannerColor = "var(--status-operational)";
+      let bannerDotClass = "dot-operational";
+      let bannerHeadline = "Semua Sistem Beroperasi Normal";
+      let bannerSubtitle = "Seluruh layanan unggah, unduh, dan penyimpanan berjalan optimal.";
+      if (overallStatus === "major_outage" || currentLevel === "full_lockdown") {
+        bannerBg = "rgba(239, 68, 68, 0.12)";
+        bannerBorder = "rgba(239, 68, 68, 0.35)";
+        bannerColor = "var(--status-outage)";
+        bannerDotClass = "dot-outage";
+        bannerHeadline = "Lockdown Total \u2014 Layanan Ditutup Sementara";
+        bannerSubtitle = "Seluruh akses unggah dan berbagi publik ditutup sementara untuk perbaikan mendesak.";
+      } else if (overallStatus === "degraded" || currentLevel === "upload_only") {
+        bannerBg = "rgba(245, 158, 11, 0.12)";
+        bannerBorder = "rgba(245, 158, 11, 0.35)";
+        bannerColor = "var(--status-degraded)";
+        bannerDotClass = "dot-degraded";
+        bannerHeadline = currentLevel === "upload_only" ? "Pemeliharaan \u2014 Fitur Unggah Ditutup Sementara" : "Sebagian Layanan Mengalami Penurunan Performa";
+        bannerSubtitle = currentLevel === "upload_only" ? "Unggahan baru dinonaktifkan sementara. Tautan share yang sudah ada tetap dapat dibuka normal." : "Tim kami sedang memantau dan memulihkan kestabilan jaringan upstream.";
+      }
+      const formattedCheckedTime = (/* @__PURE__ */ new Date()).toLocaleTimeString("id-ID", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        timeZoneName: "short"
+      });
+      const announcementHtml = data.announcement ? `
+      <div class="announcement-card type-${escapeHtml4(data.announcement.type || "info")}">
+        <div class="ann-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="8" x2="12" y2="12"></line>
+            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+          </svg>
+        </div>
+        <div class="ann-content">
+          <div class="ann-title">Pengumuman Resmi</div>
+          <div class="ann-msg">${escapeHtml4(data.announcement.message)}</div>
+        </div>
+      </div>
+      ` : "";
+      const html = `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>AirShare Pro \u2014 Status Layanan &amp; Kinerja Sistem Real-Time</title>
+  <meta name="description" content="Pantau status operasional real-time layanan AirShare Pro, ketersediaan penyimpanan cloud Catbox, database Redis, uptime server, dan performa jaringan.">
+  <meta name="keywords" content="airshare pro status, system status, uptime airshare pro, status server, catbox status, redis status, pemantauan sistem, latency">
+  <meta name="author" content="AirShare Pro Team">
+  <meta name="application-name" content="AirShare Pro">
+  <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+  <link rel="canonical" href="${canonicalUrl}">
+
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="${canonicalUrl}">
+  <meta property="og:title" content="AirShare Pro \u2014 Status Layanan &amp; Kinerja Sistem Real-Time">
+  <meta property="og:description" content="Pantau status operasional real-time layanan AirShare Pro, ketersediaan penyimpanan cloud Catbox, database Redis, uptime server, dan performa jaringan.">
+  <meta property="og:site_name" content="AirShare Pro">
+  <meta property="og:locale" content="id_ID">
+  <meta property="og:image" content="${siteRootUrl}vite.svg">
+
+  <!-- Twitter Meta Tags -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:url" content="${canonicalUrl}">
+  <meta name="twitter:title" content="AirShare Pro \u2014 Status Layanan &amp; Kinerja Sistem Real-Time">
+  <meta name="twitter:description" content="Pantau status operasional real-time layanan AirShare Pro, ketersediaan penyimpanan cloud Catbox, database Redis, uptime server, dan performa jaringan.">
+  <meta name="twitter:image" content="${siteRootUrl}vite.svg">
+
+  <!-- JSON-LD Structured Data for Search Engines -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "name": "Status Layanan & Kinerja Sistem AirShare Pro",
+    "description": "Pantau status operasional real-time layanan AirShare Pro, uptime penyimpanan Catbox, dan database.",
+    "url": "${canonicalUrl}",
+    "inLanguage": "id-ID",
+    "isPartOf": {
+      "@type": "WebSite",
+      "name": "AirShare Pro",
+      "url": "${siteRootUrl}"
+    },
+    "about": {
+      "@type": "Service",
+      "name": "AirShare Pro Media Cloud Sharing",
+      "serviceType": "Cloud File Sharing and Media Streaming Platform",
+      "provider": {
+        "@type": "Organization",
+        "name": "AirShare Pro",
+        "url": "${siteRootUrl}"
+      }
+    }
+  }
+  </script>
+
+  <link rel="icon" type="image/svg+xml" href="/vite.svg">
+  ${GOOGLE_FONTS_TAGS}
+  ${THEME_HEAD_SCRIPT}
+  <style>
+    ${THEME_CSS_VARIABLES}
+
+    :root {
+      --card-bg: var(--surface-primary);
+      --card-border: var(--border-subtle);
+      --card-hover: var(--surface-hover);
+      --fg: var(--text-main);
+      --muted: var(--text-muted);
+      --subtle: var(--text-muted);
+      --primary: var(--accent);
+      --primary-hover: var(--accent-hover);
+      --green: #10b981;
+      --green-light: #059669;
+      --yellow: #f59e0b;
+      --yellow-light: #d97706;
+      --red: #ef4444;
+      --red-light: #dc2626;
+      --status-operational: #059669;
+      --status-degraded: #d97706;
+      --status-outage: #dc2626;
+    }
+
+    .theme-spacegray, .theme-purple, .theme-pacific {
+      --green-light: #34d399;
+      --yellow-light: #fbbf24;
+      --red-light: #f87171;
+      --status-operational: #34d399;
+      --status-degraded: #fbbf24;
+      --status-outage: #f87171;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      transition: background-color 0.25s ease, color 0.25s ease;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 2.5rem 1.25rem 4rem;
+      flex: 1;
+    }
+
+    /* Header & Navbar */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 2rem;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      text-decoration: none;
+      color: var(--text-main);
+    }
+
+    .brand-icon {
+      width: 36px;
+      height: 36px;
+      background: var(--accent);
+      border-radius: 9px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent-text);
+      box-shadow: var(--shadow-subtle);
+    }
+
+    .brand-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text-main);
+    }
+
+    .brand-pill {
+      font-size: 0.7rem;
+      font-weight: 600;
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid var(--border-subtle);
+      padding: 0.2rem 0.5rem;
+      border-radius: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .btn-nav {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.825rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-decoration: none;
+      padding: 0.45rem 0.85rem;
+      background: var(--surface-primary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      transition: all 0.2s ease;
+      cursor: pointer;
+    }
+
+    .btn-nav:hover {
+      background: var(--surface-hover);
+      color: var(--text-main);
+      border-color: var(--border-subtle-hover);
+    }
+
+    /* Overall Status Hero */
+    .status-hero {
+      background: ${bannerBg};
+      border: 1px solid ${bannerBorder};
+      border-radius: 14px;
+      padding: 1.5rem 1.75rem;
+      margin-bottom: 2rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 1.25rem;
+      transition: all 0.3s ease;
+      box-shadow: var(--shadow-subtle);
+    }
+
+    .hero-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      margin-top: 5px;
+    }
+
+    .dot-operational {
+      background-color: var(--green);
+      box-shadow: 0 0 12px rgba(16, 185, 129, 0.6);
+    }
+
+    .dot-degraded {
+      background-color: var(--yellow);
+      box-shadow: 0 0 12px rgba(245, 158, 11, 0.6);
+      animation: pulse-glow 2s infinite ease-in-out;
+    }
+
+    .dot-outage {
+      background-color: var(--red);
+      box-shadow: 0 0 12px rgba(239, 68, 68, 0.6);
+      animation: pulse-glow 1.5s infinite ease-in-out;
+    }
+
+    @keyframes pulse-glow {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.2); opacity: 0.75; }
+    }
+
+    .hero-headline {
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: ${bannerColor};
+      letter-spacing: -0.01em;
+      margin-bottom: 0.35rem;
+    }
+
+    .hero-sub {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    /* Announcement */
+    .announcement-card {
+      background: rgba(56, 189, 248, 0.08);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      border-radius: 12px;
+      padding: 1.15rem 1.35rem;
+      margin-bottom: 2rem;
+      display: flex;
+      gap: 1rem;
+      align-items: flex-start;
+      color: #0284c7;
+    }
+
+    .announcement-card.type-warning {
+      background: rgba(245, 158, 11, 0.08);
+      border-color: rgba(245, 158, 11, 0.25);
+      color: #b45309;
+    }
+
+    .announcement-card.type-success {
+      background: rgba(16, 185, 129, 0.08);
+      border-color: rgba(16, 185, 129, 0.25);
+      color: #047857;
+    }
+
+    .theme-spacegray .announcement-card, .theme-purple .announcement-card, .theme-pacific .announcement-card {
+      color: #38bdf8;
+    }
+    .theme-spacegray .announcement-card.type-warning, .theme-purple .announcement-card.type-warning, .theme-pacific .announcement-card.type-warning {
+      color: #fbbf24;
+    }
+    .theme-spacegray .announcement-card.type-success, .theme-purple .announcement-card.type-success, .theme-pacific .announcement-card.type-success {
+      color: #34d399;
+    }
+
+    .ann-icon {
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .ann-title {
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.25rem;
+    }
+
+    .ann-msg {
+      font-size: 0.875rem;
+      line-height: 1.5;
+      color: var(--text-main);
+    }
+
+    /* Section Title */
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+    }
+
+    .section-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .refresh-info {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    /* Services List */
+    .services-grid {
+      background: var(--surface-primary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 2.25rem;
+      box-shadow: var(--shadow-subtle);
+    }
+
+    .service-row {
+      padding: 1.15rem 1.35rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      border-bottom: 1px solid var(--border-subtle);
+      transition: background 0.15s ease;
+    }
+
+    .service-row:last-child {
+      border-bottom: none;
+    }
+
+    .service-row:hover {
+      background: var(--surface-hover);
+    }
+
+    .service-info {
+      flex: 1;
+    }
+
+    .service-name {
+      font-size: 0.925rem;
+      font-weight: 600;
+      color: var(--text-main);
+      margin-bottom: 0.2rem;
+    }
+
+    .service-desc {
+      font-size: 0.775rem;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+
+    .service-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.775rem;
+      font-weight: 600;
+      padding: 0.3rem 0.7rem;
+      border-radius: 9999px;
+      white-space: nowrap;
+    }
+
+    .badge-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+
+    .badge-green {
+      background: rgba(16, 185, 129, 0.12);
+      color: var(--green-light);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+    }
+    .badge-green .badge-dot { background: var(--green); }
+
+    .badge-yellow {
+      background: rgba(245, 158, 11, 0.12);
+      color: var(--yellow-light);
+      border: 1px solid rgba(245, 158, 11, 0.25);
+    }
+    .badge-yellow .badge-dot { background: var(--yellow); }
+
+    .badge-red {
+      background: rgba(239, 68, 68, 0.12);
+      color: var(--red-light);
+      border: 1px solid rgba(239, 68, 68, 0.25);
+    }
+    .badge-red .badge-dot { background: var(--red); }
+
+    /* Metrics Grid */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2.25rem;
+    }
+
+    .metric-card {
+      background: var(--surface-primary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 1.15rem 1.25rem;
+      box-shadow: var(--shadow-subtle);
+    }
+
+    .metric-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.35rem;
+    }
+
+    .metric-val {
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .metric-sub {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.2rem;
+    }
+
+    /* Past Incidents */
+    .incidents-card {
+      background: var(--surface-primary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 1.25rem 1.35rem;
+      margin-bottom: 2.5rem;
+      box-shadow: var(--shadow-subtle);
+    }
+
+    .incident-entry {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.85rem;
+      font-size: 0.825rem;
+      color: var(--text-muted);
+    }
+
+    /* Footer */
+    .footer {
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+      font-size: 0.775rem;
+      color: var(--text-muted);
+    }
+
+    .footer a {
+      color: var(--text-muted);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .footer a:hover {
+      color: var(--accent);
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 1.25rem;
+    }
+
+    @media (max-width: 640px) {
+      .service-row {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .service-badge {
+        align-self: flex-start;
+      }
+    }
+  </style>
+</head>
+<body class="theme-rosegold">
+  ${THEME_BODY_SCRIPT}
+  <div class="container">
+    <!-- Navbar -->
+    <header class="header">
+      <a href="/" class="brand">
+        <div class="brand-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
+            <path d="M12 12v9"></path>
+            <path d="m16 16-4-4-4 4"></path>
+          </svg>
+        </div>
+        <span class="brand-title">AirShare Pro</span>
+        <span class="brand-pill">Status</span>
+      </a>
+
+      <div class="nav-actions">
+        <button type="button" class="btn-nav" id="btn-manual-refresh" onclick="location.reload()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+            <path d="M3 3v5h5"></path>
+            <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path>
+            <path d="M16 21h5v-5"></path>
+          </svg>
+          Segarkan
+        </button>
+        <a href="/" class="btn-nav">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+            <polyline points="9 22 9 12 15 12 15 22"></polyline>
+          </svg>
+          Beranda
+        </a>
+      </div>
+    </header>
+
+    <main id="main-content">
+      <!-- Overall Status Hero -->
+      <section class="status-hero" aria-label="Status Ringkasan Sistem">
+        <div class="hero-dot ${bannerDotClass}"></div>
+        <div>
+          <h1 class="hero-headline">${bannerHeadline}</h1>
+          <div class="hero-sub">${bannerSubtitle}</div>
+        </div>
+      </section>
+
+      <!-- Active Announcement (if any) -->
+      ${announcementHtml}
+
+      <!-- Services Section -->
+      <section aria-label="Status Layanan dan Infrastruktur">
+        <div class="section-header">
+          <h2 class="section-title">Status Layanan &amp; Infrastruktur</h2>
+          <div class="refresh-info">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            <span>Pemeriksaan terakhir: <strong>${formattedCheckedTime}</strong></span>
+          </div>
+        </div>
+
+        <div class="services-grid">
+          <!-- Upload Service -->
+          <div class="service-row">
+            <div class="service-info">
+              <div class="service-name">${escapeHtml4(data.services.upload.label)}</div>
+              <div class="service-desc">${escapeHtml4(data.services.upload.message || "")}</div>
+            </div>
+            ${renderServiceBadge2(data.services.upload.status)}
+          </div>
+
+          <!-- Download & Share Service -->
+          <div class="service-row">
+            <div class="service-info">
+              <div class="service-name">${escapeHtml4(data.services.download.label)}</div>
+              <div class="service-desc">${escapeHtml4(data.services.download.message || "")}</div>
+            </div>
+            ${renderServiceBadge2(data.services.download.status)}
+          </div>
+
+          <!-- Storage (Catbox) -->
+          <div class="service-row">
+            <div class="service-info">
+              <div class="service-name">${escapeHtml4(data.services.storage.label)}</div>
+              <div class="service-desc">${escapeHtml4(data.services.storage.message || "")}</div>
+            </div>
+            ${renderServiceBadge2(data.services.storage.status)}
+          </div>
+
+          <!-- Database (Redis) -->
+          <div class="service-row">
+            <div class="service-info">
+              <div class="service-name">${escapeHtml4(data.services.database.label)}</div>
+              <div class="service-desc">${escapeHtml4(data.services.database.message || "")}</div>
+            </div>
+            ${renderServiceBadge2(data.services.database.status)}
+          </div>
+        </div>
+      </section>
+
+      <!-- Metrics Section -->
+      <section aria-label="Metrik Keandalan Sistem" style="margin-top: 2rem;">
+        <div class="section-header">
+          <h2 class="section-title">Metrik Keandalan Sistem</h2>
+        </div>
+
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-label">Uptime Layanan (30 Hari)</div>
+            <div class="metric-val" style="color: var(--green-light);">${data.uptime.status}</div>
+            <div class="metric-sub">Ketersediaan sistem tingkat tinggi</div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-label">Latensi Penyimpanan</div>
+            <div class="metric-val">${data.services.storage.latencyMs !== void 0 ? data.services.storage.latencyMs + " ms" : "N/A"}</div>
+            <div class="metric-sub">Kecepatan respons upstream</div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-label">Latensi Database</div>
+            <div class="metric-val">${data.services.database.latencyMs !== void 0 ? data.services.database.latencyMs + " ms" : "In-Memory"}</div>
+            <div class="metric-sub">Cache &amp; metadata real-time</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Past 24h Incident Report -->
+      <section aria-label="Riwayat Insiden" style="margin-top: 2rem;">
+        <div class="section-header">
+          <h2 class="section-title">Riwayat Insiden (24 Jam Terakhir)</h2>
+        </div>
+
+        <div class="incidents-card">
+          <div class="incident-entry">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--green); flex-shrink: 0; margin-top: 1px;">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+              <polyline points="22 4 12 14.01 9 11.01"></polyline>
+            </svg>
+            <div>
+              <div style="font-weight: 600; color: var(--fg); margin-bottom: 0.15rem;">
+                ${overallStatus === "operational" ? "Tidak ada insiden atau gangguan yang dilaporkan." : overallStatus === "major_outage" ? "Sedang berlangsung: Lockdown total untuk pemeliharaan sistem." : "Sedang berlangsung: Penyesuaian mode operasional sistem."}
+              </div>
+              <div style="font-size: 0.775rem; color: var(--subtle);">
+                Semua metrik dan pemeriksaan kesehatan dipantau secara otomatis setiap 30 detik.
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div>&copy; ${(/* @__PURE__ */ new Date()).getFullYear()} AirShare Pro. Status Real-time.</div>
+      <div class="footer-links">
+        <a href="/">Beranda</a>
+        <a href="/api/system-status" target="_blank" rel="noopener">JSON API</a>
+        <a href="/api/health" target="_blank" rel="noopener">Health Check</a>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    // Auto-refresh status every 30 seconds
+    let refreshTimer = 30;
+    setInterval(function() {
+      refreshTimer--;
+      if (refreshTimer <= 0) {
+        window.location.reload();
+      }
+    }, 1000);
+
+    ${THEME_STORAGE_LISTENER_SCRIPT}
+  </script>
+</body>
+</html>`;
+      res.send(html);
+    } catch (err) {
+      console.error("[STATUS_PAGE_ERROR]", err);
+      res.status(500).send(`<!DOCTYPE html>
+<html>
+<head><title>System Status Unavailable</title></head>
+<body style="background:#0b0f17;color:#f8fafc;font-family:sans-serif;padding:2rem;text-align:center;">
+  <h2>Gagal memuat halaman status</h2>
+  <p style="color:#94a3b8;margin-top:0.5rem;">Terjadi kesalahan saat memeriksa kesehatan sistem.</p>
+  <p style="margin-top:1.5rem;"><a href="/" style="color:#3b82f6;">Kembali ke Beranda</a></p>
+</body>
+</html>`);
     }
   }
 };
@@ -10269,7 +13035,7 @@ async function clearPendingAction(confirmationId) {
 
 // src/server/telegram/telegram-commands.ts
 var storageProvider3 = new CatboxStorageProvider();
-function escapeHtml4(str) {
+function escapeHtml5(str) {
   if (!str) return "";
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
@@ -10321,10 +13087,13 @@ async function handleTelegramCommand(payload) {
       await handleConfirm(chatId, fromId, username, args[0]);
       break;
     case "/killswitch_on":
-      await promptKillswitch(chatId, fromId, true);
+      await promptKillswitch(chatId, fromId, "upload_only");
+      break;
+    case "/killswitch_lockdown":
+      await promptKillswitch(chatId, fromId, "full_lockdown");
       break;
     case "/killswitch_off":
-      await promptKillswitch(chatId, fromId, false);
+      await promptKillswitch(chatId, fromId, "off");
       break;
     case "/hapus_permanen":
       await promptHapusPermanen(chatId, fromId, args[0]);
@@ -10357,8 +13126,9 @@ async function handleHelp(chatId) {
     "\u2022 /sessions \u2014 Daftar sesi admin web yang aktif saat ini",
     "",
     "<b>Perintah Kontrol (Memerlukan Konfirmasi):</b>",
-    "\u2022 /killswitch_on \u2014 Aktifkan Kill Switch (tutup unggahan, 503)",
-    "\u2022 /killswitch_off \u2014 Nonaktifkan Kill Switch (buka unggahan)",
+    "\u2022 /killswitch_on \u2014 Tutup unggahan saja (upload 503, share link tetap aktif)",
+    "\u2022 /killswitch_lockdown \u2014 Lockdown Total (upload &amp; share link ditutup 503)",
+    "\u2022 /killswitch_off \u2014 Nonaktifkan Kill Switch (seluruh layanan normal)",
     "\u2022 /hapus_permanen &lt;id&gt; \u2014 Hapus berkas dari Catbox &amp; DB",
     "\u2022 /revoke_all_sesi \u2014 Cabut seluruh sesi admin web aktif",
     "\u2022 /bulk_cleanup &lt;hari&gt; &lt;maxViews&gt; \u2014 Pembersihan massal berkas usang",
@@ -10369,15 +13139,15 @@ async function handleHelp(chatId) {
   await sendTelegramMessage(chatId, msg);
 }
 async function handleStatus(chatId) {
-  const [isMaintenance, redisHealth, catboxHealth, todaySummary] = await Promise.all([
-    isMaintenanceModeActive(),
+  const [maintenanceLevel, redisHealth, catboxHealth, todaySummary] = await Promise.all([
+    getMaintenanceLevel(),
     checkRedisHealth(),
     checkCatboxHealth(),
     analyticsRepository.getDailySummary(getTodayDateString())
   ]);
   const redisStatus = redisHealth.connected ? `\u{1F7E2} Terhubung (${redisHealth.latencyMs || 0} ms)` : redisHealth.configured ? "\u{1F534} Gagal Terhubung" : "\u26AA In-Memory (Belum Dikonfigurasi)";
   const catboxStatus = catboxHealth.available ? `\u{1F7E2} Aktif (${catboxHealth.latencyMs || 0} ms)` : "\u{1F534} Gangguan / Tidak Tersedia";
-  const maintStatus = isMaintenance ? "\u{1F534} <b>AKTIF</b> (Unggahan Ditutup \u2014 503)" : "\u{1F7E2} <b>Layanan Normal</b> (Unggahan Terbuka)";
+  const maintStatus = maintenanceLevel === "full_lockdown" ? "\u{1F534} <b>LOCKDOWN TOTAL</b> (Upload &amp; Share Ditutup \u2014 503)" : maintenanceLevel === "upload_only" ? "\u{1F7E1} <b>TUTUP UPLOAD</b> (Upload 503, Share Link Tetap Aktif)" : "\u{1F7E2} <b>Layanan Normal</b> (Unggahan &amp; Berbagi Terbuka)";
   const msg = [
     "\u{1F4CA} <b>Status Sistem AirShare Pro</b>",
     "",
@@ -10416,7 +13186,7 @@ async function handleStats(chatId) {
   if (topFiles.length > 0) {
     topFilesText = topFiles.map((f, idx) => {
       const name = nameMap.get(f.id) || f.id;
-      return `${idx + 1}. <code>${escapeHtml4(name.slice(0, 30))}</code> \u2014 <b>${f.views} views</b>`;
+      return `${idx + 1}. <code>${escapeHtml5(name.slice(0, 30))}</code> \u2014 <b>${f.views} views</b>`;
     }).join("\n");
   } else {
     topFilesText = "Belum ada data file populer.";
@@ -10449,7 +13219,7 @@ async function handleLog(chatId) {
       minute: "2-digit",
       second: "2-digit"
     });
-    return `\u2022 [${timeStr}] <b>${escapeHtml4(log.type)}</b>: ${escapeHtml4(log.detail)} (IP: <code>${escapeHtml4(log.ip)}</code>)`;
+    return `\u2022 [${timeStr}] <b>${escapeHtml5(log.type)}</b>: ${escapeHtml5(log.detail)} (IP: <code>${escapeHtml5(log.ip)}</code>)`;
   });
   const msg = [
     "\u{1F4CB} <b>10 Entri Audit Log Terbaru</b>",
@@ -10471,7 +13241,7 @@ async function handleSessions(chatId) {
       hour: "2-digit",
       minute: "2-digit"
     });
-    return `${idx + 1}. Token: <code>${escapeHtml4(s.tokenPreview)}</code> | IP: <code>${escapeHtml4(s.ip)}</code> | Login: ${loginStr}`;
+    return `${idx + 1}. Token: <code>${escapeHtml5(s.tokenPreview)}</code> | IP: <code>${escapeHtml5(s.ip)}</code> | Login: ${loginStr}`;
   });
   const msg = [
     `\u{1F510} <b>Daftar Sesi Admin Web Aktif (${sessions.length})</b>`,
@@ -10482,23 +13252,38 @@ async function handleSessions(chatId) {
   ].join("\n");
   await sendTelegramMessage(chatId, msg);
 }
-async function promptKillswitch(chatId, userId, enable) {
-  const current = await isMaintenanceModeActive();
-  if (current === enable) {
+async function promptKillswitch(chatId, userId, targetLevel) {
+  const current = await getMaintenanceLevel();
+  if (current === targetLevel) {
+    const currentName = targetLevel === "full_lockdown" ? "LOCKDOWN TOTAL" : targetLevel === "upload_only" ? "TUTUP UPLOAD" : "NORMAL";
     await sendTelegramMessage(
       chatId,
-      `\u2139\uFE0F Kill switch sudah dalam status ${enable ? "AKTIF" : "NONAKTIF"}. Tidak ada perubahan yang diperlukan.`
+      `\u2139\uFE0F Kill switch sudah dalam status <b>${currentName}</b>. Tidak ada perubahan yang diperlukan.`
     );
     return;
   }
-  const actionType = enable ? "killswitch_on" : "killswitch_off";
-  const desc = enable ? "Mengaktifkan Kill Switch (tutup seluruh unggahan baru dengan HTTP 503)" : "Menonaktifkan Kill Switch (membuka kembali layanan unggahan normal)";
+  let actionType;
+  let title;
+  let desc;
+  if (targetLevel === "full_lockdown") {
+    actionType = "killswitch_lockdown";
+    title = "AKTIVASI LOCKDOWN TOTAL";
+    desc = "Mengaktifkan Lockdown Total (tutup seluruh unggahan baru DAN akses tautan share publik dengan HTTP 503)";
+  } else if (targetLevel === "upload_only") {
+    actionType = "killswitch_on";
+    title = "AKTIVASI TUTUP UNGGAHAN";
+    desc = "Mengaktifkan Tutup Unggahan (tutup seluruh unggahan baru dengan HTTP 503, tautan share yang ada tetap aktif)";
+  } else {
+    actionType = "killswitch_off";
+    title = "DEAKTIVASI KILL SWITCH (LAYANAN NORMAL)";
+    desc = "Menonaktifkan Kill Switch (membuka kembali seluruh layanan unggahan dan akses berkas secara normal)";
+  }
   const confirmationId = await createPendingAction(userId, {
     type: actionType,
     description: desc
   });
   const msg = [
-    `\u26A0\uFE0F <b>KONFIRMASI ${enable ? "AKTIVASI" : "DEAKTIVASI"} KILL SWITCH</b>`,
+    `\u26A0\uFE0F <b>KONFIRMASI ${title}</b>`,
     "",
     `Aksi yang akan dilakukan:`,
     `<b>${desc}</b>`,
@@ -10538,7 +13323,7 @@ async function promptHapusPermanen(chatId, userId, fileId) {
     }
   }
   if (!media) {
-    await sendTelegramMessage(chatId, `\u274C Berkas dengan ID <code>${escapeHtml4(cleanId)}</code> tidak ditemukan di repositori.`);
+    await sendTelegramMessage(chatId, `\u274C Berkas dengan ID <code>${escapeHtml5(cleanId)}</code> tidak ditemukan di repositori.`);
     return;
   }
   const confirmationId = await createPendingAction(userId, {
@@ -10555,10 +13340,10 @@ async function promptHapusPermanen(chatId, userId, fileId) {
   const msg = [
     "\u26A0\uFE0F <b>KONFIRMASI HAPUS PERMANEN BERKAS</b>",
     "",
-    `\u2022 Nama Berkas: <code>${escapeHtml4(media.name)}</code>`,
+    `\u2022 Nama Berkas: <code>${escapeHtml5(media.name)}</code>`,
     `\u2022 Ukuran: <b>${media.formattedSize}</b>`,
-    `\u2022 ID: <code>${escapeHtml4(media.id)}</code>`,
-    `\u2022 Tautan: ${escapeHtml4(media.shareUrl)}`,
+    `\u2022 ID: <code>${escapeHtml5(media.id)}</code>`,
+    `\u2022 Tautan: ${escapeHtml5(media.shareUrl)}`,
     "",
     "<i>Berkas akan dihapus secara permanen dari server Catbox dan database. Aksi ini tidak dapat dibatalkan.</i>",
     "",
@@ -10626,7 +13411,7 @@ async function promptBulkCleanup(chatId, userId, daysArg, viewsArg) {
     );
     return;
   }
-  const sampleNames = candidates.slice(0, 3).map((c) => `\u2022 <code>${escapeHtml4(c.name.slice(0, 35))}</code> (${formatBytes5(c.size)})`).join("\n");
+  const sampleNames = candidates.slice(0, 3).map((c) => `\u2022 <code>${escapeHtml5(c.name.slice(0, 35))}</code> (${formatBytes5(c.size)})`).join("\n");
   const confirmationId = await createPendingAction(userId, {
     type: "bulk_cleanup",
     description: `Pembersihan massal (${days} hari, views <= ${maxViews})`,
@@ -10672,7 +13457,7 @@ async function promptAnnouncement(chatId, userId, text) {
     "\u{1F4E2} <b>PRATINJAU BANNER PENGUMUMAN</b>",
     "",
     "Pesan yang akan ditampilkan ke publik:",
-    `<blockquote>${escapeHtml4(cleanText)}</blockquote>`,
+    `<blockquote>${escapeHtml5(cleanText)}</blockquote>`,
     "",
     "Tipe: <b>Info (Biru)</b> | Status: <b>Aktif</b>",
     "",
@@ -10710,30 +13495,44 @@ async function handleConfirm(chatId, userId, username, confirmationId) {
   try {
     switch (pending.type) {
       case "killswitch_on": {
-        await setMaintenanceMode(true);
+        await setMaintenanceLevel("upload_only");
         await auditLogRepository.recordAction({
           type: "telegram_killswitch_toggle",
-          detail: `Kill Switch (Maintenance Mode) DIAKTIFKAN oleh Telegram user ${adminTag}`,
+          detail: `Kill Switch diubah ke TUTUP UPLOAD SAJA oleh Telegram user ${adminTag}`,
           ip: "telegram-api"
         });
-        await alertMaintenanceModeChanged(true, "telegram", adminTag);
+        await alertMaintenanceModeChanged("upload_only", "telegram", adminTag);
         await sendTelegramMessage(
           chatId,
-          "\u2705 <b>Kill Switch BERHASIL DIAKTIFKAN.</b>\nSeluruh unggahan baru kini ditolak dengan status HTTP 503 Maintenance Mode."
+          "\u2705 <b>Kill Switch BERHASIL DIAKTIFKAN (TUTUP UPLOAD).</b>\nSeluruh unggahan baru kini ditolak (503). Tautan share yang sudah ada tetap aktif."
+        );
+        break;
+      }
+      case "killswitch_lockdown": {
+        await setMaintenanceLevel("full_lockdown");
+        await auditLogRepository.recordAction({
+          type: "telegram_killswitch_toggle",
+          detail: `Kill Switch diubah ke LOCKDOWN TOTAL oleh Telegram user ${adminTag}`,
+          ip: "telegram-api"
+        });
+        await alertMaintenanceModeChanged("full_lockdown", "telegram", adminTag);
+        await sendTelegramMessage(
+          chatId,
+          "\u2705 <b>Kill Switch BERHASIL DIAKTIFKAN (LOCKDOWN TOTAL).</b>\nSeluruh unggahan baru DAN akses tautan share publik kini diblokir (503)."
         );
         break;
       }
       case "killswitch_off": {
-        await setMaintenanceMode(false);
+        await setMaintenanceLevel("off");
         await auditLogRepository.recordAction({
           type: "telegram_killswitch_toggle",
-          detail: `Kill Switch (Maintenance Mode) DINONAKTIFKAN oleh Telegram user ${adminTag}`,
+          detail: `Kill Switch DINONAKTIFKAN oleh Telegram user ${adminTag}`,
           ip: "telegram-api"
         });
-        await alertMaintenanceModeChanged(false, "telegram", adminTag);
+        await alertMaintenanceModeChanged("off", "telegram", adminTag);
         await sendTelegramMessage(
           chatId,
-          "\u2705 <b>Kill Switch BERHASIL DINONAKTIFKAN.</b>\nLayanan unggahan telah dibuka kembali secara normal."
+          "\u2705 <b>Kill Switch BERHASIL DINONAKTIFKAN.</b>\nSeluruh layanan unggahan dan akses tautan telah dibuka kembali secara normal."
         );
         break;
       }
@@ -10751,7 +13550,7 @@ async function handleConfirm(chatId, userId, username, confirmationId) {
         });
         await sendTelegramMessage(
           chatId,
-          `\u2705 Berkas <code>${escapeHtml4(payload.name)}</code> (${payload.id}) telah <b>berhasil dihapus secara permanen</b> dari Catbox dan repositori.`
+          `\u2705 Berkas <code>${escapeHtml5(payload.name)}</code> (${payload.id}) telah <b>berhasil dihapus secara permanen</b> dari Catbox dan repositori.`
         );
         break;
       }
@@ -10809,7 +13608,8 @@ async function handleConfirm(chatId, userId, username, confirmationId) {
           message,
           type: "info",
           enabled: true,
-          updatedAt: Date.now()
+          updatedAt: Date.now(),
+          expiresAt: null
         });
         await auditLogRepository.recordAction({
           type: "telegram_announcement_update",
@@ -10848,20 +13648,23 @@ var telegramWebhookController = {
       res.status(200).json({ ok: false, message: "Telegram bot integration is not enabled." });
       return;
     }
-    if (config2.webhookSecret) {
-      const receivedSecret = req.headers["x-telegram-bot-api-secret-token"];
-      if (!receivedSecret || receivedSecret !== config2.webhookSecret) {
-        console.warn("[TELEGRAM_WEBHOOK_AUTH] Webhook request ditolak: Secret token tidak cocok.");
-        res.status(401).json({ error: "Unauthorized webhook secret token" });
-        return;
-      }
+    const receivedSecret = req.headers["x-telegram-bot-api-secret-token"];
+    if (!receivedSecret || receivedSecret !== config2.webhookSecret) {
+      console.warn("[TELEGRAM_WEBHOOK_AUTH] Webhook request ditolak: Secret token tidak cocok.");
+      res.status(401).json({ error: "Unauthorized webhook secret token" });
+      return;
     }
-    res.status(200).json({ ok: true });
     try {
       const update = req.body;
-      if (!update || typeof update !== "object") return;
+      if (!update || typeof update !== "object") {
+        res.status(200).json({ ok: true });
+        return;
+      }
       const message = update.message || update.edited_message;
-      if (!message || !message.from || !message.chat) return;
+      if (!message || !message.from || !message.chat) {
+        res.status(200).json({ ok: true });
+        return;
+      }
       await handleTelegramCommand({
         messageId: message.message_id,
         from: {
@@ -10877,8 +13680,10 @@ var telegramWebhookController = {
         text: message.text,
         date: message.date
       });
+      res.status(200).json({ ok: true });
     } catch (err) {
-      console.error("[TELEGRAM_WEBHOOK_ERROR] Kesalahan saat memproses webhook:", err);
+      console.error("[TELEGRAM_WEBHOOK_PROCESSING_ERROR]", err);
+      res.status(200).json({ ok: true });
     }
   }
 };
@@ -10887,7 +13692,6 @@ var telegramWebhookController = {
 function createExpressApp() {
   const app2 = express();
   const isDev = process.env.NODE_ENV !== "production";
-  app2.set("trust proxy", 1);
   app2.use(cookieParser());
   app2.use(sessionMiddleware);
   app2.use(requestLoggerMiddleware);
@@ -10928,8 +13732,8 @@ function createExpressApp() {
     }
     next();
   });
-  app2.use(express.json({ limit: "10mb" }));
-  app2.use(express.urlencoded({ extended: true, limit: "10mb" }));
+  app2.use(express.json({ limit: "4mb" }));
+  app2.use(express.urlencoded({ extended: true, limit: "4mb" }));
   app2.use((err, req, res, next) => {
     if (err instanceof SyntaxError && "status" in err && err.status === 400 && "body" in err) {
       const errorResp = {
@@ -10946,31 +13750,41 @@ function createExpressApp() {
   });
   const healthHandler = async (req, res) => {
     res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-    const [redisHealth, catboxHealth] = await Promise.all([
-      checkRedisHealth(),
-      checkCatboxHealth()
-    ]);
-    const isDegraded = redisHealth.configured && !redisHealth.connected;
-    if (isDegraded) {
-      alertRedisFailure("Koneksi ke cluster Redis terputus atau melebihi batas waktu (timeout)").catch(() => {
+    try {
+      const [redisHealth, catboxHealth] = await Promise.all([
+        checkRedisHealth(),
+        checkCatboxHealth()
+      ]);
+      const isDegraded = redisHealth.configured && !redisHealth.connected;
+      if (isDegraded) {
+        alertRedisFailure("Koneksi ke cluster Redis terputus atau melebihi batas waktu (timeout)").catch(() => {
+        });
+      }
+      res.json({
+        status: isDegraded ? "degraded" : "ok",
+        service: "AirShare Pro API",
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        storageProvider: "catbox",
+        hasUserhash: Boolean(process.env.CATBOX_USERHASH?.trim()),
+        redis: {
+          configured: redisHealth.configured,
+          connected: redisHealth.connected,
+          latencyMs: redisHealth.latencyMs
+        },
+        catbox: {
+          available: catboxHealth.available,
+          latencyMs: catboxHealth.latencyMs
+        }
+      });
+    } catch (err) {
+      console.error("[HEALTH_CHECK_ERROR]", err);
+      res.status(500).json({
+        status: "error",
+        service: "AirShare Pro API",
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        message: "Gagal menjalankan pemeriksaan kesehatan sistem."
       });
     }
-    res.json({
-      status: isDegraded ? "degraded" : "ok",
-      service: "AirShare Pro API",
-      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      storageProvider: "catbox",
-      hasUserhash: Boolean(process.env.CATBOX_USERHASH?.trim()),
-      redis: {
-        configured: redisHealth.configured,
-        connected: redisHealth.connected,
-        latencyMs: redisHealth.latencyMs
-      },
-      catbox: {
-        available: catboxHealth.available,
-        latencyMs: catboxHealth.latencyMs
-      }
-    });
   };
   const healthMethodNotAllowed = (req, res) => {
     res.setHeader("Allow", "GET");
@@ -11001,17 +13815,44 @@ function createExpressApp() {
     });
   });
   app2.get("/robots.txt", (req, res) => {
-    let content = `User-agent: *
+    const protocol = req.headers["x-forwarded-proto"] || req.protocol || "https";
+    const host = req.get("host") || "airshare-pro.vercel.app";
+    const baseUrl = `${protocol}://${host}`;
+    const content = `User-agent: *
 Allow: /
+Allow: /status
 Disallow: /api/
-Disallow: /s/
 Disallow: /admin/
+Disallow: /admin
+Disallow: /s/
 
-Sitemap: https://airshare-pro.vercel.app/sitemap.xml
+Sitemap: ${baseUrl}/sitemap.xml
 `;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Cache-Control", "public, max-age=3600");
     res.send(content);
+  });
+  app2.get("/sitemap.xml", (req, res) => {
+    const protocol = req.headers["x-forwarded-proto"] || req.protocol || "https";
+    const host = req.get("host") || "airshare-pro.vercel.app";
+    const baseUrl = `${protocol}://${host}`;
+    const sitemapContent = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>${baseUrl}/</loc>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>${baseUrl}/status</loc>
+    <changefreq>hourly</changefreq>
+    <priority>0.8</priority>
+  </url>
+</urlset>
+`;
+    res.setHeader("Content-Type", "application/xml; charset=utf-8");
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.send(sitemapContent);
   });
   const adminConfig = getAdminConfig();
   if (adminConfig.enabled) {
@@ -11124,22 +13965,27 @@ Sitemap: https://airshare-pro.vercel.app/sitemap.xml
 </html>`);
     });
   }
+  app2.get(["/status", "/status/"], (req, res) => {
+    return statusController.renderStatusPage(req, res);
+  });
   app2.get(["/api/system-status", "/system-status"], standardRateLimiter, async (req, res) => {
     res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-    const [maintenanceMode, rawAnnouncement, featureFlags] = await Promise.all([
-      isMaintenanceModeActive(),
-      getAnnouncement(),
-      getFeatureFlags()
-    ]);
-    const activeAnnouncement = rawAnnouncement && rawAnnouncement.enabled ? rawAnnouncement : null;
-    res.json({
-      success: true,
-      data: {
-        maintenanceMode,
-        announcement: activeAnnouncement,
-        featureFlags
-      }
-    });
+    try {
+      const data = await getSystemStatusData();
+      res.json({
+        success: true,
+        data
+      });
+    } catch (err) {
+      console.error("[SYSTEM_STATUS_ERROR]", err);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: "SYSTEM_STATUS_ERROR",
+          message: "Gagal memuat status sistem."
+        }
+      });
+    }
   });
   app2.get(["/s", "/s/"], (req, res) => {
     res.redirect("/");
@@ -11235,6 +14081,7 @@ function handler(req, res) {
     } else {
       req.url = normalizedPath;
     }
+    req.originalUrl = req.url;
   }
   return app_default(req, res);
 }
