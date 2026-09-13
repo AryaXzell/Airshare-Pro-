@@ -9,6 +9,12 @@ import {
 } from '../../../shared/text-language-map';
 import { getShareBaseCss } from '../styles/share-base.css';
 import { getShareClientScripts } from '../scripts/share-players.client';
+import {
+  GOOGLE_FONTS_TAGS,
+  THEME_HEAD_SCRIPT,
+  THEME_BODY_SCRIPT,
+  THEME_STORAGE_LISTENER_SCRIPT,
+} from '../styles/share-theme.css';
 
 function splitHighlightedLines(html: string): string[] {
   const lines = html.split('\n');
@@ -412,6 +418,8 @@ export async function renderSuccessHtml(
   return `<!DOCTYPE html>
 <html lang="id">
 <head>
+  ${THEME_HEAD_SCRIPT}
+  ${GOOGLE_FONTS_TAGS}
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${safeTitle} — AirShare Pro</title>
@@ -434,6 +442,7 @@ ${getShareBaseCss()}
   </style>
 </head>
 <body>
+  ${THEME_BODY_SCRIPT}
   <div class="card ${isPdf ? 'card-pdf' : ''} ${isVideo ? 'card-video' : ''} ${hasCodePreview ? 'card-code' : ''}">
     <div class="brand">
       <span class="brand-title"><span class="brand-dot"></span>AirShare Pro</span>
@@ -489,6 +498,7 @@ ${getShareBaseCss()}
   </div>
 
   <script>
+${THEME_STORAGE_LISTENER_SCRIPT}
 ${getShareClientScripts()}
   </script>
 </body>

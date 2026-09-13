@@ -224,44 +224,25 @@
   transform: scale(0.98);
 }
 
-/* Subtle Floating Menu (Theme Selector, Dropdowns) - Light localized blur accent */
+/* Subtle Floating Menu (Theme Selector, Dropdowns) - Crisp solid elevated surface */
 .clean-floating-menu {
   background-color: var(--surface-elevated);
   border: 1px solid var(--border-subtle);
   box-shadow: var(--shadow-elevated);
 }
 
-@supports (backdrop-filter: blur(8px)) or (-webkit-backdrop-filter: blur(8px)) {
-  .clean-floating-menu {
-    background-color: var(--surface-translucent);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-  }
-}
-
-/* Modal and Sheet Backdrops (Restrained, low GPU cost) */
-/* Static blur layer: instantly rendered on mount without opacity transitions to avoid heavy per-frame GPU blur recalculations */
+/* Modal and Sheet Backdrops (Zero GPU overhead, solid dark overlay) */
 .clean-backdrop-blur {
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  background-color: transparent;
+  display: none;
 }
 
-/* Animated dark color overlay: smooth opacity fade on solid background only */
+/* Animated dark color overlay: smooth opacity fade on solid background */
 .clean-backdrop-overlay {
-  background-color: rgba(0, 0, 0, 0.55);
+  background-color: rgba(0, 0, 0, 0.60);
 }
 
 .clean-backdrop {
   background-color: rgba(0, 0, 0, 0.65);
-}
-
-@supports (backdrop-filter: blur(8px)) or (-webkit-backdrop-filter: blur(8px)) {
-  .clean-backdrop {
-    background-color: rgba(0, 0, 0, 0.55);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-  }
 }
 
 /* Media Card Performance Optimization for Large Collections */
@@ -382,15 +363,7 @@
     scroll-behavior: auto !important;
   }
 
-  .clean-backdrop-blur,
   .clean-backdrop {
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
     background-color: rgba(0, 0, 0, 0.65);
-  }
-
-  .clean-floating-menu {
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
   }
 }

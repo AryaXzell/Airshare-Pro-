@@ -62,6 +62,10 @@
     {
       "source": "/sitemap.xml",
       "destination": "/api?__vpath=/sitemap.xml"
+    },
+    {
+      "source": "/((?!sitemap\\.xml|favicon\\.ico|manifest\\.json|robots\\.txt|assets/|og-image\\.png|icon\\.svg|apple-touch-icon\\.png|.*\\.svg|.*\\.png|.*\\.jpg|.*\\.jpeg|.*\\.webp|.*\\.ico|.*\\.woff2?|.*\\.js|.*\\.css).*)",
+      "destination": "/index.html"
     }
   ]
 }

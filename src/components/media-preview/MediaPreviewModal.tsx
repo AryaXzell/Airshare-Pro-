@@ -99,9 +99,6 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
           aria-modal="true"
           aria-label={`Pratinjau media ${item.name}`}
         >
-          {/* Static Blur Layer (Option A: instant blur mount without animated opacity to eliminate GPU jank) */}
-          <div className="fixed inset-0 clean-backdrop-blur pointer-events-none" />
-
           {/* Animated Dark Overlay */}
           <motion.div
             initial={{ opacity: 0 }}

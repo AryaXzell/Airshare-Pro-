@@ -3,6 +3,7 @@ import { analyticsRepository, getTodayDateString } from '../repository/analytics
 import { checkCatboxHealth } from '../storage/catbox-health-check';
 import { checkRedisHealth } from '../storage/redis-client';
 import { DailyStats, WeeklyTrendItem } from '../../types';
+import { getAiConfig, setAiConfig } from '../security/system-config';
 
 const configuredModel = process.env.GEMINI_MODEL?.trim();
 // Default to gemini-2.5-flash for stability and high responsiveness
@@ -93,17 +94,35 @@ export async function getAiRecommendations(req: Request, res: Response): Promise
   const todayStr = getTodayDateString();
 
   try {
-    const [todayStats, weeklyTrend, topFiles, catboxHealth, redisHealth, totalItems] = await Promise.all([
+    const [todayStats, weeklyTrend, topFiles, catboxHealth, redisHealth, totalItems, aiConfig] = await Promise.all([
       analyticsRepository.getDailySummary(todayStr),
       analyticsRepository.getWeeklyTrend(),
       analyticsRepository.getTopFiles(10),
       checkCatboxHealth(),
       checkRedisHealth(),
       analyticsRepository.getTotalItemsEver(),
+      getAiConfig(),
     ]);
 
     const heuristicRecs = generateRecommendations(todayStats, weeklyTrend, topFiles);
     const fallbackSummary = `Sistem mencatat total **${todayStats.uploads} unggahan** (${todayStats.formattedBytes}) dengan **${todayStats.totalViews} kunjungan** pada hari ini. Status penyimpanan Catbox saat ini: \`${catboxHealth.available ? 'TERSEDIA' : 'TERGANGGU'}\`.`;
+
+    // PENTING: Gemini HANYA dipanggil jika admin SECARA EKSPLISIT
+    // mengaktifkan sakelar AI di dashboard. Ini adalah penegakan di
+    // SISI SERVER, tidak bergantung sama sekali pada apa yang
+    // dikirim/disembunyikan oleh klien.
+    if (!aiConfig.enabled) {
+      res.json({
+        success: true,
+        isAi: false,
+        model: 'heuristic-engine',
+        summary: fallbackSummary,
+        recommendations: heuristicRecs,
+        generatedAt: Date.now(),
+        error: 'Integrasi Gemini AI dinonaktifkan oleh admin. Menampilkan hasil analisis heuristik bawaan. Aktifkan melalui sakelar "Ringkasan Gemini AI" pada tab Kontrol Sistem untuk mengaktifkan analisis real-time.',
+      });
+      return;
+    }
 
     const apiKey = process.env.GEMINI_API_KEY;
 
@@ -161,7 +180,7 @@ Hasilkan respons JSON valid dengan struktur:
 }
 Pastikan rekomendasi berfokus pada optimasi bandwidth, proteksi kuota penyimpanan, retensi data, dan keamanan operasional.`;
 
-      let usedModel = GEMINI_MODEL_NAME;
+      let usedModel = (aiConfig.model && aiConfig.model.trim()) || GEMINI_MODEL_NAME;
       let response: any;
       try {
         response = await ai.models.generateContent({
@@ -258,6 +277,175 @@ Pastikan rekomendasi berfokus pada optimasi bandwidth, proteksi kuota penyimpana
     res.status(500).json({
       success: false,
       error: 'Gagal menghasilkan analisis rekomendasi AI. Silakan coba beberapa saat lagi.',
+    });
+  }
+}
+
+/**
+ * POST /admin/api/ai-config
+ * Menyimpan pengaturan aktif/nonaktif dan model Gemini AI yang dipilih admin.
+ */
+export async function updateAiConfig(req: Request, res: Response): Promise<void> {
+  try {
+    const { enabled, model } = req.body || {};
+
+    if (typeof enabled !== 'boolean') {
+      res.status(400).json({ success: false, error: { code: 'INVALID_INPUT', message: 'Parameter enabled harus berupa boolean.' } });
+      return;
+    }
+    if (model !== undefined && (typeof model !== 'string' || model.trim().length === 0)) {
+      res.status(400).json({ success: false, error: { code: 'INVALID_INPUT', message: 'Parameter model tidak valid.' } });
+      return;
+    }
+
+    await setAiConfig({
+      enabled,
+      ...(model ? { model: model.trim() } : {}),
+    });
+
+    const updated = await getAiConfig();
+    res.json({
+      success: true,
+      aiConfig: updated,
+      message: updated.enabled
+        ? `Ringkasan Gemini AI diaktifkan dengan model "${updated.model}".`
+        : 'Ringkasan Gemini AI dinonaktifkan. Sistem akan menggunakan analisis heuristik.',
+    });
+  } catch (err: any) {
+    console.error('[UPDATE_AI_CONFIG_ERROR]', err);
+    res.status(500).json({
+      success: false,
+      error: { code: 'UPDATE_AI_CONFIG_FAILED', message: err?.message || 'Gagal menyimpan pengaturan AI.' },
+    });
+  }
+}
+
+/**
+ * GET /admin/api/ai-models
+ * Mengambil daftar model Gemini yang benar-benar tersedia untuk API
+ * key yang dikonfigurasi saat ini, LANGSUNG dari Google API (bukan
+ * daftar statis), difilter hanya yang mendukung generateContent
+ * (relevan untuk fitur ringkasan teks ini).
+ */
+export async function listAiModels(req: Request, res: Response): Promise<void> {
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || apiKey.trim().length === 0) {
+      res.json({
+        success: false,
+        error: { code: 'NO_API_KEY', message: 'GEMINI_API_KEY belum dikonfigurasi di environment hosting.' },
+        models: [],
+      });
+      return;
+    }
+
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
+
+    const models: { name: string; displayName: string }[] = [];
+    const pager = await ai.models.list();
+    let page = pager.page;
+    while (page && page.length > 0) {
+      for (const m of page) {
+        const supportsGenerateContent =
+          !m.supportedActions || m.supportedActions.includes('generateContent');
+        if (supportsGenerateContent && m.name) {
+          const cleanName = m.name.startsWith('models/') ? m.name.slice('models/'.length) : m.name;
+          // Hanya sertakan varian Gemini (hindari model embedding/imagen/lainnya yang tidak relevan untuk ringkasan teks)
+          if (cleanName.toLowerCase().includes('gemini')) {
+            models.push({
+              name: cleanName,
+              displayName: m.displayName || cleanName,
+            });
+          }
+        }
+      }
+      page = pager.hasNextPage() ? await pager.nextPage() : [];
+    }
+
+    if (models.length === 0) {
+      res.json({
+        success: false,
+        error: { code: 'NO_MODELS_FOUND', message: 'Tidak ada model Gemini yang mendukung generateContent ditemukan untuk API key ini.' },
+        models: [],
+      });
+      return;
+    }
+
+    res.json({ success: true, models });
+  } catch (err: any) {
+    console.error('[LIST_AI_MODELS_ERROR]', err);
+    res.status(200).json({
+      success: false,
+      error: { code: 'LIST_MODELS_FAILED', message: `Gagal mengambil daftar model: ${err?.message || 'Kesalahan tidak diketahui.'} Periksa apakah GEMINI_API_KEY valid.` },
+      models: [],
+    });
+  }
+}
+
+/**
+ * POST /admin/api/ai-test-connection
+ * Menguji konektivitas ke Gemini API dengan permintaan minimal,
+ * TIDAK bergantung pada sakelar enabled (agar admin dapat menguji
+ * koneksi SEBELUM mengaktifkan fitur secara permanen).
+ */
+export async function testAiConnection(req: Request, res: Response): Promise<void> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey.trim().length === 0) {
+    res.json({
+      success: false,
+      error: { code: 'NO_API_KEY', message: 'GEMINI_API_KEY belum dikonfigurasi di environment hosting.' },
+    });
+    return;
+  }
+
+  const modelToTest = (req.body?.model && String(req.body.model).trim()) || GEMINI_MODEL_NAME;
+  const startTime = Date.now();
+
+  try {
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({
+      apiKey: apiKey.trim(),
+      httpOptions: { timeout: 15000 },
+    });
+
+    const response = await ai.models.generateContent({
+      model: modelToTest,
+      contents: 'Balas dengan tepat satu kata: OK',
+    });
+
+    const latencyMs = Date.now() - startTime;
+    const responseText = response?.text?.trim() || '';
+
+    res.json({
+      success: true,
+      connected: true,
+      model: modelToTest,
+      latencyMs,
+      message: `Koneksi berhasil ke model "${modelToTest}" (${latencyMs}ms). Respons diterima: "${responseText.slice(0, 50)}"`,
+    });
+  } catch (err: any) {
+    const latencyMs = Date.now() - startTime;
+    let friendlyMessage = err?.message || 'Kesalahan tidak diketahui.';
+    try {
+      if (typeof friendlyMessage === 'string' && friendlyMessage.trim().startsWith('{')) {
+        const parsed = JSON.parse(friendlyMessage);
+        if (parsed?.error?.message) {
+          friendlyMessage = parsed.error.message;
+        }
+      }
+    } catch (_) {}
+
+    if (friendlyMessage.includes('quota') || friendlyMessage.includes('RESOURCE_EXHAUSTED') || friendlyMessage.includes('429')) {
+      friendlyMessage = `Kuota Gemini API terlampaui (429: Quota Exceeded). Batas permintaan model "${modelToTest}" pada API Key Anda telah habis. Silakan pilih model lain di dropdown (misal gemini-2.5-flash atau gemini-2.0-flash) atau tunggu reset kuota Google API.`;
+    }
+
+    res.json({
+      success: false,
+      connected: false,
+      model: modelToTest,
+      latencyMs,
+      error: { code: 'CONNECTION_TEST_FAILED', message: friendlyMessage },
     });
   }
 }

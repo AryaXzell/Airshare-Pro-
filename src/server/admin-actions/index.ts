@@ -5,3 +5,4 @@ export * from './sync.actions';
 export * from './config.actions';
 export * from './sessions.actions';
 export * from './ai.actions';
+export * from './notifications.actions';

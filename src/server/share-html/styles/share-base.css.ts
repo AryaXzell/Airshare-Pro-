@@ -1,21 +1,25 @@
+import { THEME_CSS_VARIABLES } from './share-theme.css';
+
 export function getShareBaseCss(): string {
   return `
+    ${THEME_CSS_VARIABLES}
+
     :root {
-      --bg: #09090b;
-      --card: #18181b;
-      --card-gradient: linear-gradient(180deg, rgba(24, 24, 27, 0.95) 0%, rgba(18, 18, 20, 0.98) 100%);
-      --text: #f4f4f5;
-      --muted: #a1a1aa;
-      --border: #27272a;
-      --border-accent: rgba(59, 130, 246, 0.2);
-      --accent: #2563eb;
-      --accent-hover: #1d4ed8;
-      --surface: #27272a;
-      --surface-subtle: #202023;
+      --bg: var(--bg-primary);
+      --card: var(--surface-primary);
+      --card-gradient: linear-gradient(180deg, var(--surface-primary) 0%, var(--surface-elevated) 100%);
+      --text: var(--text-main);
+      --muted: var(--text-muted);
+      --border: var(--border-subtle);
+      --border-accent: var(--border-focus);
+      --accent: var(--accent);
+      --accent-hover: var(--accent-hover);
+      --surface: var(--surface-secondary);
+      --surface-subtle: var(--surface-secondary);
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background-color: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
-    .card { background: var(--card-gradient); border: 1px solid var(--border); border-radius: 1.5rem; padding: 1.75rem; max-width: 480px; width: 100%; box-shadow: 0 16px 40px -10px rgba(0,0,0,0.65); backdrop-filter: blur(16px); transition: max-width 0.2s ease; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-color: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem; transition: background-color 0.25s ease, color 0.25s ease; }
+    .card { background: var(--card-gradient); border: 1px solid var(--border); border-radius: 1.5rem; padding: 1.75rem; max-width: 480px; width: 100%; box-shadow: var(--shadow-elevated, 0 16px 40px -10px rgba(0,0,0,0.65)); backdrop-filter: blur(16px); transition: max-width 0.2s ease, background-color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease; }
     .card-video { max-width: 640px; }
     .card-pdf { max-width: 860px; }
     .card-code { max-width: 920px; }

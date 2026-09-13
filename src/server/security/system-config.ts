@@ -16,6 +16,13 @@ export interface FeatureFlags {
   pwaInstallPrompt: boolean;
 }
 
+export interface AiConfig {
+  enabled: boolean;
+  model: string;
+}
+
+export const DEFAULT_AI_MODEL = 'gemini-2.5-flash';
+
 export interface UploadRateLimitConfig {
   limit: number;
   windowMs: number;
@@ -29,6 +36,7 @@ export interface SystemConfigData {
   formattedMaxSize: string;
   rateLimit: UploadRateLimitConfig;
   featureFlags: FeatureFlags;
+  aiConfig: AiConfig;
 }
 
 export type SystemConfig = SystemConfigData;
@@ -72,6 +80,10 @@ const inMemoryConfig = {
     qrCode: true,
     pwaInstallPrompt: true,
   } as FeatureFlags,
+  aiConfig: {
+    enabled: false,
+    model: DEFAULT_AI_MODEL,
+  } as AiConfig,
 };
 
 function formatBytes(bytes: number): string {
@@ -380,17 +392,60 @@ export async function setFeatureFlags(flags: Partial<FeatureFlags>): Promise<voi
 }
 
 // -------------------------------------------------------------
-// 6. Complete System Config Summary
+// 6. AI Configuration (Gemini AI Summary & Model Settings)
+// -------------------------------------------------------------
+
+export async function getAiConfig(): Promise<AiConfig> {
+  const redis = isUpstashConfigured() ? getRedisClient() : null;
+  if (redis) {
+    try {
+      const hash = await redis.hgetall<Record<string, any>>('config:ai_settings');
+      if (hash && Object.keys(hash).length > 0) {
+        const rawModel = typeof hash.model === 'string' ? hash.model.trim() : (hash.model ? String(hash.model).trim() : '');
+        return {
+          enabled: String(hash.enabled) === 'true',
+          model: rawModel || DEFAULT_AI_MODEL,
+        };
+      }
+    } catch (err) {
+      console.warn('[SYSTEM_CONFIG] Gagal membaca konfigurasi AI dari Redis:', err);
+    }
+  }
+  return { ...inMemoryConfig.aiConfig };
+}
+
+export async function setAiConfig(config: Partial<AiConfig>): Promise<void> {
+  const current = await getAiConfig();
+  const updated: AiConfig = { ...current, ...config };
+
+  inMemoryConfig.aiConfig = updated;
+  const redis = isUpstashConfigured() ? getRedisClient() : null;
+  if (redis) {
+    try {
+      await redis.hset('config:ai_settings', {
+        enabled: updated.enabled ? 'true' : 'false',
+        model: updated.model,
+      });
+    } catch (err) {
+      console.error('[SYSTEM_CONFIG_CRITICAL] Gagal menyimpan konfigurasi AI ke Redis:', err);
+      throw new Error('Gagal menyimpan pengaturan AI ke database persisten (Redis).');
+    }
+  }
+}
+
+// -------------------------------------------------------------
+// 7. Complete System Config Summary
 // -------------------------------------------------------------
 
 export async function getAllSystemConfig(): Promise<SystemConfigData> {
-  const [maintenanceLevel, announcement, maxUploadSize, rateLimit, featureFlags] =
+  const [maintenanceLevel, announcement, maxUploadSize, rateLimit, featureFlags, aiConfig] =
     await Promise.all([
       getMaintenanceLevel(),
       getAnnouncement(),
       getMaxUploadSize(),
       getUploadRateLimit(),
       getFeatureFlags(),
+      getAiConfig(),
     ]);
 
   return {
@@ -401,5 +456,6 @@ export async function getAllSystemConfig(): Promise<SystemConfigData> {
     formattedMaxSize: formatBytes(maxUploadSize),
     rateLimit,
     featureFlags,
+    aiConfig,
   };
 }

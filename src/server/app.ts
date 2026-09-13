@@ -365,6 +365,31 @@ export function createExpressApp(): Express {
     return adminController.getAiRecommendations(req, res);
   });
 
+  // Admin Gemini AI Configuration, Models List, and Connection Test APIs
+  app.post([`${basePath}/api/ai-config`, `${basePath}/api/ai-config/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.updateAiConfig(req, res);
+  });
+  app.get([`${basePath}/api/ai-models`, `${basePath}/api/ai-models/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.listAiModels(req, res);
+  });
+  app.post([`${basePath}/api/ai-test-connection`, `${basePath}/api/ai-test-connection/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.testAiConnection(req, res);
+  });
+
+  // Admin Notification History & Sync APIs (Protected by requireAdminAuth)
+  app.get([`${basePath}/api/notifications`, `${basePath}/api/notifications/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.getNotifications(req, res);
+  });
+  app.post([`${basePath}/api/notifications/log`, `${basePath}/api/notifications/log/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.logNotification(req, res);
+  });
+  app.post([`${basePath}/api/notifications/mark-read`, `${basePath}/api/notifications/mark-read/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.markNotificationRead(req, res);
+  });
+  app.post([`${basePath}/api/notifications/clear`, `${basePath}/api/notifications/clear/`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
+    return adminController.clearNotifications(req, res);
+  });
+
   // Fallback for unhandled subroutes under /admin
   app.all([`${basePath}/*`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
     res.status(404).send('<!DOCTYPE html><html><body>404 Not Found</body></html>');

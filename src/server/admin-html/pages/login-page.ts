@@ -57,21 +57,6 @@ export function renderAdminLoginHtml(params: AdminLoginPageParams): string {
       box-shadow: var(--shadow-modal);
     }
     .header { text-align: center; margin-bottom: 2rem; }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      background: var(--accent-soft);
-      color: var(--accent);
-      padding: 0.35rem 0.85rem;
-      border-radius: 9999px;
-      font-size: 0.75rem;
-      font-weight: 700;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-      margin-bottom: 1rem;
-      border: 1px solid var(--border-subtle);
-    }
     h1 { font-size: 1.35rem; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 0.35rem; color: var(--text-main); }
     p.subtitle { color: var(--text-muted); font-size: 0.85rem; line-height: 1.4; }
     .error-banner {
@@ -117,23 +102,12 @@ export function renderAdminLoginHtml(params: AdminLoginPageParams): string {
       transition: background-color 0.2s;
     }
     .btn-submit:hover { background: var(--accent-hover); }
-    .footer-note {
-      margin-top: 1.5rem;
-      text-align: center;
-      font-size: 0.725rem;
-      color: var(--text-muted);
-      opacity: 0.85;
-    }
   </style>
 </head>
 <body class="theme-rosegold">
   ${THEME_BODY_SCRIPT}
   <div class="glass-card">
     <div class="header">
-      <div class="badge">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-        Panel Terenkripsi
-      </div>
       <h1>AirShare Pro Admin</h1>
       <p class="subtitle">Masukkan kunci otorisasi rahasia untuk memuat analitik sistem.</p>
     </div>
@@ -149,15 +123,11 @@ export function renderAdminLoginHtml(params: AdminLoginPageParams): string {
 
     <form method="POST" action="/${escapeHtml(fullAdminPath)}/login">
       <div class="form-group">
-        <label for="password">Kunci Sandi Admin (ADMIN_SECRET_KEY)</label>
+        <label for="password">Kunci Sandi Admin</label>
         <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="••••••••••••••••" autofocus />
       </div>
       <button type="submit" class="btn-submit">Buka Dashboard</button>
     </form>
-
-    <div class="footer-note">
-      Bcrypt Salting Cost 12 • Strict Session TTL 1 Jam • IP Rate Limited
-    </div>
   </div>
 
   <script>

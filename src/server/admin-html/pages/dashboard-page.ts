@@ -13,6 +13,7 @@ import {
   getOperationalPanelStyles,
   getOperationalPanelScripts,
   renderOperationalControlsHtml,
+  renderAiSettingsCardHtml,
   renderActiveSessionsHtml,
   renderAuditLogsHtml,
   renderBulkCleanupHtml,
@@ -22,8 +23,12 @@ import { CatboxHealthStatus, SyncCheckSummary } from '../../storage/catbox-healt
 import { getIosModalScript } from '../scripts/ios-modal.client';
 import { getDashboardNavScript } from '../scripts/dashboard-nav.client';
 import { getAiRecommendationsScript } from '../scripts/ai-recommendations.client';
+import { getAiSettingsScript } from '../scripts/ai-settings.client';
 import { getTableActionsScript } from '../scripts/table-actions.client';
 import { getLiveStatsScript } from '../scripts/live-stats.client';
+import { getNotificationsScript } from '../scripts/notifications.client';
+import { renderNotificationsPanelHtml } from './notifications-panel';
+import { NotificationItem } from '../../repository/notification-repository';
 
 export interface DashboardPageData {
   fullAdminPath: string;
@@ -82,6 +87,8 @@ export interface DashboardPageData {
   lastSyncCheck: SyncCheckSummary | null;
   activeSessions: any[];
   auditLogs: any[];
+  notifications: NotificationItem[];
+  unreadNotificationsCount: number;
 }
 
 function escapeHtml(str: string): string {
@@ -240,6 +247,8 @@ export function renderAdminDashboardHtml(data: DashboardPageData): string {
     lastSyncCheck,
     activeSessions,
     auditLogs,
+    notifications,
+    unreadNotificationsCount,
   } = data;
 
   const totalUploadedToday = todayStats.uploads || 0;
@@ -287,10 +296,7 @@ export function renderAdminDashboardHtml(data: DashboardPageData): string {
       <div class="nav-actions">
         <div class="live-badge" id="live-sync-badge">
           <span class="live-dot" id="live-sync-dot"></span>
-          <div class="live-sync-texts">
-            <span class="live-sync-title" id="live-sync-title">Diperbarui otomatis setiap 20 detik</span>
-            <span class="live-sync-time" id="live-sync-time">Terakhir sinkron: ${escapeHtml(initialTimeFormatted)}</span>
-          </div>
+          <span class="live-sync-time" id="live-sync-time">Terakhir sinkron: ${escapeHtml(initialTimeFormatted)}</span>
         </div>
         <form id="form-logout" method="POST" action="/${escapeHtml(fullAdminPath)}/logout" style="margin:0;">
           <button type="submit" class="btn-logout">Keluar (Logout)</button>
@@ -298,8 +304,9 @@ export function renderAdminDashboardHtml(data: DashboardPageData): string {
       </div>
     </header>
 
-    <!-- Admin Notification Toast / Banner -->
-    <div id="admin-toast-banner" style="display:none; margin-bottom: 1.5rem; padding: 0.85rem 1.25rem; border-radius: 0.75rem; font-size: 0.85rem; font-weight: 600; align-items: center; justify-content: space-between;"></div>
+    <!-- iOS Floating Pill Toast Container -->
+    <div id="ios-toast-container" class="ios-toast-container" aria-live="polite" aria-atomic="true"></div>
+    <div id="admin-toast-banner" style="display:none;"></div>
 
     <!-- Mobile Category Tabs -->
     <nav class="admin-mobile-tabs" aria-label="Kategori Panel Mobile" role="tablist">
@@ -330,6 +337,11 @@ export function renderAdminDashboardHtml(data: DashboardPageData): string {
       <button type="button" class="admin-tab-btn" data-category="terhapus" id="tab-btn-terhapus" aria-controls="panel-terhapus" onclick="switchCategory('terhapus')" role="tab" aria-selected="false">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
         <span>Berkas Terhapus (${deletedFiles.length})</span>
+      </button>
+      <button type="button" class="admin-tab-btn" data-category="notifikasi" id="mobile-tab-notifikasi" aria-controls="panel-notifikasi" onclick="switchCategory('notifikasi')" role="tab" aria-selected="false">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+        <span>Notifikasi</span>
+        <span class="notif-badge-pill" id="mobile-notif-badge" style="${unreadNotificationsCount > 0 ? '' : 'display:none;'}">${unreadNotificationsCount}</span>
       </button>
     </nav>
 
@@ -400,6 +412,18 @@ export function renderAdminDashboardHtml(data: DashboardPageData): string {
             <div class="sidebar-btn-content">
               <span class="sidebar-btn-title">Berkas Terhapus</span>
               <span class="sidebar-btn-desc">Arsip Terhapus (${deletedFiles.length})</span>
+            </div>
+          </button>
+          <button type="button" class="admin-sidebar-btn" data-category="notifikasi" id="sidebar-btn-notifikasi" aria-controls="panel-notifikasi" onclick="switchCategory('notifikasi')" role="tab" aria-selected="false">
+            <div class="sidebar-btn-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+            </div>
+            <div class="sidebar-btn-content">
+              <div style="display: flex; align-items: center; justify-content: space-between;">
+                <span class="sidebar-btn-title">Notifikasi</span>
+                <span class="notif-badge-pill" id="sidebar-notif-badge" style="${unreadNotificationsCount > 0 ? '' : 'display:none;'}">${unreadNotificationsCount}</span>
+              </div>
+              <span class="sidebar-btn-desc">Riwayat &amp; Pesan Error</span>
             </div>
           </button>
         </nav>
@@ -846,6 +870,9 @@ export function renderAdminDashboardHtml(data: DashboardPageData): string {
           <!-- Kontrol Operasional & Konfigurasi Dinamis (Kill Switch & Dynamic Config) -->
           ${renderOperationalControlsHtml(systemConfig)}
 
+          <!-- Card Mandiri: Ringkasan Gemini AI (Sakelar, Model Dinamis, Tes Koneksi) -->
+          ${renderAiSettingsCardHtml(systemConfig.aiConfig)}
+
           <!-- Sinkronisasi Data Catbox & Redis Panel -->
           <section class="panel" style="margin-bottom: 1.5rem;" id="sync-panel">
             <div class="panel-header">
@@ -897,8 +924,8 @@ export function renderAdminDashboardHtml(data: DashboardPageData): string {
 
             <!-- Search & Quick Filter Bar -->
             <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; padding: 0.25rem 0;">
-              <div style="display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 260px;">
-                <input type="text" id="search-files-input" placeholder="Filter nama berkas atau ID di bawah..." style="flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.45rem 0.75rem; font-size: 0.825rem;" />
+              <div style="display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 0; max-width: 100%; flex-wrap: wrap;">
+                <input type="text" id="search-files-input" placeholder="Filter nama berkas atau ID di bawah..." style="flex: 1; min-width: 180px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.45rem 0.75rem; font-size: 0.825rem;" />
                 <button type="button" id="btn-search-db" style="background: rgba(255,255,255,0.06); border: 1px solid var(--border); color: var(--fg); padding: 0.45rem 0.85rem; border-radius: 6px; font-size: 0.8rem; font-weight: 600; cursor: pointer; white-space: nowrap;">Cari di Seluruh DB</button>
                 <button type="button" id="btn-reset-search" style="background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 0.45rem 0.65rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer;">Reset</button>
               </div>
@@ -1003,8 +1030,8 @@ export function renderAdminDashboardHtml(data: DashboardPageData): string {
 
             <!-- Search Deleted Files Filter -->
             <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; padding: 0.25rem 0;">
-              <div style="display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 260px;">
-                <input type="text" id="search-deleted-input" placeholder="Filter berkas terhapus berdasarkan nama, ID, atau alasan..." style="flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.45rem 0.75rem; font-size: 0.825rem;" />
+              <div style="display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 0; max-width: 100%; flex-wrap: wrap;">
+                <input type="text" id="search-deleted-input" placeholder="Filter berkas terhapus berdasarkan nama, ID, atau alasan..." style="flex: 1; min-width: 180px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 0.45rem 0.75rem; font-size: 0.825rem;" />
                 <button type="button" id="btn-reset-deleted-search" style="background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 0.45rem 0.65rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer;">Reset</button>
               </div>
               <span id="deleted-search-count-label" style="font-size: 0.75rem; color: #f87171; font-weight: 600;"></span>
@@ -1088,6 +1115,9 @@ export function renderAdminDashboardHtml(data: DashboardPageData): string {
             </div>
           </section>
         </div>
+
+        <!-- 7. Kategori: Riwayat Notifikasi & Log Kesalahan -->
+        ${renderNotificationsPanelHtml(notifications, unreadNotificationsCount)}
       </main>
     </div>
 
@@ -1121,7 +1151,9 @@ export function renderAdminDashboardHtml(data: DashboardPageData): string {
 
     (function() {
       ${getDashboardNavScript(fullAdminPath)}
+      ${getNotificationsScript(fullAdminPath)}
       ${getAiRecommendationsScript(fullAdminPath)}
+      ${getAiSettingsScript(fullAdminPath)}
       ${getTableActionsScript(fullAdminPath)}
       ${getLiveStatsScript(fullAdminPath)}
     })();

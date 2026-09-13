@@ -4,6 +4,11 @@
 export function getBaseCss(): string {
   return `
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      overflow-x: hidden;
+      width: 100%;
+      max-width: 100vw;
+    }
     body {
       font-family: var(--font-sans);
       background-color: var(--bg-primary);
@@ -12,7 +17,13 @@ export function getBaseCss(): string {
       min-height: 100vh;
       transition: background-color 0.25s ease, color 0.25s ease;
     }
-    .container { max-width: 1280px; width: 100%; margin: 0 auto; }
+    .container {
+      max-width: 1280px;
+      width: 100%;
+      margin: 0 auto;
+      min-width: 0;
+      box-sizing: border-box;
+    }
 
     /* Header & Navigation */
     .top-nav {
@@ -45,19 +56,27 @@ export function getBaseCss(): string {
     .live-badge {
       display: inline-flex;
       align-items: center;
-      gap: 0.6rem;
-      background: rgba(16, 185, 129, 0.12);
-      color: var(--success);
-      font-size: 0.75rem;
-      font-weight: 700;
-      padding: 0.4rem 0.85rem;
-      border-radius: 9999px;
-      border: 1px solid rgba(16, 185, 129, 0.25);
+      gap: 0.5rem;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      padding: 0.25rem 0.4rem;
     }
-    .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 8px var(--success); flex-shrink: 0; }
-    .live-sync-texts { display: flex; flex-direction: column; text-align: left; }
-    .live-sync-title { font-size: 0.75rem; font-weight: 700; line-height: 1.2; }
-    .live-sync-time { font-size: 0.65rem; color: var(--muted); font-weight: 500; }
+    .live-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 6px var(--success);
+      flex-shrink: 0;
+    }
+    .live-sync-time {
+      font-size: 0.775rem;
+      color: var(--muted);
+      font-weight: 500;
+      white-space: nowrap;
+      letter-spacing: -0.01em;
+    }
     .btn-logout {
       background: rgba(255, 255, 255, 0.08);
       color: var(--text);
@@ -180,6 +199,9 @@ export function getBaseCss(): string {
     /* Mobile Category Tabs */
     .admin-mobile-tabs {
       display: none;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
       gap: 0.5rem;
       overflow-x: auto;
       padding-bottom: 0.75rem;
@@ -189,6 +211,7 @@ export function getBaseCss(): string {
       scrollbar-width: none;
       user-select: none;
       -webkit-user-select: none;
+      box-sizing: border-box;
     }
     .admin-mobile-tabs::-webkit-scrollbar {
       display: none;
@@ -243,9 +266,17 @@ export function getBaseCss(): string {
     /* Category Panel Toggle */
     .category-panel {
       display: none;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
     }
     .category-panel.active {
       display: block;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
       animation: fadeIn 0.2s ease-in-out;
     }
     @keyframes fadeIn {

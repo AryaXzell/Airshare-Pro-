@@ -323,6 +323,87 @@ async function runAdminTests() {
       'Authenticated POST /api/ai-recommendations returns structured summary and recommendation array'
     );
 
+    // 10. Gemini AI Control Suite: API Endpoints & Server-Side Enforcement Tests
+    // Test: Unauthenticated POST /admin/api/ai-config returns 401
+    const unauthAiConfig = await fetch(`${baseUrl}/admin/api/ai-config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    assert(unauthAiConfig.status === 401, 'Unauthenticated POST /api/ai-config returns 401');
+
+    // Test: Authenticated POST /admin/api/ai-config invalid input returns 400
+    const invalidAiConfigRes = await fetch(`${baseUrl}/admin/api/ai-config`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: `admin_auth_token=${authSessionToken}`,
+      },
+      body: JSON.stringify({ enabled: 'not-a-boolean' }),
+    });
+    assert(invalidAiConfigRes.status === 400, 'Authenticated POST /api/ai-config with invalid payload returns 400');
+
+    // Test: Authenticated POST /admin/api/ai-config set disabled (enabled: false)
+    const setDisabledRes = await fetch(`${baseUrl}/admin/api/ai-config`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: `admin_auth_token=${authSessionToken}`,
+      },
+      body: JSON.stringify({ enabled: false, model: 'gemini-2.5-pro' }),
+    });
+    assert(setDisabledRes.status === 200, 'Authenticated POST /api/ai-config returns 200 on update');
+    const setDisabledData = await setDisabledRes.json();
+    assert(setDisabledData.success === true && setDisabledData.aiConfig.enabled === false && setDisabledData.aiConfig.model === 'gemini-2.5-pro', 'aiConfig correctly saved as disabled with model gemini-2.5-pro');
+
+    // Test: Server-side enforcement - when enabled: false, getAiRecommendations MUST return isAi: false and model: 'heuristic-engine'
+    const disabledAiRecRes = await fetch(`${baseUrl}/admin/api/ai-recommendations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: `admin_auth_token=${authSessionToken}`,
+      },
+    });
+    assert(disabledAiRecRes.status === 200, 'POST /api/ai-recommendations returns 200 when AI disabled');
+    const disabledAiRecData = await disabledAiRecRes.json();
+    assert(
+      disabledAiRecData.isAi === false && disabledAiRecData.model === 'heuristic-engine' && typeof disabledAiRecData.error === 'string',
+      'Server-enforced: AI calls are blocked server-side when enabled: false, falling back to heuristic-engine'
+    );
+
+    // Test: Unauthenticated GET /admin/api/ai-models returns 401
+    const unauthAiModels = await fetch(`${baseUrl}/admin/api/ai-models`);
+    assert(unauthAiModels.status === 401, 'Unauthenticated GET /api/ai-models returns 401');
+
+    // Test: Authenticated GET /admin/api/ai-models returns 200
+    const authAiModelsRes = await fetch(`${baseUrl}/admin/api/ai-models`, {
+      headers: { Cookie: `admin_auth_token=${authSessionToken}` },
+    });
+    assert(authAiModelsRes.status === 200, 'Authenticated GET /api/ai-models returns 200');
+    const aiModelsData = await authAiModelsRes.json();
+    assert(typeof aiModelsData.success === 'boolean' && Array.isArray(aiModelsData.models), 'ai-models response includes models array');
+
+    // Test: Unauthenticated POST /admin/api/ai-test-connection returns 401
+    const unauthTestConn = await fetch(`${baseUrl}/admin/api/ai-test-connection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'gemini-2.5-flash' }),
+    });
+    assert(unauthTestConn.status === 401, 'Unauthenticated POST /api/ai-test-connection returns 401');
+
+    // Test: Authenticated POST /admin/api/ai-test-connection returns 200
+    const authTestConnRes = await fetch(`${baseUrl}/admin/api/ai-test-connection`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: `admin_auth_token=${authSessionToken}`,
+      },
+      body: JSON.stringify({ model: 'gemini-2.5-flash' }),
+    });
+    assert(authTestConnRes.status === 200, 'Authenticated POST /api/ai-test-connection returns 200');
+    const testConnData = await authTestConnRes.json();
+    assert(typeof testConnData.success === 'boolean', 'ai-test-connection returns boolean success status');
+
     await destroyAdminSession(authSessionToken);
   } finally {
     server.close();

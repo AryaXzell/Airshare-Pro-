@@ -94,13 +94,11 @@ export function getLiveStatsScript(fullAdminPath: string): string {
 
         // Update sync badge to success
         const badgeDot = document.getElementById('live-sync-dot');
-        const badgeTitle = document.getElementById('live-sync-title');
         const badgeTime = document.getElementById('live-sync-time');
         if (badgeDot) {
           badgeDot.style.background = 'var(--success)';
-          badgeDot.style.boxShadow = '0 0 8px var(--success)';
+          badgeDot.style.boxShadow = '0 0 6px var(--success)';
         }
-        if (badgeTitle) badgeTitle.textContent = 'Diperbarui otomatis setiap 20 detik';
         if (badgeTime) {
           const now = new Date();
           const timeStr = String(now.getHours()).padStart(2, '0') + ':' +
@@ -110,12 +108,14 @@ export function getLiveStatsScript(fullAdminPath: string): string {
         }
       } catch (err) {
         const badgeDot = document.getElementById('live-sync-dot');
-        const badgeTitle = document.getElementById('live-sync-title');
+        const badgeTime = document.getElementById('live-sync-time');
         if (badgeDot) {
           badgeDot.style.background = '#ef4444';
-          badgeDot.style.boxShadow = '0 0 8px #ef4444';
+          badgeDot.style.boxShadow = '0 0 6px #ef4444';
         }
-        if (badgeTitle) badgeTitle.textContent = 'Gagal memperbarui — periksa koneksi';
+        if (badgeTime) {
+          badgeTime.textContent = 'Sinkronisasi terputus';
+        }
       }
     }
 

@@ -92,7 +92,6 @@ export const MediaLibraryEmptyIllustration: React.FC<MediaLibraryEmptyIllustrati
               fill="url(#glass-card-back)"
               stroke="var(--border-subtle)"
               strokeWidth="1.2"
-              className="backdrop-blur-xs"
             />
 
             {/* Top Light Highlight Border */}

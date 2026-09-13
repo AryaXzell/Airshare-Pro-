@@ -126,9 +126,6 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
   return (
     <AnimatePresence>
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        {/* Static Blur Layer (Option A: instant blur mount without animated opacity to eliminate GPU jank) */}
-        <div className="fixed inset-0 clean-backdrop-blur pointer-events-none" />
-
         {/* Animated Dark Overlay */}
         <motion.div
           initial={{ opacity: 0 }}

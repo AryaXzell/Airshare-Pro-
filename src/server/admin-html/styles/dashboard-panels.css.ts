@@ -6,9 +6,13 @@ export function getDashboardPanelsCss(): string {
     /* Summary Metric Grid */
     .metrics-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
       gap: 1rem;
       margin-bottom: 1.5rem;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
     }
     .metric-card {
       background: var(--card);
@@ -18,6 +22,10 @@ export function getDashboardPanelsCss(): string {
       position: relative;
       overflow: hidden;
       box-shadow: var(--shadow-subtle);
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
     }
     .metric-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
     .metric-label { font-size: 0.8rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
@@ -31,6 +39,10 @@ export function getDashboardPanelsCss(): string {
       grid-template-columns: 2fr 1fr;
       gap: 1.25rem;
       margin-bottom: 1.5rem;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
     }
 
     .panel {
@@ -39,6 +51,10 @@ export function getDashboardPanelsCss(): string {
       border-radius: 1.25rem;
       padding: 1.5rem;
       box-shadow: var(--shadow-subtle);
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
     }
     .panel-header {
       display: flex;

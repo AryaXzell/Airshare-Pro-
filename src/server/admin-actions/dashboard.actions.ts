@@ -14,6 +14,7 @@ import {
 import { getAllSystemConfig } from '../security/system-config';
 import { auditLogRepository } from '../repository/audit-log-repository';
 import { deletedFilesRepository } from '../repository/deleted-files-repository';
+import { notificationRepository } from '../repository/notification-repository';
 import { renderAdminDashboardHtml } from '../admin-html/pages/dashboard-page';
 import { generateRecommendations, GEMINI_MODEL_NAME } from './ai.actions';
 
@@ -42,6 +43,8 @@ export async function renderDashboard(req: Request, res: Response): Promise<void
       activeSessions,
       auditLogs,
       deletedFiles,
+      notifications,
+      unreadNotificationsCount,
     ] = await Promise.all([
       analyticsRepository.getDailySummary(todayStr),
       analyticsRepository.getWeeklyTrend(),
@@ -55,6 +58,8 @@ export async function renderDashboard(req: Request, res: Response): Promise<void
       getAllActiveSessions(currentToken),
       auditLogRepository.getRecentActions(50),
       deletedFilesRepository.getDeletedFiles(100),
+      notificationRepository.getNotifications(60),
+      notificationRepository.getUnreadCount(),
     ]);
 
     // Enhance top files with stored names and formatted sizes if available
@@ -128,6 +133,8 @@ export async function renderDashboard(req: Request, res: Response): Promise<void
       lastSyncCheck,
       activeSessions,
       auditLogs,
+      notifications,
+      unreadNotificationsCount,
     });
 
     res.status(200).send(html);

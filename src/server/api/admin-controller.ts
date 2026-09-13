@@ -19,6 +19,13 @@ import {
   getDeletedFiles,
   getAiRecommendations,
   generateRecommendations,
+  updateAiConfig,
+  listAiModels,
+  testAiConnection,
+  getNotificationsAction,
+  logNotificationAction,
+  markNotificationReadAction,
+  clearNotificationsAction,
 } from '../admin-actions';
 
 export { generateRecommendations };
@@ -43,4 +50,11 @@ export const adminController = {
   clearDeletedHistory,
   getDeletedFiles,
   getAiRecommendations,
+  updateAiConfig,
+  listAiModels,
+  testAiConnection,
+  getNotifications: getNotificationsAction,
+  logNotification: logNotificationAction,
+  markNotificationRead: markNotificationReadAction,
+  clearNotifications: clearNotificationsAction,
 };

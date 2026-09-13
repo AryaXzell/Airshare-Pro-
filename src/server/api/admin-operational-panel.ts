@@ -1,4 +1,4 @@
-import { SystemConfig, AnnouncementBanner, MaintenanceLevel } from '../security/system-config';
+import { SystemConfig, AnnouncementBanner, MaintenanceLevel, AiConfig } from '../security/system-config';
 import { AdminSessionInfo } from '../security/admin-auth';
 import { AuditLogEntry } from '../repository/audit-log-repository';
 import { isUpstashConfigured } from '../storage/redis-client';
@@ -100,6 +100,49 @@ export function renderIosDropdown(
   `;
 }
 
+export function renderIosToggle(id: string, checked: boolean, disabled = false): string {
+  return `<label class="ios-toggle-switch">
+    <input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''} />
+    <span class="ios-toggle-track"><span class="ios-toggle-thumb"></span></span>
+  </label>`;
+}
+
+export function renderAiSettingsCardHtml(aiConfig: AiConfig): string {
+  const isEnabled = !!aiConfig?.enabled;
+  const currentModel = (aiConfig?.model && aiConfig.model.trim()) || 'gemini-2.5-flash';
+
+  return `
+    <div class="panel" style="margin-bottom: 1.5rem;" id="ai-settings-card">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+        <div>
+          <h2 style="font-size: 1rem; font-weight: 700; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+            Ringkasan Gemini AI
+          </h2>
+          <p style="font-size: 0.75rem; color: var(--text-muted); margin: 0.25rem 0 0;">Analisis dan rekomendasi sistem berbasis AI di tab Ringkasan</p>
+        </div>
+        ${renderIosToggle('ai-enabled-toggle', isEnabled)}
+      </div>
+
+      <div id="ai-model-section" style="margin-top: 0.5rem;">
+        <label style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.35rem;">Model Gemini AI</label>
+        <button type="button" id="ai-model-trigger" class="ios-select-trigger" data-value="${escapeHtml(currentModel)}" title="Klik untuk memilih model Gemini AI">
+          <span id="ai-model-label">${escapeHtml(currentModel)}</span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <span id="ai-model-loading-hint" style="font-size: 0.7rem; color: var(--text-muted); display: block; margin-top: 0.35rem;">Memuat daftar model tersedia...</span>
+
+        <div style="display: flex; gap: 0.6rem; margin-top: 1rem;">
+          <button type="button" id="btn-test-ai-connection" class="btn-primary-config" style="flex: 1;">
+            Tes Koneksi
+          </button>
+        </div>
+        <div id="ai-test-result" style="display: none; margin-top: 0.75rem; padding: 0.75rem; border-radius: 0.6rem; font-size: 0.8rem; word-break: break-word; overflow-wrap: anywhere; max-width: 100%; box-sizing: border-box; line-height: 1.45;"></div>
+      </div>
+    </div>
+  `;
+}
+
 export function renderOperationalControlsHtml(config: SystemConfig): string {
   const currentLevel: MaintenanceLevel = (config as any).maintenanceLevel || (config.maintenanceMode ? 'upload_only' : 'off');
   const announcement: AnnouncementBanner = config.announcement || { message: '', type: 'info' as const, enabled: false, updatedAt: 0, expiresAt: null };
@@ -159,10 +202,10 @@ export function renderOperationalControlsHtml(config: SystemConfig): string {
     }
 
     <!-- Kill Switch Section -->
-    <div id="kill-switch-card" style="background: ${currentLevel === 'full_lockdown' ? 'rgba(239, 68, 68, 0.16)' : currentLevel === 'upload_only' ? 'rgba(245, 158, 11, 0.12)' : 'rgba(16, 185, 129, 0.08)'}; border: 1px solid ${currentLevel === 'full_lockdown' ? 'rgba(239, 68, 68, 0.45)' : currentLevel === 'upload_only' ? 'rgba(245, 158, 11, 0.35)' : 'rgba(16, 185, 129, 0.25)'}; border-radius: 10px; padding: 1.25rem; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; transition: all 0.3s ease;">
-      <div style="display: flex; align-items: center; gap: 0.85rem;">
+    <div id="kill-switch-card" style="background: ${currentLevel === 'full_lockdown' ? 'rgba(239, 68, 68, 0.16)' : currentLevel === 'upload_only' ? 'rgba(245, 158, 11, 0.12)' : 'rgba(16, 185, 129, 0.08)'}; border: 1px solid ${currentLevel === 'full_lockdown' ? 'rgba(239, 68, 68, 0.45)' : currentLevel === 'upload_only' ? 'rgba(245, 158, 11, 0.35)' : 'rgba(16, 185, 129, 0.25)'}; border-radius: 10px; padding: 1.25rem; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; transition: all 0.3s ease; width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box;">
+      <div style="display: flex; align-items: center; gap: 0.85rem; min-width: 0; flex: 1;">
         <span id="kill-switch-indicator" class="status-indicator ${currentLevel === 'off' ? 'status-ok' : 'status-err pulsing'}"></span>
-        <div>
+        <div style="min-width: 0; flex: 1;">
           <div id="kill-switch-title" style="font-weight: 700; font-size: 0.95rem; color: ${currentLevel === 'full_lockdown' ? '#f87171' : currentLevel === 'upload_only' ? '#fbbf24' : '#34d399'};">
             ${
               currentLevel === 'full_lockdown'
@@ -196,9 +239,9 @@ export function renderOperationalControlsHtml(config: SystemConfig): string {
     </div>
 
     <!-- 2 Column Config Forms -->
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.25rem;">
+    <div class="op-config-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 1.25rem; width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box;">
       <!-- Announcement Banner Config -->
-      <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem;">
+      <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box;">
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
           <h3 style="font-size: 0.9rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem; margin: 0;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>
@@ -258,7 +301,7 @@ export function renderOperationalControlsHtml(config: SystemConfig): string {
       </div>
 
       <!-- Limit & Feature Flags Config -->
-      <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem;">
+      <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box;">
         <h3 style="font-size: 0.9rem; font-weight: 700; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           Batas Unggah &amp; Feature Flags
@@ -321,7 +364,7 @@ export function renderActiveSessionsHtml(sessions: AdminSessionInfo[], currentTo
     </div>
 
     <div class="table-container">
-      <table style="min-width: 600px;">
+      <table style="width: 100%; min-width: 500px;">
         <thead>
           <tr>
             <th>Status / Perangkat</th>
@@ -457,7 +500,7 @@ export function renderAuditLogsHtml(logs: AuditLogEntry[]): string {
     </div>
 
     <div class="table-container" style="max-height: 420px; overflow-y: auto;">
-      <table style="min-width: 680px;">
+      <table style="width: 100%; min-width: 550px;">
         <thead>
           <tr>
             <th>Waktu &amp; Tanggal</th>
@@ -519,10 +562,28 @@ export function renderAuditLogsHtml(logs: AuditLogEntry[]): string {
 
 export function getOperationalPanelStyles(): string {
   return `
+    .op-config-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+      gap: 1.25rem;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    @media (max-width: 768px) {
+      .op-config-grid {
+        grid-template-columns: 1fr !important;
+      }
+    }
     .config-form-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 0.75rem;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
     }
     @media (max-width: 640px) {
       .config-form-grid {
@@ -1043,12 +1104,17 @@ export function getOperationalPanelScripts(panelPath: string): string {
 
       // Custom iOS-Style Alert & Confirmation Modal Handlers
       async function alertIos(title, message, type) {
-        if (typeof window.showIosAlert === 'function') {
+        if (typeof window.showToast === 'function') {
+          window.showToast({
+            title: title,
+            message: message,
+            icon: type || 'info'
+          });
+        } else if (typeof window.showIosAlert === 'function') {
           return await window.showIosAlert({
             title: title,
             message: message,
-            icon: type || 'info',
-            buttonText: 'Mengerti'
+            icon: type || 'info'
           });
         } else if (typeof window.showIosAdminAlert === 'function') {
           return await window.showIosAdminAlert(title, message, type);

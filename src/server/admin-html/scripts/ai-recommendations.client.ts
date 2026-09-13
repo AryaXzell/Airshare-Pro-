@@ -124,10 +124,8 @@ export function getAiRecommendationsScript(fullAdminPath: string): string {
         // Update Model Badge
         if (recModelLabel) {
           var rawModel = data.model || 'gemini-2.5-flash';
-          var formattedModel = 'Gemini 2.5 Flash';
-          if (rawModel.indexOf('2.5') !== -1) {
-            formattedModel = 'Gemini 2.5 Flash';
-          } else if (rawModel.indexOf('gemini') === 0) {
+          var formattedModel = rawModel;
+          if (rawModel.indexOf('gemini') === 0) {
             formattedModel = rawModel.split('-').map(function(w) {
               return w.charAt(0).toUpperCase() + w.slice(1);
             }).join(' ');

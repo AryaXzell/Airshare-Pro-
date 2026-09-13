@@ -66,62 +66,46 @@ export function getIosModalScript(): string {
       });
     };
 
-    // Global iOS-style statement/alert modal handler
+    // Global iOS alert / dialog handler
+    // - Peringatan ringan, informasi, dan pesan sukses: Menggunakan toast notifikasi ala iOS (floating pill 1.8s)
+    // - Dialog yang membutuhkan tindakan (keputusan Ya/Tidak atau opsi ganda): Menggunakan modal dialog yang sudah ada
     window.showIosAlert = function(options) {
-      return new Promise(function(resolve) {
-        options = options || {};
-        const container = document.getElementById('ios-modal-container');
-        const iconEl = document.getElementById('ios-modal-icon');
-        const titleEl = document.getElementById('ios-modal-title');
-        const msgEl = document.getElementById('ios-modal-message');
-        const actionsEl = document.getElementById('ios-modal-actions');
+      options = options || {};
+      
+      // Jika dialog memerlukan tindakan / keputusan (Ya atau Tidak / Batal atau Konfirmasi), alihkan ke modal
+      if (options.requiresAction || options.hasCancel || options.showCancel || options.cancelText || options.type === 'confirm' || options.isConfirm) {
+        return window.showIosConfirm(options);
+      }
 
-        if (!container || !titleEl || !msgEl || !actionsEl) {
-          alert((options.title ? options.title + '\\n\\n' : '') + (options.message || ''));
-          resolve();
+      return new Promise(function(resolve) {
+        const title = options.title || 'Pemberitahuan';
+        const message = options.message || '';
+        const iconType = options.icon || 'info';
+
+        if (typeof window.showToast === 'function') {
+          window.showToast({
+            title: title,
+            message: message,
+            icon: iconType,
+            shouldLogToServer: iconType === 'danger' || iconType === 'error'
+          });
+          resolve(true);
           return;
         }
 
-        titleEl.textContent = options.title || 'Pemberitahuan';
-        msgEl.textContent = options.message || '';
-
-        const iconType = options.icon || 'info';
-        let iconSvg = '';
-        if (iconType === 'danger') {
-          iconSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
-        } else if (iconType === 'success') {
-          iconSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
-        } else if (iconType === 'warning') {
-          iconSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
-        } else {
-          iconSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
-        }
-
-        if (iconEl) {
-          iconEl.className = 'ios-modal-icon-badge ios-modal-icon-' + iconType;
-          iconEl.innerHTML = iconSvg;
-          iconEl.style.display = 'flex';
-        }
-
-        actionsEl.innerHTML = '<button type="button" class="ios-modal-btn ios-modal-btn-primary" id="ios-btn-ok">' + (options.buttonText || 'Mengerti') + '</button>';
-
-        function cleanup() {
-          container.classList.remove('active');
-          container.setAttribute('aria-hidden', 'true');
-          document.removeEventListener('keydown', handleKey);
-          resolve();
-        }
-
-        function handleKey(e) {
-          if (e.key === 'Escape' || e.key === 'Enter') cleanup();
-        }
-
-        const btnOk = document.getElementById('ios-btn-ok');
-        if (btnOk) btnOk.onclick = function() { cleanup(); };
-        document.addEventListener('keydown', handleKey);
-
-        container.classList.add('active');
-        container.setAttribute('aria-hidden', 'false');
+        setTimeout(function() {
+          if (typeof window.showToast === 'function') {
+            window.showToast({
+              title: title,
+              message: message,
+              icon: iconType,
+              shouldLogToServer: iconType === 'danger' || iconType === 'error'
+            });
+          } else {
+            alert((title ? title + '\\n\\n' : '') + (message || ''));
+          }
+          resolve(true);
+        }, 30);
       });
     };
 
