@@ -256,7 +256,8 @@ export function createExpressApp(): Express {
 </html>`);
         return;
       }
-      res.status(404).send('<!DOCTYPE html><html><body>404 Not Found</body></html>');
+      const configInfo = `config_enabled=false (key_configured=${!!config.secretKey}, key_length=${config.secretKey.length})`;
+      res.status(404).send(`<!DOCTYPE html><html><body>404 Not Found (${configInfo}, path=${req.path})</body></html>`);
       return;
     }
     next();
@@ -392,7 +393,7 @@ export function createExpressApp(): Express {
 
   // Fallback for unhandled subroutes under /admin
   app.all([`${basePath}/*`], checkAdminEnabled, requireAdminAuth, (req: Request, res: Response) => {
-    res.status(404).send('<!DOCTYPE html><html><body>404 Not Found</body></html>');
+    res.status(404).send(`<!DOCTYPE html><html><body>404 Not Found (Unhandled admin subroute, path=${req.path}, url=${req.url})</body></html>`);
   });
 
   // Public System Status HTML Page (Accessible even in full lockdown)

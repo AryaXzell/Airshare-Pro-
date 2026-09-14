@@ -32,9 +32,15 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
   // When vercel.json rewrites /s/:id or /admin to /api?__vpath=...,
   // restore req.url so Express routes (/s/:id, /admin, etc.) match correctly.
   let queryVPath: string | undefined;
-  if (req.query && typeof req.query.__vpath === 'string') {
-    queryVPath = req.query.__vpath;
-  } else if (req.url && req.url.includes('__vpath=')) {
+  if (req.query) {
+    if (typeof req.query.__vpath === 'string') {
+      queryVPath = req.query.__vpath;
+    } else if (Array.isArray(req.query.__vpath) && req.query.__vpath.length > 0) {
+      queryVPath = req.query.__vpath[0];
+    }
+  }
+
+  if (!queryVPath && req.url && req.url.includes('__vpath=')) {
     try {
       const parsedUrl = new URL(req.url, 'http://localhost');
       queryVPath = parsedUrl.searchParams.get('__vpath') || undefined;
@@ -48,10 +54,33 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
 
   const forwardedUri = (req.headers['x-forwarded-uri'] || req.headers['x-matched-path']) as string | undefined;
 
+  if (!queryVPath && forwardedUri) {
+    console.warn('[VERCEL_ROUTING_DIAGNOSTIC] __vpath tidak ditemukan pada query, menggunakan fallback header routing. Path:', forwardedUri, '| URL asli:', req.url, '| Headers terkait:', JSON.stringify({
+      'x-forwarded-uri': req.headers['x-forwarded-uri'],
+      'x-matched-path': req.headers['x-matched-path'],
+      'x-vercel-id': req.headers['x-vercel-id'],
+    }));
+  }
+
   let targetPath = queryVPath;
   if (!targetPath && forwardedUri) {
     targetPath = forwardedUri;
   }
+
+  // Debug routing variables inside Vercel Serverless environment
+  console.log('[VERCEL_ROUTING_DEBUG]', {
+    method: req.method,
+    originalUrl: req.url,
+    forwardedUri,
+    queryVPath,
+    targetPath,
+    hasCookie: !!req.headers.cookie,
+    cookiesCount: req.headers.cookie ? req.headers.cookie.split(';').length : 0,
+    hasAuthToken: !!req.headers.cookie?.includes('admin_auth_token'),
+    nodeEnv: process.env.NODE_ENV,
+    secretKeyConfigured: !!process.env.ADMIN_SECRET_KEY,
+    secretKeyLength: process.env.ADMIN_SECRET_KEY?.length || 0
+  });
 
   // If invoked directly at serverless root (/ or /api) without a specific subpath
   if (!targetPath && (!req.url || req.url === '/' || req.url === '/api' || req.url.startsWith('/api?'))) {

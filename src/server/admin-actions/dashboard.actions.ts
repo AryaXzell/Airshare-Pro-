@@ -19,11 +19,14 @@ import { renderAdminDashboardHtml } from '../admin-html/pages/dashboard-page';
 import { generateRecommendations, GEMINI_MODEL_NAME } from './ai.actions';
 
 export async function renderDashboard(req: Request, res: Response): Promise<void> {
-  const { enabled, panelPath: fullAdminPath } = getAdminConfig();
-  if (!enabled) {
-    res.status(404).send('<!DOCTYPE html><html><body>404 Not Found</body></html>');
+  const config = getAdminConfig();
+  if (!config.enabled) {
+    const configInfo = `config_enabled=false (key_configured=${!!config.secretKey}, key_length=${config.secretKey.length})`;
+    res.status(404).send(`<!DOCTYPE html><html><body>404 Not Found (${configInfo}, path=${req.path})</body></html>`);
     return;
   }
+
+  const fullAdminPath = config.panelPath;
 
   try {
     const todayStr = getTodayDateString();

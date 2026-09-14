@@ -390,13 +390,16 @@ export async function requireAdminAuth(
   res: Response,
   next: NextFunction
 ): Promise<void> {
-  const { enabled, panelPath } = getAdminConfig();
+  const config = getAdminConfig();
 
   // If admin panel is disabled in environment, return 404 identical to non-existent routes
-  if (!enabled) {
-    res.status(404).send('<!DOCTYPE html><html><body>404 Not Found</body></html>');
+  if (!config.enabled) {
+    const configInfo = `config_enabled=false (key_configured=${!!config.secretKey}, key_length=${config.secretKey.length})`;
+    res.status(404).send(`<!DOCTYPE html><html><body>404 Not Found (${configInfo}, path=${req.path})</body></html>`);
     return;
   }
+
+  const panelPath = config.panelPath;
 
   // Enforce security response headers for all admin responses
   res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
